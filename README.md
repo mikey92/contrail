@@ -8,7 +8,8 @@ Workers and Workers AI.
 **Replays:** [Ramda](https://contrail.mikey9220.workers.dev/p/ramda?replay=/replays/ramda.jsonl.gz&speed=2),
 [Bookshop](https://contrail.mikey9220.workers.dev/p/bookshop?replay=/replays/bookshop.jsonl.gz&speed=2),
 [incident](https://contrail.mikey9220.workers.dev/p/incident?replay=/replays/incident.jsonl.gz),
-[100 scripted agents](https://contrail.mikey9220.workers.dev/p/stress?replay=/replays/stress.jsonl.gz&speed=6)
+[100 scripted agents](https://contrail.mikey9220.workers.dev/p/stress?replay=/replays/stress.jsonl.gz&speed=6) ·
+**Scale:** [1,000 agents in one monorepo of 10 sectors](https://contrail.mikey9220.workers.dev/c/monorepo)
 
 ![The Contrail radar: each block is a file and each row a function; planes are agents on the code they are cleared to change, with the activity feed on the right and the runway below](docs/radar.png)
 
@@ -120,6 +121,7 @@ landed ISBN-13 validation, and CODEX-7's new test used a made-up ISBN.
 | Load test: hot shared functions ([replay](https://contrail.mikey9220.workers.dev/p/stress?replay=/replays/stress.jsonl.gz&speed=6)) | 100 scripted agents (no LLM), 300 intents: 236 increments of 24 Zipf-skewed shared counters and 64 new functions | 300/300 landed in 6:37 with **no lost or doubled updates**: rebuilt from the landed diffs, every counter equals its increments. 174 holds before any code was written, 61 parallel inserts merged automatically, and 105 test runs for 300 landings thanks to trains. |
 | Flight planning, off vs on (snapshots: [off](https://contrail.mikey9220.workers.dev/api/p/stress-a/snapshot), [on](https://contrail.mikey9220.workers.dev/api/p/stress-b/snapshot); [replay with planning](https://contrail.mikey9220.workers.dev/p/stress-b?replay=/replays/stress-planned.jsonl.gz&speed=4)) | The same 100 scripted agents and 300 intents, one run each way on the same deployment | Time agents spent holding a claim fell from 5.8 h to 18 min. They waited on the ground instead, without a workspace (2.7 h in total), so all waiting fell by half (5.9 h → 3.0 h). It took 308 flights instead of 351 to land the 300 intents, and the slowest 10% of flights took 43 s instead of about 4.8 min. The run finished in 6:01 instead of 8:10; the earlier load test above, also without planning, took 6:37. Both runs: no lost updates. |
 | Load test + redeploy mid-flight | 60 scripted agents, 180 intents | Exactly-once landings across the restart: no lost or doubled updates |
+| Sectors: the load test ×10 in one monorepo ([live](https://contrail.mikey9220.workers.dev/c/monorepo)) | 1,000 scripted agents, 100 per sector | 3,000/3,000 landed in 8:17, 6.0 landings per second, with no lost or doubled updates in any sector or in the composed monorepo trunk. See [Scaling](#scaling-to-100000-agents). |
 | End-to-end protocol test ([`scripts/smoke.mjs`](scripts/smoke.mjs)) | Scripted git agents | Sibling methods merged in parallel, a hold, a landing turned away for touching code another flight holds, a real conflict with its cause, a semantic conflict caught by tests, resolution, `why()`, review by exception, a train with a culprit, and a playground starting over |
 
 From request to trunk, a landing takes about 1 s on the Bookshop and 2–3 s on Ramda: fetch the fork,
@@ -131,22 +133,40 @@ projects' live snapshots (`/api/p/<project>/snapshot`).
 
 ## Scaling to 100,000 agents
 
-Today each trunk has one Tower and one Runway. The Runway is trunk's only writer, which is what makes
-landings exactly-once and conflicts explainable, and it is also the ceiling. A train takes one to two
-seconds and carries up to 12 landings, so one runway can land several changes per second. The 100-agent
-load test, where most changes hit the same 24 functions, averaged a landing every 1.3 seconds.
+One trunk has one Runway, and the Runway is trunk's only writer. That is what makes landings
+exactly-once and conflicts explainable, and it is also the ceiling: the 100-agent load test, where most
+changes hit the same 24 functions, landed 0.76 changes per second.
 
-What already scales out: every flight is its own Artifacts repository, created in parallel; tests run in
-Dynamic Workers, one isolate per candidate tree, cached by tree id; edge agents are Durable Objects, one
-per agent; and clearances are per function, so agents working on different code never wait for each other.
+**Sectors** lift that ceiling. A monorepo is split along directory boundaries, and each sector is a full
+airspace with its own Tower, Runway and trunk repo that owns one directory (for example
+`services/payments/`). Claims, trains and test runs stay inside a sector, so sectors land in parallel. A
+**Center**, one Durable Object per monorepo, keeps the monorepo's own trunk: a second after a sector
+lands, it fetches every sector trunk that moved and commits one composed tree whose message names the
+sector heads it folded in. Sectors own disjoint paths, so composing cannot conflict and needs no tests
+of its own.
 
-The next step is **sectors**, which is designed but not built yet. A large monorepo is split along
-directory boundaries (for example `services/payments/` and `web/`), each sector with its own Tower and
-Runway landing into its own ref. Claims inside a sector stay local. A change that spans sectors holds
-clearances in each and lands through both runways. Sector heads merge into trunk continuously, and
-because sectors own disjoint paths those merges cannot conflict. 100,000 agents each landing a change
-every half hour is about 55 landings per second, which at a few landings per second per runway is on
-the order of 10–20 sectors.
+Measured on the live deployment ([open the monorepo](https://contrail.mikey9220.workers.dev/c/monorepo)):
+the load test above, copied into 10 directories of one monorepo, each a sector with its own 100 scripted
+agents and 300 intents.
+
+| | One trunk | 10 sectors |
+| --- | --- | --- |
+| Agents | 100 | 1,000 |
+| Changes landed | 300 / 300 | 3,000 / 3,000 |
+| Time | 6:37 | 8:17 (each sector 6:24 to 8:17) |
+| Landings per second | 0.76 | 6.0 on average, 15.9 at peak |
+| Lost or doubled updates | None | None, in every sector and in the composed monorepo |
+
+The Center composed the monorepo trunk 195 times and caught up 2.5 s after the last landing.
+[`scripts/run-sectors.mjs`](scripts/run-sectors.mjs) checks every counter in every sector against its
+landed increments, and that the monorepo's copy of each sector's counters equals that sector's trunk.
+
+100,000 agents each landing a change every half hour is about 55 landings per second. Sectors in this
+run landed about 1.6 changes per second each while their work was spread out, and 0.6 averaged over the
+whole run, crowded tail included, so that is roughly 35 to 90 sectors. However many sectors move, the
+Center commits at most about once a second, so the monorepo's history stays readable.
+
+![The monorepo page after the run: 1,000 agents, 3,000 of 3,000 changes landed across 10 sectors, 6.0 landings per second](docs/center.png)
 
 ## Built on Cloudflare
 
@@ -162,6 +182,8 @@ flowchart LR
     R -- squashed commits + git notes --> AK[(Artifacts<br/>trunk repo)]
     R -- test every candidate tree --> DW[Dynamic Workers]
     E[Edge agents<br/>Durable Objects] -- RPC --> T
+    T -- sector landed --> C[Center<br/>Durable Object per monorepo]
+    C -- composed monorepo trunk --> AK
     E -- reason --> AI[Workers AI]
     E -- git --> AF
 ```
@@ -175,6 +197,7 @@ flowchart LR
     and the event stream. It hibernates WebSockets for the radar.
   - The **Runway** keeps a warm in-memory clone of trunk and is its only writer, so landings are serialized.
   - **Edge agents** are agents that live entirely on Cloudflare.
+  - The **Center** composes a sectored monorepo's trunk from its sectors' trunks (see [Scaling](#scaling-to-100000-agents)).
 - **Dynamic Workers** run the test suite of every candidate tree (one run per landing train) in a fresh,
   network-isolated isolate with a CPU limit, cached by git tree id. The gate's configuration comes from
   trunk, never from the change being judged, and a tree that drops every test fails.
@@ -272,6 +295,16 @@ curl -X POST $CONTRAIL_URL/api/p/stress/edge/launch -H "authorization: Bearer $C
 node scripts/verify-stress.mjs stress                          # checks for lost or doubled updates
 ```
 
+### Sectors
+
+```bash
+node scripts/create-sectors.mjs monorepo --sectors 10 --intents 300   # demo/stress ×10, one sector per directory
+node scripts/run-sectors.mjs monorepo --agents 100                    # 100 scripted agents per sector, then checks every counter
+```
+
+A sector is a project created with `center` and `prefix` and only files under its prefix. `POST /api/centers`
+with the sector slugs and the monorepo's full `files` creates the Center, and `/c/<slug>` shows it.
+
 ### Test
 
 ```bash
@@ -311,6 +344,7 @@ src/
   agent-api.ts        the 12 agent tools, shared by MCP and REST
   tower/              Tower DO: flights, clearances, flight planning, landing queue, contrail, radar events, review policy
   runway/             Runway DO: warm trunk clone, 3-way tree merge, clearance check, Dynamic Worker test gate, notes
+  center/             Center DO: composes sector trunks into one monorepo trunk
   edge/               edge agents: Durable Object + in-memory git workspace + Workers AI loop
   git/                symbol extraction, diff3 merge with insert/insert union, in-memory fs
 ui/                   the Radar (Preact + Vite)
@@ -330,7 +364,8 @@ video/                the demo video: narration (Workers AI text-to-speech), sli
   queue; clearances still decide who may edit what.
 - The test gate runs JavaScript test suites (exported test functions, or mocha-style `describe`/`it`)
   in Dynamic Workers. Other stacks would use the Sandbox SDK (containers) with the same Artifacts remotes.
-- One Runway per trunk serializes landings (see [Scaling](#scaling-to-100000-agents)).
+- One Runway per trunk serializes landings; sectors give a monorepo one Runway per directory (see
+  [Scaling](#scaling-to-100000-agents)). A change that spans sectors lands as one change per sector, not atomically.
 - Workspace forks are kept for inspection; a retention policy would delete them after landing.
 - Agent keys don't expire yet; the admin key can delete a project, which revokes them.
 
