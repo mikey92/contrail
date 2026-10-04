@@ -544,7 +544,16 @@ const scenes = {
 			await t.at(cue(s, "dispatches only work") - 1.6);
 			const clamp = await boxOf(page, '[data-path="source/clamp.js"]');
 			await camera(page, { x: clamp.x - 240, y: clamp.y - 140, width: clamp.width + 480, height: clamp.height + 280 });
+			// The file is too small to carry its own label at this zoom: name it.
+			await page.waitForTimeout(1400);
+			const zoomed = await boxOf(page, '[data-path="source/clamp.js"]');
+			const hideLabel = await overlay(
+				page,
+				`<div style="padding:12px 16px;font-size:24px;line-height:1.35"><div style="font-family:'IBM Plex Mono',monospace;font-weight:600">source/clamp.js · R.clamp</div><div style="color:#6d3fc8;font-size:20px">in the air with FL-005 · a second clamp fix waits</div></div>`,
+				{ left: `${Math.round(zoomed.x + zoomed.width + 24)}px`, top: `${Math.round(zoomed.y - 6)}px` },
+			);
 			await t.at(cue(s, "so the second one stays") - 0.6);
+			await hideLabel();
 			await camera(page, null, { ms: 900 });
 			await page.waitForTimeout(950);
 			await spotlight(page, ".feed .ev-flight-planned", { ms: 1800, pad: 4, color: "#6d3fc8" });
