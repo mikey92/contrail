@@ -56,6 +56,7 @@ sequenceDiagram
 | --- | --- | --- |
 | Issue | **Intent** | A unit of work agents take off with. Agents can file follow-ups for other agents. |
 | Branch | **Flight + its own Artifacts repo** | Every flight forks trunk into a fresh repo. Agents never get write access to trunk. |
+| _(nothing)_ | **Flight plan** | Before take-off, the Tower predicts the existing code an intent will change from the names it mentions (`R.clamp`, `subtotal()`, `Cart.add`) and dispatches the intents that are clear of code already in the air. Two intents that need the same function don't fly at the same time; the next agent gets other work instead of a hold. |
 | _(nothing)_ | **Clearance** | Before editing, an agent claims the *functions, classes or methods* it will change (`src/cart.js#Cart.add`), not whole files. Overlapping claims put the second agent in a **holding pattern** before any code is written. |
 | Pull request + merge button | **Landing** | The Runway, trunk's only writer, merges the workspace onto the current trunk tip and lands one squashed, attributed commit. Landings go in **trains**, like a merge queue: each train's merged tree is tested once in a Dynamic Worker and pushed once; a red train is replayed one landing at a time so only the culprit is turned away. |
 | Merge conflict | **Structured conflict** | Parallel inserts (two agents appending functions or tests) are merged automatically. Real overlaps come back as exact hunks with the function name, plus the flight, agent and intent that changed trunk. |
@@ -166,6 +167,27 @@ curl -X POST $CONTRAIL_URL/api/p/stress/edge/launch -H "authorization: Bearer $C
 node scripts/verify-stress.mjs stress                                         # check for lost updates
 ```
 
+### Bring your own codebase
+
+`create-project.mjs` loads any directory as trunk (or import a GitHub repo). By default the runway runs
+exported test functions in `**/*.test.js`. A `contrail.json` at the root configures the gate:
+
+```json
+{
+  "tests": {
+    "style": "mocha",
+    "files": ["test/*.js", "test/internal/*.js"],
+    "modules": { "fast-check": "vendor/fast-check.cjs" },
+    "command": "npm test",
+    "timeoutMs": 5000
+  }
+}
+```
+
+`style` is `exports` or `mocha` (`describe`, `it`, hooks, `.skip`/`.only`, done callbacks). Only modules
+reachable from the test files are loaded; `modules` maps bare package names to vendored files.
+`command` is handed to every agent at take-off, so agents run the same suite locally that the runway runs.
+
 ### Deploy your own
 
 Requires a Cloudflare account on the Workers Paid plan (Artifacts and Dynamic Workers).
@@ -191,6 +213,7 @@ src/
   git/                symbol extraction, diff3 merge with insert/insert union, in-memory fs
 ui/                   the Radar (Preact + Vite)
 demo/bookshop/        demo codebase + 16 intents
+demo/ramda/           a real codebase: Ramda 0.32 (MIT) with its mocha suite + 16 intents
 demo/stress/          load-test codebase (24 shared counters)
 demo/swarm/           launcher for real Claude Code / Codex agents
 scripts/              project creation, smoke test, stress intents and verifier, radar stream recorder
@@ -199,10 +222,12 @@ video/                the demo video: narration (Workers AI text-to-speech), sli
 
 ## Limits and next steps
 
-- Symbol extraction is heuristic: brace and indent matching for JS/TS and Python. A tree-sitter
-  build in WebAssembly would cover every language.
-- The test gate runs JS test suites in Dynamic Workers. Other stacks would use the Sandbox SDK
-  (containers) with the same Artifacts remotes.
+- Symbol extraction is heuristic: brace and indent matching for JavaScript/TypeScript, Python, Go,
+  Rust, Java, Kotlin, C#, Swift, C/C++ and Ruby. A tree-sitter build in WebAssembly would be exact.
+- Flight plans are predictions from the intent's text. A wrong guess only changes the order of the
+  queue; clearances still decide who may edit what.
+- The test gate runs JavaScript test suites (exported test functions, or mocha-style `describe`/`it`)
+  in Dynamic Workers. Other stacks would use the Sandbox SDK (containers) with the same Artifacts remotes.
 - One Runway per trunk serializes landings, about one per second, batched in trains. Sharding a
   monorepo into independently landing *sectors* is the path to millions of agents.
 - Workspace forks are kept for inspection; a retention policy would delete them after landing.

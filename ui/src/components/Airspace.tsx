@@ -31,6 +31,7 @@ interface GroupBox extends Rect {
 
 const HEADER = 18;
 const APRON = 54;
+const SOURCE_DIRS = new Set(["src", "source", "lib", "app", "pkg"]);
 
 function layout(files: TrunkFile[], width: number, height: number) {
 	const groups = new Map<string, TrunkFile[]>();
@@ -43,11 +44,17 @@ function layout(files: TrunkFile[], width: number, height: number) {
 		name: "root",
 		children: [...groups.entries()].map(([name, fs]) => ({ name, children: fs.map((f) => ({ name: f.path, file: f, value: Math.max(f.lines, 10) })) })),
 	};
-	// Stable ordering keeps the map from reshuffling as files grow: src/ first, root last, files by path.
-	const rank = (name: string) => (name === "src" ? 0 : name === "·" ? 2 : 1);
+	// Stable ordering keeps the map from reshuffling as files grow: the source directory first, then the
+	// others from large to small (tiny ones end up together in a corner), root last; files by path.
+	const rank = (name: string) => (SOURCE_DIRS.has(name) ? 0 : name === "·" ? 2 : 1);
+	const size = new Map([...groups.entries()].map(([name, fs]) => [name, fs.reduce((n, f) => n + Math.max(f.lines, 10), 0)]));
 	const root = hierarchy<any>(data)
 		.sum((d) => d.value ?? 0)
-		.sort((a, b) => (a.depth === 1 ? rank(a.data.name) - rank(b.data.name) || a.data.name.localeCompare(b.data.name) : a.data.name.localeCompare(b.data.name)));
+		.sort((a, b) =>
+			a.depth === 1
+				? rank(a.data.name) - rank(b.data.name) || size.get(b.data.name)! - size.get(a.data.name)! || a.data.name.localeCompare(b.data.name)
+				: a.data.name.localeCompare(b.data.name),
+		);
 	treemap<any>().size([width, height]).tile(treemapSquarify.ratio(1.15)).paddingOuter(4).paddingTop(22).paddingInner(5).round(true)(root);
 
 	const groupBoxes: GroupBox[] = [];
@@ -67,14 +74,14 @@ function layout(files: TrunkFile[], width: number, height: number) {
 				w: l.x1 - l.x0,
 				h: l.y1 - l.y0,
 				bands: [],
-				content: { x: l.x0 + 3, y: l.y0 + HEADER, w: l.x1 - l.x0 - 6, h: Math.max(0, l.y1 - l.y0 - HEADER - 3) },
+				content: { x: l.x0 + 3, y: l.y0 + HEADER, w: Math.max(0, l.x1 - l.x0 - 6), h: Math.max(0, l.y1 - l.y0 - HEADER - 3) },
 			};
 			const lines = Math.max(f.lines, 1);
 			for (const s of f.symbols) {
 				const depth = s.name.includes(".") ? 1 : 0;
 				const y = box.content.y + ((s.start - 1) / lines) * box.content.h;
 				const h = Math.max(3, ((s.end - s.start + 1) / lines) * box.content.h);
-				box.bands.push({ target: `${f.path}#${s.name}`, name: s.name, kind: s.kind, depth, x: box.content.x + depth * 9, y, w: box.content.w - depth * 9, h });
+				box.bands.push({ target: `${f.path}#${s.name}`, name: s.name, kind: s.kind, depth, x: box.content.x + depth * 9, y, w: Math.max(0, box.content.w - depth * 9), h });
 			}
 			fileBoxes.push(box);
 		}
