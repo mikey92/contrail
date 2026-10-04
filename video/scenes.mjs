@@ -247,8 +247,13 @@ const STRESS_END = 406;
 // Replay seconds in ramda.jsonl.gz: where filming starts, the first take-off planned around the clamp
 // flight, a landing whose test report is shown (and its flight), and the last landing.
 const RAMDA = { from: 3, planned: 23.2, landed: 156, flight: "FL-012", end: 220 };
-// The load test with flight planning off and on (scripts: /tmp/stress-ab.mjs on the deployment).
-const AB = [];
+// The same 300-intent load test with flight planning off and on, measured on the deployment.
+const AB = [
+	["5.8 h → 18 min", "agent time holding", "#fbbf24"],
+	["8:10 → 6:01", "to land all 300", "#4ade80"],
+	["291 s → 43 s", "slowest 10% of flights", "#38bdf8"],
+	["0", "lost updates", "#5eead4"],
+];
 const scenes = {
 	"01-hook": {
 		url: () => replay("stress", "stress.jsonl.gz", 24, { speed: 3 }),
@@ -523,7 +528,7 @@ const scenes = {
 					[RAMDA.planned - 1.5, cue(s, "First, the tower plans") - 0.5],
 					[RAMDA.planned + 0.5, cue(s, "so the second one stays")],
 					[RAMDA.landed, cue(s, "Then every landing") - 0.6],
-					[RAMDA.end, cue(s, "In the hundred-agent load test") - 0.4],
+					[RAMDA.end, cue(s, "in the hundred-agent load test") - 0.4],
 				],
 			}),
 		prepare: replayReady,
@@ -546,7 +551,7 @@ const scenes = {
 			await click(page, page.locator(".flights .fcard", { hasText: RAMDA.flight }).first());
 			await t.at(cue(s, "Ramda's entire test suite"));
 			await spotlight(page, ".drawer section.landing.landed .tests", { ms: 3600, pad: 6, color: "#4ade80" });
-			await t.at(cue(s, "In the hundred-agent load test") - 0.6);
+			await t.at(cue(s, "in the hundred-agent load test") - 0.6);
 			await click(page, ".drawer .close");
 			const stat = (n, label, color) =>
 				`<div style="padding:6px 0"><div style="font-size:50px;font-weight:800;color:${color};letter-spacing:-.02em">${n}</div><div style="font-size:18px;color:#8193ad;text-transform:uppercase;letter-spacing:.12em;font-family:'JetBrains Mono',monospace">${label}</div></div>`;
