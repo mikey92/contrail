@@ -1,0 +1,82 @@
+[
+  {
+    "title": "Make catalog search case-insensitive and match authors",
+    "body": "search(catalog, query) only matches titles case-sensitively. Make it case-insensitive and also match the author name. Keep result order stable (catalog order). Add tests.",
+    "priority": 5
+  },
+  {
+    "title": "Merge duplicate ISBNs in Cart.add",
+    "body": "Adding the same ISBN twice should increase the quantity of the existing line instead of pushing a second line. Add a test that cart.lines has one line with qty 3 after add('x', 1) and add('x', 2).",
+    "priority": 5
+  },
+  {
+    "title": "Support percentage coupon codes",
+    "body": "applyCoupon should accept codes of the form SAVE<n> (e.g. SAVE10, SAVE25) meaning n percent off, rounded to the nearest cent, with n between 1 and 50. Unknown codes still change nothing; WELCOME5 keeps working. Add tests.",
+    "priority": 4
+  },
+  {
+    "title": "Free shipping on orders over $50",
+    "body": "Add shippingFor(cart, catalog, subtotalCents) in src/shipping.js that returns 0 when the subtotal is at least 5000 cents and shippingCost(parcelWeight(...)) otherwise. Add tests.",
+    "priority": 4
+  },
+  {
+    "title": "Bulk discount: 10% off 3+ copies of the same book",
+    "body": "In subtotal(), a line with qty >= 3 gets 10% off that line (rounded to the nearest cent). Add tests.",
+    "priority": 4
+  },
+  {
+    "title": "Format EUR and JPY correctly",
+    "body": "formatMoney should render EUR as '€12.34' and JPY with no decimals as '¥1234' (JPY amounts are whole yen, given in 'cents' = yen). Other currencies keep the current format. Add tests.",
+    "priority": 3
+  },
+  {
+    "title": "Add Cart.setQuantity and Cart.isEmpty",
+    "body": "setQuantity(isbn, qty) sets the quantity of a line (qty 0 removes it; negative throws). isEmpty() returns true when there are no lines. Add tests.",
+    "priority": 3
+  },
+  {
+    "title": "Per-region sales tax table",
+    "body": "Replace the hard-coded CA rate in tax() with a TAX_RATES table: CA 7.25%, NY 4%, TX 6.25%, WA 6.5%, OR 0%. Unknown regions are 0. Export TAX_RATES. Add tests.",
+    "priority": 3
+  },
+  {
+    "title": "Show tax and discount lines on receipts",
+    "body": "renderReceipt(cart, catalog, totalCents, details = {}) should print 'DISCOUNT -$x.xx' when details.discountCents > 0 and 'TAX $x.xx' when details.taxCents > 0, before the TOTAL line. Existing callers keep working. Add tests.",
+    "priority": 2
+  },
+  {
+    "title": "Validate ISBN-13 checksums",
+    "body": "Add validateIsbn13(isbn) to src/catalog.js returning true only for 13-digit strings with a valid ISBN-13 check digit. createCatalog should throw on an invalid ISBN. Add tests (all SAMPLE_BOOKS are valid).",
+    "priority": 2
+  },
+  {
+    "title": "International shipping zones",
+    "body": "shippingCost(weightGrams, zone = 'domestic') should add a surcharge for zone 'intl' of 1500 cents and for 'ca-mx' of 600 cents. Domestic prices are unchanged. Add tests.",
+    "priority": 2
+  },
+  {
+    "title": "Reserve inventory when checking out",
+    "body": "Add checkout(cart, inventory) in src/inventory.js that takes every cart line from inventory atomically: if any line is short, nothing is taken and it throws an error naming the ISBN. Add tests.",
+    "priority": 2
+  },
+  {
+    "title": "Gift wrapping option",
+    "body": "total(cart, catalog, opts) accepts opts.giftWrap = true which adds 399 cents per book (per unit, not per line) before tax. Add tests.",
+    "priority": 1
+  },
+  {
+    "title": "Loyalty points",
+    "body": "Create src/loyalty.js with pointsFor(totalCents) = 1 point per whole dollar, doubled for totals of $100 or more. Add tests.",
+    "priority": 1
+  },
+  {
+    "title": "Receipt as JSON",
+    "body": "Add receiptJson(cart, catalog, totalCents) to src/receipt.js returning { lines: [{ isbn, title, qty, amountCents }], totalCents }. Add tests.",
+    "priority": 1
+  },
+  {
+    "title": "Buy 2 get 1 free on paperbacks",
+    "body": "In subtotal(), for paperback lines every third copy is free (qty 3 → pay for 2, qty 6 → pay for 4). It does not stack with the bulk discount: apply whichever gives the lower line price. Add tests.",
+    "priority": 1
+  }
+]

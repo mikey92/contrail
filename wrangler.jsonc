@@ -1,0 +1,25 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "contrail",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-10-01",
+	"compatibility_flags": ["nodejs_compat"],
+	"artifacts": [{ "binding": "ARTIFACTS", "namespace": "contrail" }],
+	"worker_loaders": [{ "binding": "LOADER" }],
+	"durable_objects": {
+		"bindings": [
+			{ "name": "TOWER", "class_name": "Tower" },
+			{ "name": "RUNWAY", "class_name": "Runway" },
+			{ "name": "REGISTRY", "class_name": "Registry" }
+		]
+	},
+	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["Tower", "Runway", "Registry"] }],
+	"assets": {
+		"directory": "./dist/ui",
+		"binding": "ASSETS",
+		"not_found_handling": "single-page-application",
+		"run_worker_first": ["/api/*", "/mcp/*"]
+	},
+	"limits": { "cpu_ms": 120000 },
+	"observability": { "enabled": true }
+}
