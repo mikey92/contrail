@@ -21,6 +21,26 @@ interface Config {
 	callsign: string;
 	model: string;
 	maxFlights: number;
+	/** "llm": reasons with Workers AI. "scripted": applies the machine-readable script in the intent (load tests). */
+	mode?: "llm" | "scripted";
+}
+
+/** Machine-readable intent payload for scripted agents: a line `script: {...}` in the intent body. */
+interface Script {
+	op: "increment" | "append";
+	path: string;
+	symbol: string;
+	code?: string;
+}
+
+function parseScript(body: string): Script | null {
+	const m = body.match(/^script:\s*(\{.*\})\s*$/m);
+	if (!m) return null;
+	try {
+		return JSON.parse(m[1]) as Script;
+	} catch {
+		return null;
+	}
 }
 
 type Phase = "boarding" | "flying" | "done" | "stopped";
@@ -36,6 +56,8 @@ interface State {
 	phase: Phase;
 	flights: number;
 	turn: number;
+	script?: Script | null;
+	step?: "claim" | "apply" | "land";
 	flight: { code: string; intent: string; cloneUrl: string; upstreamUrl: string } | null;
 	messages: ChatMessage[];
 	lastError: string | null;
@@ -134,6 +156,7 @@ export class EdgeAgent extends DurableObject<Env> {
 		let delay = 50;
 		try {
 			if (state.phase === "boarding") delay = await this.board(config, state);
+			else if (config.mode === "scripted") delay = await this.flyScript(config, state);
 			else delay = await this.fly(config, state);
 			state.lastError = null;
 		} catch (err) {
@@ -166,6 +189,18 @@ export class EdgeAgent extends DurableObject<Env> {
 		state.flights++;
 		state.turn = 0;
 		state.phase = "flying";
+		if (config.mode === "scripted") {
+			state.script = parseScript(t.intent.body);
+			state.step = "claim";
+			state.messages = [];
+			if (!state.script) {
+				await this.tower(config.slug).abort(config.agentId, undefined, "intent has no script for a scripted agent");
+				this.ws = null;
+				state.flight = null;
+				state.phase = "boarding";
+			}
+			return 50;
+		}
 		const previous = (t as TakeOffResult & { previousAttempts?: unknown }).previousAttempts;
 		state.messages = [
 			{ role: "system", content: systemPrompt(config.callsign) },
@@ -241,6 +276,52 @@ export class EdgeAgent extends DurableObject<Env> {
 			if (state.phase === "boarding") break; // landed: the flight is over
 		}
 		return 50;
+	}
+
+	/** One step of a scripted (LLM-free) flight: claim → apply on fresh trunk → land. */
+	private async flyScript(config: Config, state: State): Promise<number> {
+		const tower = this.tower(config.slug);
+		const script = state.script!;
+		const target = `${script.path}#${script.symbol}`;
+		state.turn++;
+		if (state.step === "claim") {
+			const r = await tower.requestClearance(config.agentId, { targets: [target], reason: `${script.op} ${script.symbol}` });
+			if (r.holding.length) return 1500 + Math.floor(Math.random() * 1500); // circle until cleared
+			if (state.turn === 1) await tower.log(config.agentId, { kind: "plan", text: `Scripted ${script.op} of ${target} on the latest trunk.` });
+			state.step = "apply";
+			return 20;
+		}
+		const ws = await this.workspace(state, config);
+		if (state.step === "apply") {
+			await ws.sync();
+			const src = await ws.read(script.path).catch(() => "");
+			let next = src;
+			if (script.op === "increment") {
+				const re = new RegExp(`(export function ${script.symbol}\\(\\) \\{\\n  return )(\\d+)(;)`);
+				if (!re.test(src)) throw new Error(`${target} not found`);
+				next = src.replace(re, (_m, a, n, b) => `${a}${Number(n) + 1}${b}`);
+			} else {
+				next = `${src.trimEnd()}\n\n${(script.code ?? `export function ${script.symbol}() {\n  return true;\n}`).trim()}\n`;
+			}
+			await ws.write(script.path, next);
+			await ws.commitAndPush(`${script.op} ${script.symbol}`);
+			state.step = "land";
+			return 20;
+		}
+		const r = await tower.requestLanding(config.agentId, { summary: `${script.op === "increment" ? "Incremented" : "Added"} ${target}.` });
+		if (r.landing.status === "landed") {
+			this.ws = null;
+			state.flight = null;
+			state.phase = "boarding";
+			return 50;
+		}
+		if (r.landing.status === "conflict" || r.landing.status === "failed") {
+			// Start over from fresh trunk: re-open the workspace and re-apply.
+			this.ws = null;
+			state.step = "apply";
+			return 500;
+		}
+		return 2000; // still on approach
 	}
 
 	private async runTool(config: Config, state: State, ws: Workspace, name: string, args: any): Promise<string> {

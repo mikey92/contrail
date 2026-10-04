@@ -133,8 +133,10 @@ app.post("/api/p/:slug/resync", async (c) => {
 
 app.post("/api/p/:slug/edge/launch", async (c) => {
 	if (!isAdmin(c)) return c.json({ error: "admin key required" }, 401);
-	const body = await c.req.json<{ count?: number; model?: string; maxFlights?: number }>().catch(() => ({}) as any);
-	return c.json(await tower(c.env, c.req.param("slug")).launchEdge({ count: Number(body.count ?? 4), model: body.model, maxFlights: body.maxFlights }));
+	const body = await c.req.json<{ count?: number; model?: string; maxFlights?: number; mode?: "llm" | "scripted" }>().catch(() => ({}) as any);
+	return c.json(
+		await tower(c.env, c.req.param("slug")).launchEdge({ count: Number(body.count ?? 4), model: body.model, maxFlights: body.maxFlights, mode: body.mode, limit: 500 }),
+	);
 });
 
 app.post("/api/p/:slug/edge/stop", async (c) => {

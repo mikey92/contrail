@@ -35,7 +35,7 @@ type Row = Record<string, SqlStorageValue>;
 
 const CLEARANCE_TTL_MS = 45 * 60_000;
 const WORKSPACE_TOKEN_TTL_S = 6 * 3600;
-const TRAIN_SIZE = 8;
+const TRAIN_SIZE = 12;
 const LANDING_WAIT_MS = 50_000;
 const MAX_EVENTS = 1000;
 const ACTIVE: FlightStatus[] = ["taxiing", "airborne", "holding", "approach", "diverted"];
@@ -605,7 +605,7 @@ export class Tower extends DurableObject<Env> {
 		const flight = this.ownFlight(agentId, input.flight);
 		const agent = this.agentById(agentId);
 		this.touchAgent(agentId);
-		const targets = [...new Set(input.targets.map(normalizeTarget).filter((t) => t.length > 0))].slice(0, 50);
+		const targets = [...new Set(input.targets.map((t) => this.resolveTarget(normalizeTarget(t))).filter((t) => t.length > 0))].slice(0, 50);
 		if (targets.length === 0) throw new Error("name at least one target, e.g. src/cart.js#applyDiscount");
 		const all = this.activeClearances();
 		const mine = all.filter((c) => c.flightId === flight.id);
@@ -694,6 +694,16 @@ export class Tower extends DurableObject<Env> {
 		this.patch("flight", this.flightById(flight.id));
 		result.radio = this.drainRadio(flight.id);
 		return result;
+	}
+
+	/** Maps a bare method name to its qualified symbol when unambiguous: "src/cart.js#add" → "src/cart.js#Cart.add". */
+	private resolveTarget(target: string): string {
+		const t = parseTarget(target);
+		if (!t.symbol || t.isDir) return target;
+		const file = this.meta<TrunkState>("trunk", { head: null, files: [], landedCount: 0 }).files.find((f) => f.path === t.path);
+		if (!file || file.symbols.some((s) => s.name === t.symbol)) return target;
+		const matches = file.symbols.filter((s) => s.name.endsWith(`.${t.symbol}`));
+		return matches.length === 1 ? `${t.path}#${matches[0].name}` : target;
 	}
 
 	async releaseClearance(agentId: string, input: { targets?: string[]; flight?: string }): Promise<{ released: string[]; radio: RadioMessage[] }> {
@@ -1239,7 +1249,7 @@ export class Tower extends DurableObject<Env> {
 
 	// ───────────────────────── edge agents ─────────────────────────
 
-	async launchEdge(input: { count: number; model?: string; maxFlights?: number; limit?: number }): Promise<{ launched: Agent[] }> {
+	async launchEdge(input: { count: number; model?: string; maxFlights?: number; limit?: number; mode?: "llm" | "scripted" }): Promise<{ launched: Agent[] }> {
 		const fleet = this.meta<string[]>("edgeFleet", []);
 		const statuses = await Promise.all(fleet.map((id) => this.edgeStub(id).status().catch(() => null)));
 		const flying = statuses.filter((s) => s && s.phase !== "done" && s.phase !== "stopped").length;
@@ -1247,14 +1257,28 @@ export class Tower extends DurableObject<Env> {
 		const count = Math.min(Math.max(1, input.count), room);
 		const launched: Agent[] = [];
 		for (let i = 0; i < count; i++) {
+			const scripted = input.mode === "scripted";
 			const model = input.model ?? "@cf/zai-org/glm-5.3-flash";
-			const { agent } = await this.join({ kind: "edge", model: model.replace(/^@cf\//, "") });
-			await this.edgeStub(agent.id).start({ slug: this.project().slug, agentId: agent.id, callsign: agent.callsign, model, maxFlights: input.maxFlights ?? 6 });
+			const { agent } = await this.join({ kind: "edge", model: scripted ? "scripted" : model.replace(/^@cf\//, "") });
+			await this.edgeStub(agent.id).start({
+				slug: this.project().slug,
+				agentId: agent.id,
+				callsign: agent.callsign,
+				model,
+				maxFlights: input.maxFlights ?? 6,
+				mode: scripted ? "scripted" : "llm",
+			});
 			fleet.push(agent.id);
 			launched.push(agent);
 		}
 		this.setMeta("edgeFleet", fleet);
-		if (launched.length) this.emit("edge.launched", `Launched ${launched.length} edge agent${launched.length > 1 ? "s" : ""} on Workers AI: ${launched.map((a) => a.callsign).join(", ")}`);
+		if (launched.length)
+			this.emit(
+				"edge.launched",
+				input.mode === "scripted"
+					? `Launched ${launched.length} scripted load-test agents (Durable Objects, no LLM)`
+					: `Launched ${launched.length} edge agent${launched.length > 1 ? "s" : ""} on Workers AI: ${launched.map((a) => a.callsign).join(", ")}`,
+			);
 		return { launched };
 	}
 
