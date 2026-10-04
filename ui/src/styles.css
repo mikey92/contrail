@@ -2008,7 +2008,7 @@ details.diffs summary {
 }
 .results {
 	display: grid;
-	grid-template-columns: repeat(3, minmax(0, 1fr));
+	grid-template-columns: repeat(4, minmax(0, 1fr));
 	gap: 22px;
 	padding-top: 56px;
 	padding-bottom: 8px;
@@ -2018,7 +2018,7 @@ details.diffs summary {
 	padding-top: 14px;
 }
 .result-n {
-	font-size: 38px;
+	font-size: clamp(28px, 2.6vw, 36px);
 	font-weight: 600;
 	letter-spacing: -0.02em;
 	font-variant-numeric: tabular-nums;

@@ -29,7 +29,7 @@ const get = async (path) => {
   return path.includes("/file?") ? res.text() : res.json();
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const clock = (ms) => `${Math.floor(ms / 60000)}:${String(Math.round((ms % 60000) / 1000)).padStart(2, "0")}`;
+const clock = (ms) => `${Math.floor(ms / 60000)}:${String(Math.floor((ms % 60000) / 1000)).padStart(2, "0")}`;
 
 const first = await get(`/api/c/${slug}`);
 const sectors = first.center.sectors;

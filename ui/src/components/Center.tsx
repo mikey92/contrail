@@ -4,6 +4,8 @@ import { duration, relTime } from "../store";
 import { Command } from "./Detail";
 import { Logo } from "./Icons";
 
+const n = (x: number) => x.toLocaleString("en-US");
+
 /** Landed totals over time, to show the monorepo's landing rate. */
 interface Sample {
 	t: number;
@@ -84,14 +86,14 @@ export function Center({ slug }: { slug: string }) {
 				<div class="proj">
 					<div class="proj-name">{snap.center.name}</div>
 					<div class="proj-sub">
-						<span class="mono">monorepo @ {snap.head?.slice(0, 8) ?? "—"}</span> · {snap.sectors.length} sectors · {snap.compositions} compositions
+						<span class="mono">monorepo @ {snap.head?.slice(0, 8) ?? "—"}</span> · {snap.sectors.length} sectors · {n(snap.compositions)} compositions
 					</div>
 				</div>
 				<div class="stats">
-					<Stat label="Agents" value={sum("agents")} title="Agents that joined any sector" />
-					<Stat label="In the air" value={sum("inAir")} tone="air" title="Flights working right now, across all sectors" />
-					<Stat label="Holding" value={sum("holding")} tone="hold" title="Flights waiting for code another flight in their sector holds" />
-					<Stat label="Landed" value={`${landed}/${intents}`} tone="ok" title="Intents landed, across all sectors" />
+					<Stat label="Agents" value={n(sum("agents"))} title="Agents that joined any sector" />
+					<Stat label="In the air" value={n(sum("inAir"))} tone="air" title="Flights working right now, across all sectors" />
+					<Stat label="Holding" value={n(sum("holding"))} tone="hold" title="Flights waiting for code another flight in their sector holds" />
+					<Stat label="Landed" value={`${n(landed)}/${n(intents)}`} tone="ok" title="Intents landed, across all sectors" />
 					<Stat
 						label={done ? "Landings/s overall" : "Landings/s now"}
 						value={(done && span ? landed / (span / 1000) : rate).toFixed(1)}
@@ -108,7 +110,7 @@ export function Center({ slug }: { slug: string }) {
 				<p class="center-lede">
 					Each sector owns one directory of this monorepo and lands through its own runway, so sectors land in parallel. The Center folds every sector's
 					trunk into one monorepo trunk as soon as it moves{snap.composedAt ? `: last composed ${relTime(snap.composedAt)}` : ""}
-					{snap.behind ? `, ${snap.behind} sector${snap.behind > 1 ? "s" : ""} to fold in` : ""}.{done && span ? ` All ${landed} intents landed in ${duration(span)}.` : ""}
+					{snap.behind ? `, ${snap.behind} sector${snap.behind > 1 ? "s" : ""} to fold in` : ""}.{done && span ? ` All ${n(landed)} intents landed in ${duration(span)}.` : ""}
 				</p>
 				<div class="sectors">
 					{snap.sectors.map((s) => {

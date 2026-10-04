@@ -17,6 +17,7 @@ const REPLAY = {
 	incident: "/p/incident?replay=/replays/incident.jsonl.gz",
 	stress: "/p/stress?replay=/replays/stress.jsonl.gz&speed=6",
 	planned: "/p/stress-b?replay=/replays/stress-planned.jsonl.gz&speed=4",
+	monorepo: "/c/monorepo",
 };
 // Recorded runs to watch on each card: an idle live airspace shows the end state, a replay shows the run.
 const WATCH: Record<string, [string, string][]> = {
@@ -146,6 +147,12 @@ export function Home() {
 					<div class="result-l">Time agents spent holding a claim</div>
 					<p>With flight planning, the tower routes work around busy functions: agents wait on the ground for clear work instead, all waiting halves, and the paired load test finished in 6:01 instead of 8:10.</p>
 					<a href={REPLAY.planned}>Watch the replay →</a>
+				</div>
+				<div class="result">
+					<div class="result-n">3,000 / 3,000</div>
+					<div class="result-l">Changes by 1,000 agents in one monorepo</div>
+					<p>The load test ×10, split into 10 sectors that each land through their own runway: 6.0 landings a second, 8× one trunk, with every counter still equal to its landed increments. The monorepo's own trunk followed 2.5 s behind.</p>
+					<a href={REPLAY.monorepo}>Open the monorepo →</a>
 				</div>
 			</section>
 
