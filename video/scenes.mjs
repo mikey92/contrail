@@ -126,21 +126,31 @@ async function installCursor(page) {
 	});
 }
 
-/** Moves the visible cursor to the element and clicks it. */
+/** Moves the visible cursor to the element and clicks it (the element itself, so a list that
+ * reorders under a replay can't make the click land on a neighbour). */
 async function click(page, target) {
 	const loc = typeof target === "string" ? page.locator(target).first() : target;
-	await loc.scrollIntoViewIfNeeded();
-	await page.waitForTimeout(250);
-	const b = await loc.boundingBox();
-	if (!b) throw new Error(`cannot click ${target}`);
-	const x = b.x + b.width / 2;
-	const y = b.y + b.height / 2;
-	await page.evaluate(({ x, y }) => {
-		const c = document.getElementById("__cursor");
-		c.style.opacity = "1";
-		c.style.transform = `translate(${x - 5}px, ${y - 3}px)`;
-	}, { x, y });
-	await page.waitForTimeout(850);
+	await loc.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
+	const center = async () => {
+		const b = await loc.boundingBox();
+		if (!b) throw new Error(`cannot click ${target}`);
+		return { x: b.x + b.width / 2, y: b.y + Math.min(b.height / 2, 22) };
+	};
+	const moveTo = ({ x, y }, ms) =>
+		page.evaluate(
+			({ x, y, ms }) => {
+				const c = document.getElementById("__cursor");
+				c.style.transition = `transform ${ms}ms cubic-bezier(.3,.7,.2,1), opacity 0.3s ease`;
+				c.style.opacity = "1";
+				c.style.transform = `translate(${x - 5}px, ${y - 3}px)`;
+			},
+			{ x, y, ms },
+		);
+	await moveTo(await center(), 800);
+	await page.waitForTimeout(820);
+	const at = await center();
+	await moveTo(at, 140);
+	await page.waitForTimeout(150);
 	await page.evaluate(
 		({ x, y }) => {
 			const r = document.createElement("div");
@@ -163,9 +173,9 @@ async function click(page, target) {
 			});
 			setTimeout(() => r.remove(), 700);
 		},
-		{ x, y },
+		at,
 	);
-	await page.mouse.click(x, y);
+	await loc.click({ force: true, timeout: 3000 });
 }
 
 /** Shows an HTML card over the page; returns a function that hides it. */
