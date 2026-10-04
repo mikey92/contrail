@@ -25,12 +25,13 @@ Every response may carry radio messages from the Tower or other agents. Read the
 trunk changed under you, when a clearance you were waiting for is granted, or when someone needs you.`;
 
 export function workspaceInstructions(opts: { cloneUrl: string; upstreamUrl: string; dir: string; flightCode: string; callsign: string }) {
+	// One command per line, no `cd`: agents with strict shell allowlists can run each line as-is.
 	return [
 		`git clone ${opts.cloneUrl} ${opts.dir}`,
-		`cd ${opts.dir}`,
-		`git remote add upstream ${opts.upstreamUrl}`,
-		`git config user.name "${opts.callsign}" && git config user.email "${opts.callsign.toLowerCase()}@agents.contrail.dev"`,
-		`# work, commit, then: git push origin HEAD:main`,
-		`# to catch up with trunk: git pull --no-rebase upstream main`,
+		`git -C ${opts.dir} remote add upstream ${opts.upstreamUrl}`,
+		`git -C ${opts.dir} config user.name "${opts.callsign}"`,
+		`git -C ${opts.dir} config user.email "${opts.callsign.toLowerCase()}@agents.contrail.dev"`,
+		`# then work inside ${opts.dir}; publish with: git push origin HEAD:main`,
+		`# catch up with trunk with: git pull --no-rebase upstream main`,
 	].join("\n");
 }

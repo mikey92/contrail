@@ -36,6 +36,9 @@ const root = opt("dir", join(homedir(), "contrail-swarm"));
 const run = join(root, `${slug}-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}`);
 mkdirSync(run, { recursive: true });
 const prompt = readFileSync(join(here, "prompt.md"), "utf8");
+// Agents get a private global git config: tool state directories never end up in commits.
+writeFileSync(join(run, "gitignore"), [".omc/", ".claude/", ".codex/", ".DS_Store", "node_modules/", ".mcp.json"].join("\n") + "\n");
+writeFileSync(join(run, "gitconfig"), `[core]\n\texcludesFile = ${join(run, "gitignore")}\n[pull]\n\trebase = false\n[init]\n\tdefaultBranch = main\n`);
 
 async function join_(kind, model) {
   const res = await fetch(`${base}/api/p/${slug}/join`, {
@@ -48,8 +51,14 @@ async function join_(kind, model) {
   return body;
 }
 
-/** Turns stream-json / codex json lines into a short readable log. */
+const redact = (s) => s.replace(/x:[^@\s"]+@/g, "x:***@").replace(/art_v\d+_[A-Za-z0-9_]+/g, "art_***");
+
+/** Turns stream-json / codex json lines into a short readable log (with credentials redacted). */
 function readable(kind, line) {
+  return redact(readableRaw(kind, line));
+}
+
+function readableRaw(kind, line) {
   try {
     const m = JSON.parse(line);
     if (kind === "claude-code") {
@@ -79,7 +88,7 @@ function launch({ kind, model, callsign, key }) {
   const text = prompt.replaceAll("{{CALLSIGN}}", callsign);
   let cmd;
   let cmdArgs;
-  const env = { ...process.env, CONTRAIL_KEY: key };
+  const env = { ...process.env, CONTRAIL_KEY: key, GIT_CONFIG_GLOBAL: join(run, "gitconfig") };
   if (kind === "claude-code") {
     writeFileSync(join(dir, ".mcp.json"), JSON.stringify({ mcpServers: { contrail: { type: "http", url: mcpUrl, headers: { Authorization: `Bearer ${key}` } } } }, null, 2));
     cmd = "claude";
@@ -89,6 +98,8 @@ function launch({ kind, model, callsign, key }) {
       "--mcp-config",
       join(dir, ".mcp.json"),
       "--strict-mcp-config",
+      "--setting-sources",
+      "project,local",
       "--model",
       model,
       "--permission-mode",
@@ -154,7 +165,7 @@ function launch({ kind, model, callsign, key }) {
       if (r) log.write(`${new Date().toISOString().slice(11, 19)} ${r}\n`);
     }
   });
-  child.stderr.on("data", (chunk) => log.write(`stderr: ${chunk}`));
+  child.stderr.on("data", (chunk) => log.write(`stderr: ${redact(chunk.toString())}`));
   return new Promise((resolve) => child.on("close", (code) => (raw.end(), log.end(), resolve({ callsign, code }))));
 }
 

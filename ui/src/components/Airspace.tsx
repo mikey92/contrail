@@ -43,9 +43,11 @@ function layout(files: TrunkFile[], width: number, height: number) {
 		name: "root",
 		children: [...groups.entries()].map(([name, fs]) => ({ name, children: fs.map((f) => ({ name: f.path, file: f, value: Math.max(f.lines, 10) })) })),
 	};
+	// Stable ordering keeps the map from reshuffling as files grow: src/ first, root last, files by path.
+	const rank = (name: string) => (name === "src" ? 0 : name === "·" ? 2 : 1);
 	const root = hierarchy<any>(data)
 		.sum((d) => d.value ?? 0)
-		.sort((a, b) => (b.value ?? 0) - (a.value ?? 0));
+		.sort((a, b) => (a.depth === 1 ? rank(a.data.name) - rank(b.data.name) || a.data.name.localeCompare(b.data.name) : a.data.name.localeCompare(b.data.name)));
 	treemap<any>().size([width, height]).tile(treemapSquarify.ratio(1.15)).paddingOuter(4).paddingTop(22).paddingInner(5).round(true)(root);
 
 	const groupBoxes: GroupBox[] = [];
@@ -138,13 +140,18 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 		const slot = (i + 0.5) / Math.max(cruising.length, 1);
 		positions.set(f.id, { x: 40 + slot * (size.w - 80), y: APRON / 2 - 4, orbit: false });
 	});
+	// A flight sits on its primary claim: holding targets first (it circles them), then granted
+	// symbols in source files, then anything else. Thin connectors point at its other claims.
+	const score = (x: (typeof claims)[number], f: Flight) =>
+		(f.status === "holding" && x.c.status === "holding" ? 0 : 10) + (x.c.target.includes("#") ? 0 : 2) + (/^(test|tests|__tests__)\//.test(x.c.target) ? 4 : 0);
+	const connectors: { from: string; to: { x: number; y: number }; color: string }[] = [];
 	for (const f of active) {
 		if (positions.has(f.id)) continue;
-		const mine = claims.filter((x) => x.c.flightId === f.id);
-		const granted = mine.filter((x) => x.c.status === "granted");
-		const pick = (granted.length ? granted : mine).map((x) => center(x.rect!));
-		const avg = pick.reduce((a, p) => ({ x: a.x + p.x / pick.length, y: a.y + p.y / pick.length }), { x: 0, y: 0 });
-		positions.set(f.id, { x: avg.x, y: avg.y + APRON, orbit: f.status === "holding" });
+		const mine = claims.filter((x) => x.c.flightId === f.id).sort((a, b) => score(a, f) - score(b, f));
+		const primary = center(mine[0].rect!);
+		positions.set(f.id, { x: primary.x, y: primary.y + APRON, orbit: f.status === "holding" });
+		const color = agents[f.agentId]?.color ?? "#94a3b8";
+		for (const other of mine.slice(1)) connectors.push({ from: f.id, to: center(other.rect!), color });
 	}
 
 	// Fan out flights that share a spot so their tags never stack.
@@ -229,6 +236,10 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 								)}
 							</g>
 						);
+					})}
+					{connectors.map((k, i) => {
+						const p = positions.get(k.from)!;
+						return <line key={`k${i}`} x1={p.x} y1={p.y - APRON} x2={k.to.x} y2={k.to.y} class="connector" style={{ stroke: k.color }} />;
 					})}
 					{flashRects.map(({ t, fl, rect }) => (
 						<rect key={`${fl.id}-${t}`} x={rect!.x - 3} y={rect!.y - 3} width={rect!.w + 6} height={rect!.h + 6} rx={4} class={`flash flash-${fl.kind}`} />

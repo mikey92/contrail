@@ -314,6 +314,12 @@ a {
 	stroke: #0b1120;
 	stroke-width: 3px;
 }
+.connector {
+	stroke-width: 1.2;
+	stroke-dasharray: 2 4;
+	opacity: 0.55;
+	pointer-events: none;
+}
 .flash {
 	fill: none;
 	stroke-width: 3;
