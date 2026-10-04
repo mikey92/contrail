@@ -3,10 +3,12 @@
 import { Hono } from "hono";
 import { TOOL_BY_NAME, TOOLS } from "./agent-api";
 import type { Env } from "./env";
+import { checkPrefixes } from "./center/compose";
 import { handleMcp } from "./mcp";
 import type { ProjectSource } from "./tower/tower";
 import { errorMessage, randomToken, safeEqual } from "./util";
 
+export { Center } from "./center/center";
 export { EdgeAgent } from "./edge/agent";
 export { Registry } from "./registry";
 export { Runway } from "./runway/runway";
@@ -18,6 +20,7 @@ const app = new Hono<App>();
 
 const registry = (env: Env) => env.REGISTRY.get(env.REGISTRY.idFromName("global"));
 const tower = (env: Env, slug: string) => env.TOWER.get(env.TOWER.idFromName(slug));
+const center = (env: Env, slug: string) => env.CENTER.get(env.CENTER.idFromName(slug));
 
 function bearer(req: Request): string | null {
 	const h = req.headers.get("Authorization");
@@ -45,9 +48,22 @@ app.get("/api/projects", async (c) => {
 
 app.post("/api/projects", async (c) => {
 	if (!isAdmin(c)) return c.json({ error: "admin key required" }, 401);
-	const body = await c.req.json<{ slug: string; name: string; description?: string; public?: boolean; playground?: boolean; source?: ProjectSource; joinCode?: string }>();
+	const body = await c.req.json<{
+		slug: string;
+		name: string;
+		description?: string;
+		public?: boolean;
+		playground?: boolean;
+		source?: ProjectSource;
+		joinCode?: string;
+		center?: string;
+		prefix?: string;
+	}>();
 	const slug = String(body.slug ?? "").toLowerCase();
 	if (!/^[a-z0-9][a-z0-9-]{1,30}$/.test(slug)) return c.json({ error: "slug: 2-31 chars, a-z 0-9 -" }, 400);
+	// A sector of a monorepo owns one directory, and holds only the files under it.
+	if (body.center && (typeof body.prefix !== "string" || checkPrefixes([body.prefix]))) return c.json({ error: checkPrefixes([String(body.prefix)]) ?? "a sector needs a prefix" }, 400);
+	if (body.center && Object.keys(body.source?.files ?? {}).some((p) => !p.startsWith(body.prefix!))) return c.json({ error: `a sector holds only files under ${body.prefix}` }, 400);
 	const joinCode = body.joinCode ?? randomToken("join");
 	const info = { slug, name: body.name || slug, description: body.description ?? "", trunkRepo: "", createdAt: Date.now(), public: body.public ?? true, playground: body.playground ?? false };
 	if (!(await registry(c.env).register(info, joinCode))) return c.json({ error: "project exists" }, 409);
@@ -60,6 +76,8 @@ app.post("/api/projects", async (c) => {
 				description: info.description,
 				public: info.public,
 				playground: info.playground,
+				center: body.center,
+				prefix: body.prefix,
 				source: body.source ?? { kind: "files" },
 			});
 			await registry(c.env).update(created);
@@ -292,6 +310,89 @@ app.all("/mcp/:slug", async (c) => {
 	const key = bearer(c.req.raw);
 	const agent = key ? await t.authenticate(key) : null;
 	return handleMcp(c.req.raw, { tower: t, agentId: agent?.id ?? null, projectName: entry.info.name });
+});
+
+// ── centers: a monorepo split into sectors ─────────────────
+
+async function canViewCenter(c: { req: { raw: Request }; env: Env }, slug: string) {
+	const info = await registry(c.env).getCenter(slug);
+	if (!info || (!info.public && !isAdmin(c))) return null;
+	return info;
+}
+
+// The sectors are created first, as projects with `center` and `prefix`; this composes them into one monorepo.
+app.post("/api/centers", async (c) => {
+	if (!isAdmin(c)) return c.json({ error: "admin key required" }, 401);
+	const body = await c.req.json<{ slug: string; name: string; description?: string; public?: boolean; sectors: string[]; files: Record<string, string> }>();
+	const slug = String(body.slug ?? "").toLowerCase();
+	if (!/^[a-z0-9][a-z0-9-]{1,30}$/.test(slug)) return c.json({ error: "slug: 2-31 chars, a-z 0-9 -" }, 400);
+	const sectors = [];
+	for (const s of body.sectors ?? []) {
+		const entry = await registry(c.env).get(s);
+		if (!entry || entry.info.center !== slug || !entry.info.prefix) return c.json({ error: `${s} is not a sector of ${slug}` }, 400);
+		sectors.push({ slug: s, name: entry.info.name, prefix: entry.info.prefix, trunkRepo: entry.info.trunkRepo });
+	}
+	if (!sectors.length) return c.json({ error: "name the sector projects" }, 400);
+	const problem = checkPrefixes(sectors.map((s) => s.prefix));
+	if (problem) return c.json({ error: problem }, 400);
+	const info = await center(c.env, slug).setup({
+		slug,
+		name: body.name || slug,
+		description: body.description ?? "",
+		public: body.public ?? true,
+		sectors,
+		files: body.files ?? {},
+	});
+	if (!(await registry(c.env).registerCenter(info))) return c.json({ error: "center exists" }, 409);
+	return c.json({ center: info });
+});
+
+app.get("/api/centers", async (c) => {
+	const all = await registry(c.env).listCenters();
+	return c.json({ centers: isAdmin(c) ? all : all.filter((x) => x.public) });
+});
+
+app.delete("/api/centers/:slug", async (c) => {
+	if (!isAdmin(c)) return c.json({ error: "admin key required" }, 401);
+	const slug = c.req.param("slug");
+	const result = await center(c.env, slug).destroy();
+	await registry(c.env).removeCenter(slug);
+	return c.json(result);
+});
+
+app.get("/api/c/:slug", async (c) => {
+	const slug = c.req.param("slug");
+	if (!(await canViewCenter(c, slug))) return c.json({ error: "not found" }, 404);
+	return c.json(await center(c.env, slug).snapshot());
+});
+
+app.get("/api/c/:slug/file", async (c) => {
+	const info = await canViewCenter(c, c.req.param("slug"));
+	if (!info) return c.json({ error: "not found" }, 404);
+	const repo = await c.env.ARTIFACTS.get(info.trunkRepo);
+	try {
+		const blob = await repo.readFile({ ref: c.req.query("ref") || "main", path: c.req.query("path") ?? "" });
+		if (!blob) return c.json({ error: "no such file" }, 404);
+		return new Response(blob, { headers: { "content-type": "text/plain; charset=utf-8" } });
+	} finally {
+		repo[Symbol.dispose]?.();
+	}
+});
+
+// A short-lived read-only clone URL for the composed monorepo trunk.
+app.get("/api/c/:slug/clone", async (c) => {
+	const slug = c.req.param("slug");
+	const info = await canViewCenter(c, slug);
+	if (!info) return c.json({ error: "not found" }, 404);
+	const repo = await c.env.ARTIFACTS.get(info.trunkRepo);
+	try {
+		const [ri, token] = await Promise.all([repo.info(), repo.createToken("read", 3600)]);
+		const secret = token.plaintext.split("?expires=")[0];
+		const url = `https://x:${secret}@${ri.remote.replace(/^https:\/\//, "")}`;
+		return c.json({ expiresAt: token.expiresAt, commands: [`git clone ${url} ${slug}`, `git -C ${slug} log --stat`] });
+	} finally {
+		repo[Symbol.dispose]?.();
+	}
 });
 
 app.all("/api/*", (c) => c.json({ error: "not found" }, 404));

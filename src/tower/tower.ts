@@ -25,7 +25,7 @@ import type {
 	ProjectInfo,
 	RadarEvent,
 	RadarSnapshot,
-	TrunkFile,
+	SectorSummary,
 	TrunkState,
 } from "../shared/types";
 import { callsignFor, colorFor, errorMessage, json, now, randomId, randomToken, repoSafe, sha256, sleep } from "../util";
@@ -366,7 +366,16 @@ export class Tower extends DurableObject<Env> {
 
 	// ───────────────────────── project setup ─────────────────────────
 
-	async setup(input: { slug: string; name: string; description: string; public: boolean; playground?: boolean; source: ProjectSource }): Promise<ProjectInfo> {
+	async setup(input: {
+		slug: string;
+		name: string;
+		description: string;
+		public: boolean;
+		playground?: boolean;
+		center?: string;
+		prefix?: string;
+		source: ProjectSource;
+	}): Promise<ProjectInfo> {
 		const existing = this.meta<ProjectInfo | null>("project", null);
 		if (existing && this.meta<boolean>("ready", false)) return existing;
 		const trunkRepo = repoSafe(`${input.slug}--trunk`);
@@ -378,6 +387,7 @@ export class Tower extends DurableObject<Env> {
 			createdAt: now(),
 			public: input.public,
 			playground: input.playground ?? false,
+			...(input.center ? { center: input.center, prefix: input.prefix } : {}),
 		};
 		this.setMeta("project", info);
 		const A = this.env.ARTIFACTS;
@@ -1130,6 +1140,8 @@ export class Tower extends DurableObject<Env> {
 					const state: TrunkState = { head: result.head, files: result.trunk, landedCount: stats.landings ?? 0 };
 					this.setMeta("trunk", state);
 					this.patch("trunk", state);
+					// A sector tells its Center, which folds the new trunk into the monorepo.
+					if (project.center) this.ctx.waitUntil(this.env.CENTER.get(this.env.CENTER.idFromName(project.center)).sectorMoved(project.slug).catch(() => {}));
 				}
 			}
 		} finally {
@@ -1447,6 +1459,24 @@ export class Tower extends DurableObject<Env> {
 				planned: stats.planned ?? 0,
 				holdMs: stats.holdMs ?? 0,
 			},
+		};
+	}
+
+	/** Counts for the Center page of a sectored monorepo. */
+	async summary(): Promise<SectorSummary> {
+		const count = (sql: string, ...args: SqlStorageValue[]) => this.row<{ c: number }>(sql, ...args)?.c ?? 0;
+		const stats = this.meta<Record<string, number>>("stats", {});
+		return {
+			inAir: count(`SELECT COUNT(*) AS c FROM flights WHERE status IN (${ACTIVE.map(() => "?").join(",")})`, ...ACTIVE),
+			holding: count("SELECT COUNT(*) AS c FROM flights WHERE status = 'holding'"),
+			landed: count("SELECT COUNT(*) AS c FROM intents WHERE status = 'landed'"),
+			intents: count("SELECT COUNT(*) AS c FROM intents"),
+			landings: stats.landings ?? 0,
+			conflictsPrevented: stats.conflictsPrevented ?? 0,
+			agents: count("SELECT COUNT(*) AS c FROM agents"),
+			head: this.meta<TrunkState>("trunk", { head: null, files: [], landedCount: 0 }).head,
+			firstTakeOff: this.row<{ t: number | null }>("SELECT MIN(created_at) AS t FROM flights")?.t ?? null,
+			lastLanding: this.row<{ t: number | null }>("SELECT MAX(landed_at) AS t FROM flights")?.t ?? null,
 		};
 	}
 

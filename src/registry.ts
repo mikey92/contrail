@@ -1,7 +1,7 @@
 // Registry: the list of projects hosted by this Contrail deployment (a single global Durable Object).
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./env";
-import type { ProjectInfo } from "./shared/types";
+import type { CenterInfo, ProjectInfo } from "./shared/types";
 import { json } from "./util";
 
 export class Registry extends DurableObject<Env> {
@@ -11,6 +11,7 @@ export class Registry extends DurableObject<Env> {
 		super(ctx, env);
 		this.sql = ctx.storage.sql;
 		this.sql.exec(`CREATE TABLE IF NOT EXISTS projects (slug TEXT PRIMARY KEY, info TEXT NOT NULL, join_code TEXT NOT NULL, created_at INTEGER NOT NULL)`);
+		this.sql.exec(`CREATE TABLE IF NOT EXISTS centers (slug TEXT PRIMARY KEY, info TEXT NOT NULL, created_at INTEGER NOT NULL)`);
 	}
 
 	async register(info: ProjectInfo, joinCode: string): Promise<boolean> {
@@ -38,5 +39,29 @@ export class Registry extends DurableObject<Env> {
 
 	async remove(slug: string) {
 		this.sql.exec("DELETE FROM projects WHERE slug = ?", slug);
+	}
+
+	// Centers: monorepos split into sectors (each sector is a project of its own).
+
+	async registerCenter(info: CenterInfo): Promise<boolean> {
+		if (this.sql.exec("SELECT slug FROM centers WHERE slug = ?", info.slug).toArray().length > 0) return false;
+		this.sql.exec("INSERT INTO centers (slug, info, created_at) VALUES (?, ?, ?)", info.slug, JSON.stringify(info), Date.now());
+		return true;
+	}
+
+	async getCenter(slug: string): Promise<CenterInfo | null> {
+		const row = this.sql.exec("SELECT info FROM centers WHERE slug = ?", slug).toArray()[0] as { info: string } | undefined;
+		return row ? json<CenterInfo>(row.info, null as unknown as CenterInfo) : null;
+	}
+
+	async listCenters(): Promise<CenterInfo[]> {
+		return this.sql
+			.exec("SELECT info FROM centers ORDER BY created_at")
+			.toArray()
+			.map((r) => json<CenterInfo>((r as { info: string }).info, null as unknown as CenterInfo));
+	}
+
+	async removeCenter(slug: string) {
+		this.sql.exec("DELETE FROM centers WHERE slug = ?", slug);
 	}
 }

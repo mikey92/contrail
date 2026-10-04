@@ -1,3 +1,4 @@
+import type { Center } from "./center/center";
 import type { EdgeAgent } from "./edge/agent";
 import type { Registry } from "./registry";
 import type { Runway } from "./runway/runway";
@@ -10,6 +11,7 @@ export interface Env {
 	RUNWAY: DurableObjectNamespace<Runway>;
 	REGISTRY: DurableObjectNamespace<Registry>;
 	EDGE: DurableObjectNamespace<EdgeAgent>;
+	CENTER: DurableObjectNamespace<Center>;
 	AI: Ai;
 	ASSETS: Fetcher;
 	/** Admin key for creating projects and intents. */

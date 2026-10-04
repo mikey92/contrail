@@ -183,6 +183,53 @@ export interface ProjectInfo {
 	public: boolean;
 	/** Anyone may launch a few edge agents and join with the published join code. */
 	playground?: boolean;
+	/** A sector of a bigger codebase: the Center it belongs to, and the directory prefix it owns. */
+	center?: string;
+	prefix?: string;
+}
+
+/** One sector as the Center sees it: an airspace that owns a directory of the monorepo. */
+export interface SectorInfo {
+	slug: string;
+	name: string;
+	prefix: string;
+	trunkRepo: string;
+}
+
+/** A monorepo split into sectors. The Center composes the sector trunks into one trunk. */
+export interface CenterInfo {
+	slug: string;
+	name: string;
+	description: string;
+	trunkRepo: string;
+	sectors: SectorInfo[];
+	createdAt: number;
+	public: boolean;
+}
+
+/** What a sector's Tower reports to the Center page. */
+export interface SectorSummary {
+	inAir: number;
+	holding: number;
+	landed: number;
+	intents: number;
+	landings: number;
+	conflictsPrevented: number;
+	agents: number;
+	head: string | null;
+	firstTakeOff: number | null;
+	lastLanding: number | null;
+}
+
+export interface CenterSnapshot {
+	center: CenterInfo;
+	/** The composed monorepo trunk and when it last caught up with the sectors. */
+	head: string | null;
+	composedAt: number | null;
+	/** Sector heads that landed but are not composed yet. */
+	behind: number;
+	compositions: number;
+	sectors: (SectorInfo & { summary: SectorSummary | null })[];
 }
 
 /** Everything the Radar UI needs to render a project. */

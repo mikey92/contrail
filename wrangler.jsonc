@@ -11,12 +11,14 @@
 			{ "name": "TOWER", "class_name": "Tower" },
 			{ "name": "RUNWAY", "class_name": "Runway" },
 			{ "name": "REGISTRY", "class_name": "Registry" },
-			{ "name": "EDGE", "class_name": "EdgeAgent" }
+			{ "name": "EDGE", "class_name": "EdgeAgent" },
+			{ "name": "CENTER", "class_name": "Center" }
 		]
 	},
 	"migrations": [
 		{ "tag": "v1", "new_sqlite_classes": ["Tower", "Runway", "Registry"] },
-		{ "tag": "v2", "new_sqlite_classes": ["EdgeAgent"] }
+		{ "tag": "v2", "new_sqlite_classes": ["EdgeAgent"] },
+		{ "tag": "v3", "new_sqlite_classes": ["Center"] }
 	],
 	"ai": { "binding": "AI" },
 	"assets": {
