@@ -541,7 +541,7 @@ const scenes = {
 			// Zoom in on clamp before the planner routes around it, so its flash is seen up close.
 			await t.at(cue(s, "dispatches only work") - 1.6);
 			const clamp = await boxOf(page, '[data-path="source/clamp.js"]');
-			await camera(page, { x: clamp.x - 420, y: clamp.y - 260, width: clamp.width + 840, height: clamp.height + 520 });
+			await camera(page, { x: clamp.x - 240, y: clamp.y - 140, width: clamp.width + 480, height: clamp.height + 280 });
 			await t.at(cue(s, "so the second one stays") - 0.6);
 			await camera(page, null, { ms: 900 });
 			await page.waitForTimeout(950);
