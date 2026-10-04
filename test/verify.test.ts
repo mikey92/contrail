@@ -85,4 +85,13 @@ describe("verify helpers", () => {
 		expect(modules["fast-check"]).toEqual({ cjs: 'module.exports = require("./vendor/fc.cjs");' });
 		expect(modules["__contrail_mocha.js"]).toBeTruthy();
 	});
+
+	it("leaves ES namespaces alone when nothing requires them", () => {
+		const files = new Map([
+			["test/counters.test.js", "import * as counters from '../src/counters.js';\nexport function allNumbers() { Object.values(counters).forEach((f) => f()); }"],
+			["src/counters.js", "export function c00() {\n  return 1;\n}"],
+		]);
+		const { modules } = testWorkerModules(files);
+		expect(modules["src/counters.js"]).toEqual({ js: files.get("src/counters.js") });
+	});
 });

@@ -138,8 +138,22 @@ export function hasDefaultExport(source: string): boolean {
 	return false;
 }
 
+/** ES modules that CommonJS modules require, directly or through a vendored alias. */
+function requiredByCommonJs(paths: string[], kinds: Map<string, string>, files: Map<string, string>, aliases: Record<string, string>): Set<string> {
+	const required = new Set(Object.values(aliases));
+	for (const path of paths) {
+		if (kinds.get(path) !== "cjs") continue;
+		for (const m of files.get(path)!.matchAll(/\brequire\(\s*["']([^"']+)["']\s*\)/g)) {
+			const target = resolveRelative(path, m[1]) ?? aliases[m[1]];
+			if (target) required.add(target);
+		}
+	}
+	return required;
+}
+
 /** In workerd, require() of an ES module returns its default export. Like Node's require(esm), a
- * CommonJS test that requires a module without one should get the whole namespace. */
+ * CommonJS test that requires a module without one should get the whole namespace. Only modules
+ * that CommonJS requires get the shim: ES importers keep the exact namespace. */
 function withNamespaceDefault(path: string, source: string): string {
 	if (hasDefaultExport(source)) return source;
 	const self = `./${path.split("/").pop()}`;
@@ -255,10 +269,12 @@ export function testWorkerModules(files: Map<string, string>, config = testConfi
 	modules["__contrail_runner.js"] = config.style === "mocha" ? mochaRunner(tests, config.timeoutMs) : exportsRunner(tests, config.timeoutMs);
 	if (config.style === "mocha") modules["__contrail_mocha.js"] = { js: MOCHA_HARNESS };
 	// Only modules reachable from the tests are loaded, so stray scripts never break verification.
-	for (const path of reachableModules(tests, files, config.modules)) {
+	const reachable = reachableModules(tests, files, config.modules).filter((path) => /\.(m?js|cjs|json)$/.test(path) && files.get(path)!.length <= MAX_MODULE_BYTES);
+	const kinds = new Map(reachable.map((path) => [path, moduleKind(path, files.get(path)!)]));
+	const required = requiredByCommonJs(reachable, kinds, files, config.modules);
+	for (const path of reachable) {
 		const content = files.get(path)!;
-		if (!/\.(m?js|cjs|json)$/.test(path) || content.length > MAX_MODULE_BYTES) continue;
-		const kind = moduleKind(path, content);
+		const kind = kinds.get(path)!;
 		if (kind === "json") {
 			try {
 				modules[path] = { json: JSON.parse(content) };
@@ -266,7 +282,7 @@ export function testWorkerModules(files: Map<string, string>, config = testConfi
 				// Unparseable JSON simply isn't importable.
 			}
 		} else if (kind === "cjs") modules[path] = { cjs: content };
-		else modules[path] = { js: withNamespaceDefault(path, content) };
+		else modules[path] = { js: required.has(path) ? withNamespaceDefault(path, content) : content };
 	}
 	// Vendored dependencies are reachable under their bare names. workerd resolves a bare require()
 	// next to the requiring module, so each alias is placed at the root and in every directory that uses it.
