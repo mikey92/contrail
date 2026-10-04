@@ -1451,8 +1451,9 @@ export class Tower extends DurableObject<Env> {
 		let repos = 0;
 		if (project) {
 			const names = [project.trunkRepo, ...this.rows<{ repo: string }>("SELECT repo FROM flights").map((r) => r.repo)];
-			for (const name of names) {
-				if (await this.env.ARTIFACTS.delete(name).catch(() => false)) repos++;
+			for (let i = 0; i < names.length; i += 10) {
+				const batch = await Promise.all(names.slice(i, i + 10).map((name) => this.env.ARTIFACTS.delete(name).catch(() => false)));
+				repos += batch.filter(Boolean).length;
 			}
 		}
 		for (const ws of this.ctx.getWebSockets()) ws.close(1001, "project deleted");
