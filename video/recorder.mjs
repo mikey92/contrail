@@ -1,14 +1,14 @@
 // Records a Chromium page to an MP4 with the DevTools screencast (sharper than Playwright's video).
-// Frames arrive only when the page repaints; each frame is held until the next one, so static
-// moments cost nothing and the output keeps real time.
+// Frames arrive only when the page repaints; each is held until the next one, so static moments
+// cost nothing and the output keeps real time.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright";
 
 export async function withBrowser(fn, { width = 1920, height = 1080 } = {}) {
-	const browser = await chromium.launch({ args: ["--force-color-profile=srgb", "--hide-scrollbars"] });
+	const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH, args: ["--force-color-profile=srgb", "--hide-scrollbars"] });
 	try {
 		const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 1, colorScheme: "dark" });
 		return await fn(context);
@@ -49,18 +49,15 @@ export async function record(context, { url, out, scene, prepare, width = 1920, 
 	const shift = Math.min(...frames.map((f) => f.received - f.t));
 	for (const f of frames) f.t = Math.max(started, f.t + shift);
 	while (frames.length > 1 && frames[frames.length - 1].t > stopped) frames.pop();
-	// ffmpeg concat list: each frame lasts until the next one (last one until the scene ended).
-	const lines = [];
-	for (let i = 0; i < frames.length; i++) {
-		const from = i === 0 ? started : frames[i].t;
-		const next = i + 1 < frames.length ? frames[i + 1].t : Math.max(stopped, frames[i].t + 1 / fps);
-		lines.push(`file '${frames[i].file}'`, `duration ${Math.max(0.001, next - from).toFixed(4)}`);
+	// Constant frame rate: output frame k shows the latest screencast frame painted by started + k/fps.
+	// (ffmpeg's concat demuxer stretches sub-40ms frames, which made clips run long.)
+	const count = Math.max(1, Math.round((stopped - started) * fps));
+	for (let k = 0, j = 0; k < count; k++) {
+		while (j + 1 < frames.length && frames[j + 1].t <= started + k / fps) j++;
+		linkSync(frames[j].file, join(dir, `out_${String(k).padStart(6, "0")}.jpg`));
 	}
-	lines.push(`file '${frames[frames.length - 1].file}'`);
-	const list = join(dir, "frames.txt");
-	writeFileSync(list, lines.join("\n"));
 	mkdirSync(join(out, ".."), { recursive: true });
-	execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", list, "-vf", `fps=${fps},scale=${width}:${height}:flags=lanczos,format=yuv420p`, "-c:v", "libx264", "-preset", "slow", "-crf", "16", out]);
+	execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-framerate", String(fps), "-i", join(dir, "out_%06d.jpg"), "-vf", `scale=${width}:${height}:flags=lanczos,format=yuv420p`, "-c:v", "libx264", "-preset", "slow", "-crf", "16", out]);
 	rmSync(dir, { recursive: true, force: true });
 	return stopped - started;
 }
