@@ -32,6 +32,8 @@ const DEFAULT_CONFIG: TestConfig = {
 	timeoutMs: 2000,
 };
 const SCRIPT_FILE = /\.(m?js|cjs)$/;
+/** CPU budget of one test run: a runaway loop must not stall the runway, trunk's only writer. */
+const CPU_LIMIT_MS = 15_000;
 const MAX_MODULE_BYTES = 512 * 1024;
 /** Failures kept in a report (passing results are only counted). */
 const MAX_REPORTED_FAILURES = 50;
@@ -301,6 +303,13 @@ export function testWorkerModules(files: Map<string, string>, config = testConfi
 	return { modules, tests };
 }
 
+/** A short, stable fingerprint (FNV-1a) for cache keys. */
+function hash(text: string): string {
+	let h = 0x811c9dc5;
+	for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193);
+	return (h >>> 0).toString(36);
+}
+
 /** Relative module specifier from directory `fromDir` to file `to` (both repository paths). */
 export function relativePath(fromDir: string, to: string): string {
 	const from = fromDir ? fromDir.split("/") : [];
@@ -311,17 +320,25 @@ export function relativePath(fromDir: string, to: string): string {
 	return `${up ? "../".repeat(up) : "./"}${target.slice(i).join("/")}`;
 }
 
-export async function verifyTree(loader: WorkerLoader, treeOid: string, files: Map<string, string>): Promise<TestReport> {
+/**
+ * Runs the test suite of a tree. The runway passes trunk's own configuration, so a change cannot rewrite
+ * the rules it is judged by, and `expectTests` when trunk has tests: a tree with none left fails.
+ */
+export async function verifyTree(loader: WorkerLoader, treeOid: string, files: Map<string, string>, config = testConfig(files), expectTests = false): Promise<TestReport> {
 	const started = Date.now();
-	const { modules, tests } = testWorkerModules(files);
-	if (tests.length === 0) return { passed: 0, failed: 0, results: [], ms: 0 };
+	const { modules, tests } = testWorkerModules(files, config);
+	if (tests.length === 0) {
+		if (!expectTests) return { passed: 0, failed: 0, results: [], ms: 0 };
+		return { passed: 0, failed: 1, results: [], error: "no tests left to run: trunk has a test suite, but this tree has no files the gate runs", ms: 0 };
+	}
 	try {
-		const worker = loader.get(`contrail-verify:${treeOid}`, async () => ({
+		const worker = loader.get(`contrail-verify:${treeOid}:${hash(JSON.stringify(config))}`, async () => ({
 			compatibilityDate: "2026-10-01",
 			compatibilityFlags: ["nodejs_compat"],
 			mainModule: "__contrail_runner.js",
 			modules: modules as Record<string, string>,
 			globalOutbound: null,
+			limits: { cpuMs: CPU_LIMIT_MS },
 		}));
 		const res = await worker.getEntrypoint().fetch("https://verify.contrail/");
 		if (!res.ok) throw new Error(`runner responded ${res.status}: ${(await res.text()).slice(0, 300)}`);

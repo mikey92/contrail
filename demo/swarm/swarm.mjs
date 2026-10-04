@@ -89,7 +89,9 @@ function launch({ kind, model, callsign, key }) {
   const text = prompt.replaceAll("{{CALLSIGN}}", callsign);
   let cmd;
   let cmdArgs;
-  const env = { ...process.env, CONTRAIL_KEY: key, GIT_CONFIG_GLOBAL: join(run, "gitconfig") };
+  // Agents get their own key and nothing more: the operator's admin key stays with this launcher.
+  const { CONTRAIL_ADMIN_KEY: _admin, ...inherited } = process.env;
+  const env = { ...inherited, CONTRAIL_KEY: key, GIT_CONFIG_GLOBAL: join(run, "gitconfig") };
   if (kind === "claude-code") {
     writeFileSync(join(dir, ".mcp.json"), JSON.stringify({ mcpServers: { contrail: { type: "http", url: mcpUrl, headers: { Authorization: `Bearer ${key}` } } } }, null, 2));
     cmd = "claude";

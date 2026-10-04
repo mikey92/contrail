@@ -118,7 +118,7 @@ export const TOOLS: ToolDef[] = [
 			properties: { path: str("File path, or 'path#symbol'."), line: { type: "number" }, symbol: str("Function/class/method name.") },
 			required: ["path"],
 		},
-		run: (t, _a, args) => t.why({ path: String(args.path ?? ""), line: args.line, symbol: args.symbol }),
+		run: (t, a, args) => t.why({ path: String(args.path ?? ""), line: args.line, symbol: args.symbol }, a),
 		summarize: (r) => (r.history.length ? `${r.target}: ${r.history.length} landed change(s) on record.` : `${r.target}: no recorded history.`),
 	},
 	{

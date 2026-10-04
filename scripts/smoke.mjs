@@ -1,17 +1,26 @@
 #!/usr/bin/env node
 // End-to-end smoke test against a deployed Contrail: scripted agents use real git against
-// Artifacts workspaces and exercise clearances, parallel landings, insert/insert unions, a real
-// conflict, its resolution, the why() lookup, review by exception, and a landing train with a culprit.
-//   CONTRAIL_URL=… CONTRAIL_ADMIN_KEY=… node scripts/smoke.mjs <slug>
+// Artifacts workspaces and exercise clearances (enforced at landing too), parallel landings,
+// insert/insert unions, a real conflict, its resolution, the why() lookup, review by exception,
+// a landing train with a culprit, and a playground that starts over once its work has landed.
+//   CONTRAIL_URL=… CONTRAIL_ADMIN_KEY=… node scripts/smoke.mjs [--keep]
+// It creates two private projects from demo/bookshop and deletes them afterwards (--keep keeps them).
 import { execSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const slug = process.argv[2];
-const base = process.env.CONTRAIL_URL;
+const base = process.env.CONTRAIL_URL?.replace(/\/$/, "");
 const admin = process.env.CONTRAIL_ADMIN_KEY;
+if (!base || !admin) {
+  console.error("usage: CONTRAIL_URL=https://<your deployment> CONTRAIL_ADMIN_KEY=<admin key> node scripts/smoke.mjs [--keep]");
+  process.exit(2);
+}
+const keep = process.argv.includes("--keep");
+const slug = `smoke-${Date.now().toString(36)}`;
 const work = mkdtempSync(join(tmpdir(), "contrail-smoke-"));
+const demo = join(dirname(fileURLToPath(import.meta.url)), "../demo/bookshop");
 let failures = 0;
 
 function check(cond, label) {
@@ -32,9 +41,29 @@ async function call(path, body, key) {
 
 const sh = (cmd, cwd) => execSync(cmd, { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" });
 
-async function agent(callsign) {
-  const { key, agent } = await call(`/api/p/${slug}/join`, { callsign, kind: "other", model: "scripted" }, admin);
-  const tool = (name, args) => call(`/api/p/${slug}/agent/${name}`, args, key);
+function demoFiles(root = demo, out = {}) {
+  for (const entry of readdirSync(root)) {
+    const full = join(root, entry);
+    if (statSync(full).isDirectory()) demoFiles(full, out);
+    else if (entry !== "intents.json") out[relative(demo, full)] = readFileSync(full, "utf8");
+  }
+  return out;
+}
+
+/** A private Bookshop project with the demo's intents (or the first `intents` of them). */
+async function createProject(projectSlug, { playground = false, intents } = {}) {
+  await call("/api/projects", { slug: projectSlug, name: `Smoke ${projectSlug}`, public: false, playground, source: { kind: "files", files: demoFiles() } }, admin);
+  const all = JSON.parse(readFileSync(join(demo, "intents.json"), "utf8"));
+  await call(`/api/p/${projectSlug}/intents`, { intents: intents ? all.slice(0, intents) : all }, admin);
+}
+
+async function deleteProject(projectSlug) {
+  await fetch(`${base}/api/projects/${projectSlug}`, { method: "DELETE", headers: { authorization: `Bearer ${admin}` } }).catch(() => {});
+}
+
+async function agent(callsign, projectSlug = slug) {
+  const { key, agent } = await call(`/api/p/${projectSlug}/join`, { callsign, kind: "other", model: "scripted" }, admin);
+  const tool = (name, args) => call(`/api/p/${projectSlug}/agent/${name}`, args, key);
   return { key, agent, tool };
 }
 
@@ -58,7 +87,8 @@ function commitPush(dir, message) {
   sh(`git add -A && git commit -q -m "${message}" && git push -q origin HEAD:main`, dir);
 }
 
-console.log(`smoke test on ${base}/p/${slug} (workdir ${work})`);
+console.log(`smoke test on ${base}/p/${slug} and ${base}/p/${slug}-pg (workdir ${work})`);
+await createProject(slug);
 
 // ── 1. two flights edit different methods of the same class in parallel ─────
 const A = await agent("SMOKE-A");
@@ -129,6 +159,12 @@ edit(fd.dir, "src/pricing.js", (s) =>
 edit(fd.dir, "test/pricing.test.js", append(`export function paperbacksBuyTwoGetOne() {\n  const cart = cartOf([\"9780143127550\", 3]);\n  assert.equal(subtotal(cart, catalog), 1800 * 2);\n}`));
 commitPush(fd.dir, "Buy 2 get 1 free");
 
+// D also asks to land first: its change touches subtotal, which C is cleared for, so the runway turns it away.
+const early = await D.tool("request_landing", { summary: "Every third paperback is free." });
+check(
+  early.landing.status === "failed" && /^airspace violation: src\/pricing\.js#subtotal is cleared to /.test(early.landing.error ?? ""),
+  `${fd.flight.code} turned away for landing code ${fc.flight.code} is cleared for (${early.landing.error ?? early.landing.status})`,
+);
 const lc = await C.tool("request_landing", { summary: "Lines with 3+ copies get 10% off." });
 check(lc.landing.status === "landed", `${fc.flight.code} landed`);
 const ld = await D.tool("request_landing", { summary: "Every third paperback is free." });
@@ -236,5 +272,24 @@ const trains = (await (await fetch(`${base}/api/p/${slug}/events?type=runway.tra
 const xTrain = trains.find((e) => e.data?.landings?.includes(lx.landing.id));
 console.log(`    (the culprit rode a train of ${xTrain?.data?.landings?.length ?? "?"})`);
 
+// ── 6. a playground starts over once all of its work has landed ─────
+const pg = `${slug}-pg`;
+await createProject(pg, { playground: true, intents: 1 });
+const before = (await (await fetch(`${base}/api/p/${pg}/snapshot`, { headers: { authorization: `Bearer ${admin}` } })).json()).trunk;
+const P = await agent("SMOKE-P", pg);
+const fp = await fly(P, "1");
+await P.tool("request_clearance", { targets: ["README.md"], reason: "note" });
+edit(fp.dir, "README.md", append("Smoke test was here."));
+commitPush(fp.dir, "README note");
+const lp = await P.tool("request_landing", { summary: "A note in the README." });
+check(lp.landing.status === "landed", `${fp.flight.code} landed the playground's only intent`);
+const again = await P.tool("take_off", {});
+const after = (await (await fetch(`${base}/api/p/${pg}/snapshot`, { headers: { authorization: `Bearer ${admin}` } })).json());
+const readme = (t) => t.files.find((f) => f.path === "README.md")?.lines;
+check(again.flight?.code === "FL-001" && after.events.some((e) => e.type === "project.reset"), `the exhausted playground started over: the next take-off is ${again.flight?.code ?? again.message}`);
+check(readme(after.trunk) === readme(before) && after.trunk.head !== before.head, "trunk is back to its starting code, as a new commit on top of its history");
+if (again.flight) await P.tool("abort", { reason: "smoke test done" });
+
+if (!keep) await Promise.all([deleteProject(slug), deleteProject(pg)]);
 console.log(failures ? `\n${failures} check(s) failed` : "\nall checks passed");
 process.exit(failures ? 1 : 0);

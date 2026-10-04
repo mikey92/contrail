@@ -16,6 +16,19 @@ export function Radar({ slug, fixture }: { slug: string; fixture: string | null 
 	const [operator, setOperator] = useState(false);
 	const [clone, setClone] = useState(false);
 
+	if (s.missing) {
+		return (
+			<div class="boot">
+				<Logo size={34} />
+				<div>
+					There is no public airspace called <span class="mono">{slug}</span>.
+				</div>
+				<a class="btn ghost" href="/">
+					See all airspaces
+				</a>
+			</div>
+		);
+	}
 	if (!s.ready) {
 		return (
 			<div class="boot">
@@ -41,7 +54,7 @@ export function Radar({ slug, fixture }: { slug: string; fixture: string | null 
 				</a>
 				<div class="proj">
 					<div class="proj-name">{s.project?.name}</div>
-					<div class="proj-sub">
+					<div class="proj-sub" title={`Trunk is at ${s.trunk.head ?? "—"}. ${s.stats.repos} Artifacts repositories (trunk and one per flight). ${s.stats.unioned} parallel inserts merged automatically.`}>
 						<span class="mono">main @ {s.trunk.head?.slice(0, 8) ?? "—"}</span> · {s.stats.repos} Artifacts repos · {s.stats.unioned} auto-merged
 					</div>
 				</div>

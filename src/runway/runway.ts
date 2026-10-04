@@ -9,9 +9,9 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../env";
 import { extractSymbols } from "../git/symbols";
-import { targetsOverlap } from "../tower/clearance";
+import { airspaceViolations, type HeldByOther, targetsOverlap } from "../tower/clearance";
 import type { ConflictReport, FileChange, TestReport, TrunkFile } from "../shared/types";
-import { errorMessage } from "../util";
+import { errorMessage, landingTrailer } from "../util";
 import {
 	addNote,
 	cloneMain,
@@ -28,7 +28,6 @@ import {
 	type Person,
 	pushMain,
 	pushNotes,
-	readNote,
 	readText,
 	type Repo,
 	seed,
@@ -36,7 +35,7 @@ import {
 	writeFlatTree,
 } from "./gitops";
 import { describeChanges, mergeTrees } from "./treemerge";
-import { verifyTree } from "./verify";
+import { CONFIG_FILE, type TestConfig, testConfig, testFiles, verifyTree } from "./verify";
 
 export interface LandingJob {
 	landingId: string;
@@ -48,6 +47,8 @@ export interface LandingJob {
 	note: Record<string, unknown>;
 	/** Targets the project's policy reserves for a human; touching one parks the landing for review. */
 	review?: string[];
+	/** Code other flights are cleared to change right now. Landing a change to it is an airspace violation. */
+	heldByOthers?: HeldByOther[];
 	/** A human approved this landing. */
 	approved?: boolean;
 }
@@ -57,6 +58,8 @@ export interface LandingOutcome {
 	status: "landed" | "conflict" | "failed" | "review";
 	/** For "review": the protected targets the change touches. */
 	reviewRequired?: string[];
+	/** For "failed": code this landing changed that other flights are cleared to change. */
+	violations?: HeldByOther[];
 	forkHead: string | null;
 	base: string | null;
 	trunkBefore: string;
@@ -85,15 +88,22 @@ interface TrainOptions {
 
 /** The protected targets (from the project's review policy) that a change touches. */
 function reviewRequired(policy: string[], changes: FileChange[]): string[] {
-	if (!policy.length) return [];
+	// The test gate's own configuration is always a human's call: it decides what every later landing must pass.
+	const gate = changes.some((c) => c.path === CONFIG_FILE) ? [CONFIG_FILE] : [];
+	if (!policy.length) return gate;
 	const touched = changes.flatMap((c) => (c.symbols.length ? c.symbols.map((sym) => `${c.path}#${sym}`) : [c.path]));
-	return policy.filter((p) => touched.some((t) => targetsOverlap(p, t)));
+	return [...gate, ...policy.filter((p) => touched.some((t) => targetsOverlap(p, t)))];
 }
 
 function failTests(outcome: LandingOutcome, tests: TestReport) {
 	outcome.status = "failed";
 	outcome.tests = tests;
 	outcome.error = tests.error ? `test suite failed to load: ${tests.error}` : `${tests.failed} test(s) failed`;
+}
+
+interface Gate {
+	config: TestConfig;
+	tests: number;
 }
 
 const MAX_SUMMARY_FILE_BYTES = 256 * 1024;
@@ -180,6 +190,7 @@ export class Runway extends DurableObject<Env> {
 		const r = this.repo!;
 		// Fetched fork heads are reused by a replay, unless the clone was replaced.
 		if (r !== before) opts.heads.clear();
+		const gate = await this.gate(r, start);
 		let tip = start;
 		let tipFiles: FlatTree | null = null;
 		const outcomes: LandingOutcome[] = [];
@@ -188,7 +199,7 @@ export class Runway extends DurableObject<Env> {
 		// Landings already on trunk are recognised by their Contrail-Landing trailer, not merged again.
 		const onTrunk = new Map<string, { oid: string; parent: string }>();
 		for (const c of await log(r, start, 300)) {
-			const id = c.commit.message.match(/^Contrail-Landing: (\S+)$/m)?.[1];
+			const id = landingTrailer(c.commit.message);
 			if (id) onTrunk.set(id, { oid: c.oid, parent: c.commit.parent[0] });
 		}
 
@@ -243,6 +254,13 @@ export class Runway extends DurableObject<Env> {
 				outcome.changes = merged.changes;
 				outcome.unioned = merged.unioned;
 				if (merged.changes.length === 0) throw new Error("nothing to land: the workspace makes no changes");
+				const violations = airspaceViolations(job.heldByOthers ?? [], merged.changes);
+				if (violations.length) {
+					outcome.violations = violations;
+					throw new Error(
+						`airspace violation: ${violations.map((v) => `${v.target} is cleared to ${v.flight} (${v.callsign})`).join("; ")}. Request clearance for it and land once it is yours`,
+					);
+				}
 				if (merged.conflicts.length > 0) {
 					outcome.status = "conflict";
 					outcome.conflicts = merged.conflicts;
@@ -254,7 +272,7 @@ export class Runway extends DurableObject<Env> {
 
 				const required = job.approved ? [] : reviewRequired(job.review ?? [], merged.changes);
 				if (required.length || opts.oneByOne) {
-					outcome.tests = await this.test(r, tree, merged.files);
+					outcome.tests = await this.test(r, tree, merged.files, gate);
 					if (outcome.tests.failed > 0) {
 						failTests(outcome, outcome.tests);
 						continue;
@@ -282,7 +300,7 @@ export class Runway extends DurableObject<Env> {
 		}
 
 		if (!opts.oneByOne && boarded.length > 0) {
-			const report = await this.test(r, await commitTreeOid(r, tip), tipFiles!).catch(
+			const report = await this.test(r, await commitTreeOid(r, tip), tipFiles!, gate).catch(
 				(err): TestReport => ({ passed: 0, failed: 1, results: [], error: errorMessage(err), ms: 0 }),
 			);
 			if (report.failed > 0) {
@@ -319,14 +337,47 @@ export class Runway extends DurableObject<Env> {
 	}
 
 	/** Runs the test suite of `tree` in a Dynamic Worker. */
-	private async test(r: Repo, tree: string, files: FlatTree): Promise<TestReport> {
+	private async test(r: Repo, tree: string, files: FlatTree, gate: Gate): Promise<TestReport> {
 		const texts = new Map<string, string>();
 		for (const [path, item] of files) {
 			if (!/\.(m?js|cjs|json)$/.test(path)) continue;
 			const text = await readText(r, item.oid);
 			if (text !== null) texts.set(path, text);
 		}
-		return verifyTree(this.env.LOADER, tree, texts);
+		return verifyTree(this.env.LOADER, tree, texts, gate.config, gate.tests > 0);
+	}
+
+	/** The test gate as trunk defines it: its contrail.json and how many test files it runs. */
+	private async gate(r: Repo, commitOid: string): Promise<Gate> {
+		const tree = await listTree(r, commitOid);
+		const item = tree.get(CONFIG_FILE);
+		const text = item ? await readText(r, item.oid) : null;
+		const config = testConfig(new Map(text === null ? [] : [[CONFIG_FILE, text]]));
+		return { config, tests: testFiles(config, tree.keys()).length };
+	}
+
+	/**
+	 * Puts trunk's first tree back as a new commit on top of its history, so a playground can start over
+	 * without rewriting anything. Returns the new head (or the current one if trunk is already there).
+	 */
+	async restoreFirstTree(trunk: string, message: string, author: Person): Promise<string> {
+		return this.exclusive(async () => {
+			const start = await this.sync(trunk);
+			const r = this.repo!;
+			const history = await log(r, start, 10_000);
+			const first = history[history.length - 1];
+			if (!first || first.commit.parent.length > 0) throw new Error("trunk's first commit is out of reach");
+			if (first.commit.tree === (await commitTreeOid(r, start))) return start;
+			const head = await commit(r, { tree: first.commit.tree, parents: [start], message, author });
+			await setMain(r, head);
+			try {
+				await pushMain(r, await this.trunkToken(trunk));
+			} catch (err) {
+				this.repo = null;
+				throw err;
+			}
+			return head;
+		});
 	}
 
 	/** File list with line counts and symbols for the Radar's codebase map. */
@@ -368,11 +419,4 @@ export class Runway extends DurableObject<Env> {
 		await this.ctx.storage.deleteAll();
 	}
 
-	/** Contrail note attached to a trunk commit, if any. */
-	async note(trunk: string, oid: string): Promise<string | null> {
-		return this.exclusive(async () => {
-			await this.sync(trunk);
-			return readNote(this.repo!, oid);
-		});
-	}
 }

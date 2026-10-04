@@ -8,6 +8,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../env";
 import type { BatchResult, LandingJob, LandingOutcome } from "../runway/runway";
+import { DEFAULT_EDGE_MODEL } from "../edge/agent";
 import { CONFIG_FILE } from "../runway/verify";
 import type {
 	Agent,
@@ -415,8 +416,14 @@ export class Tower extends DurableObject<Env> {
 		return info;
 	}
 
-	async info(): Promise<ProjectInfo | null> {
-		return this.meta<ProjectInfo | null>("project", null);
+	/** Renames a project or rewrites its description (the operator's words on the home page and radar). */
+	async describe(input: { name?: string; description?: string }): Promise<ProjectInfo> {
+		const info = { ...this.project() };
+		if (typeof input.name === "string" && input.name.trim()) info.name = input.name.trim().slice(0, 80);
+		if (typeof input.description === "string") info.description = input.description.trim().slice(0, 400);
+		this.setMeta("project", info);
+		this.broadcast({ kind: "snapshot", snapshot: await this.snapshot() });
+		return info;
 	}
 
 	/** The project's own way to run its tests (contrail.json), told to agents when they take off. */
@@ -579,7 +586,8 @@ export class Tower extends DurableObject<Env> {
 			const f = this.toFlight(active);
 			throw new Error(`you are already flying ${f.code} (${f.status}); land it or call abort before taking off again`);
 		}
-		const next = this.nextIntent(opts.intent);
+		let next = this.nextIntent(opts.intent);
+		if (!next && (await this.restartPlayground())) next = this.nextIntent(opts.intent);
 		if (!next || "wait" in next) {
 			const waiting = this.row<{ c: number }>("SELECT COUNT(*) AS c FROM intents WHERE status = 'open'")?.c ?? 0;
 			return {
@@ -718,6 +726,9 @@ export class Tower extends DurableObject<Env> {
 	async abort(agentId: string, flightRef?: string, reason?: string): Promise<{ ok: true; radio: RadioMessage[] }> {
 		const flight = this.ownFlight(agentId, flightRef);
 		this.setFlightStatus(flight.id, "aborted");
+		// A landing still waiting for the runway (or for a reviewer) goes with the flight.
+		for (const l of this.rows("SELECT * FROM landings WHERE flight_id = ? AND status IN ('queued', 'review')", flight.id).map((r) => this.toLanding(r)))
+			this.finishLanding(l, { status: "failed", error: "flight aborted before landing" });
 		this.sql.exec("UPDATE intents SET status = 'open', flight_id = NULL WHERE id = ? AND status = 'assigned'", flight.intentId);
 		this.releaseAll(flight.id);
 		if (reason) this.addContrail(flight.id, agentId, "note", `Aborted: ${reason}`);
@@ -739,6 +750,9 @@ export class Tower extends DurableObject<Env> {
 		this.touchAgent(agentId);
 		const targets = [...new Set(input.targets.map((t) => this.resolveTarget(normalizeTarget(t))).filter((t) => t.length > 0))].slice(0, 50);
 		if (targets.length === 0) throw new Error("name at least one target, e.g. src/cart.js#applyDiscount");
+		// "#subtotal" without its file would claim the whole repository.
+		const pathless = targets.filter((t) => parseTarget(t).path === "");
+		if (pathless.length) throw new Error(`a target needs its file: ${pathless.join(", ")} → e.g. src/cart.js${pathless[0]}`);
 		const all = this.activeClearances();
 		const mine = all.filter((c) => c.flightId === flight.id);
 		const granted = all.filter((c) => c.status === "granted");
@@ -1028,6 +1042,8 @@ export class Tower extends DurableObject<Env> {
 			case "conflict":
 				return "Conflict with trunk. Run `git pull --no-rebase upstream main`, resolve the conflicting hunks (the report shows who changed them and why), commit, push to origin, then request_landing again.";
 			case "failed":
+				if (l.error?.startsWith("airspace violation"))
+					return `Your change touches code another flight is cleared to change (${l.error.replace(/^airspace violation: /, "")}). Call request_clearance for it: you hold until it is free, and the radio tells you when. Then pull upstream main and request_landing again.`;
 				return l.tests && l.tests.failed > 0
 					? "Tests failed on the merged tree. Pull upstream, reproduce, fix, push, then request_landing again."
 					: `Landing failed: ${l.error}. Fix it, push, and request_landing again.`;
@@ -1046,6 +1062,8 @@ export class Tower extends DurableObject<Env> {
 				if (queued.length === 0) return;
 				const project = this.project();
 				const jobs: LandingJob[] = [];
+				// Clearances are enforced at landing too: a change to code another flight is cleared for is turned away.
+				const granted = this.activeClearances().filter((c) => c.status === "granted");
 				for (const l of queued) {
 					const flight = this.flightById(l.flightId);
 					const agent = this.agentById(flight.agentId);
@@ -1060,11 +1078,18 @@ export class Tower extends DurableObject<Env> {
 						repo: flight.repo,
 						review: this.meta<{ review?: string[] }>("policy", {}).review ?? [],
 						approved: l.review?.decision === "approved",
+						heldByOthers: granted
+							.filter((c) => c.flightId !== flight.id)
+							.map((c) => {
+								const holder = this.flightById(c.flightId);
+								return { target: c.target, flight: holder.code, callsign: this.agentById(holder.agentId).callsign };
+							}),
 						author: { name: agent.callsign, email: `${agent.callsign.toLowerCase()}@agents.contrail.dev` },
 						message: [
 							`${intent.title} (INT-${intent.seq})`,
 							"",
-							l.summary,
+							// Trailer lines are the Tower's to write: drop look-alikes from the agent's summary.
+							l.summary.replace(/^Contrail-[\w-]+:.*$/gim, "").trim(),
 							"",
 							`Contrail-Flight: ${flight.code}`,
 							`Contrail-Landing: ${l.id}`,
@@ -1310,7 +1335,8 @@ export class Tower extends DurableObject<Env> {
 	}
 
 	/** The story behind a line or symbol of trunk: which intents changed it, by whom, and why. */
-	async why(input: { path: string; line?: number; symbol?: string }): Promise<Record<string, unknown>> {
+	/** The landed intents, plans and decisions behind a piece of code. `askedBy` is set when an agent asks. */
+	async why(input: { path: string; line?: number; symbol?: string }, askedBy?: string): Promise<Record<string, unknown>> {
 		const path = normalizeTarget(input.path).split("#")[0];
 		const trunk = this.meta<TrunkState>("trunk", { head: null, files: [], landedCount: 0 });
 		const file = trunk.files.find((f) => f.path === path);
@@ -1350,8 +1376,19 @@ export class Tower extends DurableObject<Env> {
 			});
 			if (history.length >= 6) break;
 		}
+		const target = symbol ? `${path}#${symbol}` : path;
+		if (askedBy) {
+			// Agents reading the contrail before they change code is the context at work: show it on the radar.
+			const agent = this.agentById(askedBy);
+			const flight = this.row<{ id: string }>(`SELECT id FROM flights WHERE agent_id = ? AND status IN (${ACTIVE.map(() => "?").join(",")})`, askedBy, ...ACTIVE);
+			this.emit(
+				"contrail.read",
+				`${agent.callsign} asked why ${target} looks the way it does: ${history.length ? `${history.length} landing${history.length > 1 ? "s" : ""} on record (${history.map((h) => h.flight).join(", ")})` : "no landings on record yet"}`,
+				{ agentId: askedBy, flightId: flight?.id, data: { target, landings: history.length } },
+			);
+		}
 		return {
-			target: symbol ? `${path}#${symbol}` : path,
+			target,
 			history,
 			note: history.length ? undefined : "No landed flight has touched this yet — it predates Contrail or was part of the initial import.",
 		};
@@ -1429,22 +1466,6 @@ export class Tower extends DurableObject<Env> {
 		}));
 	}
 
-	async contrailFor(flightId: string): Promise<ContrailEntry[]> {
-		return this.rows("SELECT * FROM contrail WHERE flight_id = ? ORDER BY id", flightId).map((c) => ({
-			id: c.id as number,
-			flightId: c.flight_id as string,
-			agentId: (c.agent_id as string) ?? null,
-			kind: c.kind as ContrailKind,
-			text: c.text as string,
-			refs: json(c.refs as string, []),
-			at: c.at as number,
-		}));
-	}
-
-	async trunkFiles(): Promise<TrunkFile[]> {
-		return this.meta<TrunkState>("trunk", { head: null, files: [], landedCount: 0 }).files;
-	}
-
 	async resync(): Promise<TrunkState> {
 		return this.refreshTrunk();
 	}
@@ -1506,7 +1527,7 @@ export class Tower extends DurableObject<Env> {
 		const launched: Agent[] = [];
 		for (let i = 0; i < count; i++) {
 			const scripted = input.mode === "scripted";
-			const model = input.model ?? "@cf/zai-org/glm-5.3-flash";
+			const model = input.model ?? DEFAULT_EDGE_MODEL;
 			const { agent } = await this.join({ kind: "edge", model: scripted ? "scripted" : model.replace(/^@cf\//, "") });
 			await this.edgeStub(agent.id).start({
 				slug: this.project().slug,
@@ -1536,9 +1557,46 @@ export class Tower extends DurableObject<Env> {
 		if (!project.playground) return { error: "launching agents here needs the admin key" };
 		const last = this.meta<number>("lastPublicLaunch", 0);
 		if (now() - last < 90_000) return { error: `the tower is busy: try again in ${Math.ceil((90_000 - (now() - last)) / 1000)}s` };
-		if (!this.row("SELECT id FROM intents WHERE status = 'open' LIMIT 1")) return { error: "no open intents left in this airspace" };
+		if (!this.row("SELECT id FROM intents WHERE status = 'open' LIMIT 1") && !(await this.restartPlayground()))
+			return { error: "the agents in this airspace are still finishing; try again in a minute" };
 		this.setMeta("lastPublicLaunch", now());
 		return this.launchEdge({ count: Math.min(4, Math.max(1, input.count)), maxFlights: 3, limit: 6 });
+	}
+
+	private restarting: Promise<boolean> | null = null;
+
+	/**
+	 * A playground starts over once all of its work has landed, so the next visitor finds intents to fly.
+	 * Trunk gets its first tree back as a new commit (history is kept), the operator's intents reopen,
+	 * and flights, landings and the event log are cleared. Returns whether it restarted.
+	 */
+	private async restartPlayground(): Promise<boolean> {
+		const project = this.project();
+		if (!project.playground) return false;
+		if (this.restarting) return this.restarting;
+		if (this.row("SELECT id FROM intents WHERE status = 'open' LIMIT 1")) return false;
+		if (this.row(`SELECT id FROM flights WHERE status IN (${ACTIVE.map(() => "?").join(",")}) LIMIT 1`, ...ACTIVE)) return false;
+		if (this.row("SELECT id FROM landings WHERE status IN ('queued', 'merging', 'verifying', 'review') LIMIT 1")) return false;
+		this.restarting = (async () => {
+			await this.runway().restoreFirstTree(
+				project.trunkRepo,
+				"Playground: back to the starting code\n\nEvery intent had landed, so the playground starts over for the next visitor.",
+				{ name: "Contrail Tower", email: "tower@contrail.dev" },
+			);
+			this.sql.exec("DELETE FROM intents WHERE created_by != 'operator'");
+			this.sql.exec("UPDATE intents SET status = 'open', flight_id = NULL, landed_commit = NULL");
+			for (const table of ["flights", "clearances", "landings", "contrail", "inbox", "symbol_history", "events"]) this.sql.exec(`DELETE FROM ${table}`);
+			this.setMeta("stats", { repos: 1 });
+			this.setMeta("edgeFleet", []);
+			await this.refreshTrunk();
+			const open = this.row<{ c: number }>("SELECT COUNT(*) AS c FROM intents")?.c ?? 0;
+			this.emit("project.reset", `Every intent had landed, so the playground started over: trunk is back to its starting code and ${open} intents are open again`);
+			this.broadcast({ kind: "snapshot", snapshot: await this.snapshot() });
+			return true;
+		})().finally(() => {
+			this.restarting = null;
+		});
+		return this.restarting;
 	}
 
 	/** Deletes the project: stops its agents and removes its trunk and every workspace repo from Artifacts. */

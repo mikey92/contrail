@@ -21,6 +21,7 @@ const PATHS: Record<string, string> = {
 	shield: "M8 1.8 13 3.6v4c0 3.2-2.2 5.4-5 6.6-2.8-1.2-5-3.4-5-6.6v-4z",
 	bolt: "M8.8 1.6 3.6 9h4l-.6 5.4L12.4 7h-4z",
 	review: "M5.6 7.4a2.4 2.4 0 1 0 0-4.8 2.4 2.4 0 0 0 0 4.8zM1.6 13.4c.4-2.4 2-3.8 4-3.8 1.2 0 2.3.5 3 1.4M9.6 12l1.6 1.6 3-3.2",
+	read: "M6.9 2.4a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9zM10.2 10.2l3.6 3.6",
 };
 
 const BY_EVENT: Record<string, string> = {
@@ -37,6 +38,7 @@ const BY_EVENT: Record<string, string> = {
 	"contrail.decision": "pen",
 	"contrail.note": "pen",
 	"contrail.handoff": "pen",
+	"contrail.read": "read",
 	radio: "radio",
 	"landing.queued": "descend",
 	"runway.train": "train",
@@ -47,6 +49,7 @@ const BY_EVENT: Record<string, string> = {
 	"landing.reviewed": "review",
 	turbulence: "wave",
 	"project.created": "flag",
+	"project.reset": "release",
 	"policy.updated": "shield",
 	"edge.launched": "bolt",
 };

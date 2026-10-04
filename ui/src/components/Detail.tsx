@@ -262,6 +262,27 @@ export function WhyPanel({ slug, fixture, target, onClose }: { slug: string; fix
 	);
 }
 
+/** A shell command with a copy button. Long lines scroll instead of breaking inside a URL. */
+export function Command({ text }: { text: string }) {
+	const [copied, setCopied] = useState(false);
+	const copy = () =>
+		navigator.clipboard
+			?.writeText(text)
+			.then(() => {
+				setCopied(true);
+				setTimeout(() => setCopied(false), 1500);
+			})
+			.catch(() => {});
+	return (
+		<div class="cmd">
+			<pre class="code">{text}</pre>
+			<button class="copy" onClick={copy}>
+				{copied ? "Copied" : "Copy"}
+			</button>
+		</div>
+	);
+}
+
 export function ConnectModal({ slug, onClose }: { slug: string; onClose: () => void }) {
 	const origin = location.origin;
 	const [joinCode, setJoinCode] = useState<string | null>(null);
@@ -294,10 +315,9 @@ export function ConnectModal({ slug, onClose }: { slug: string; onClose: () => v
 							<p>
 								Your agent is <b>{key.callsign}</b>. Add the server to Claude Code:
 							</p>
-							<pre class="code">{`claude mcp add --transport http contrail ${origin}/mcp/${slug} \\
-  --header "Authorization: Bearer ${key.key}"`}</pre>
-							<p>or to Codex:</p>
-							<pre class="code">{`CONTRAIL_KEY=${key.key} codex mcp add contrail --url ${origin}/mcp/${slug} --bearer-token-env-var CONTRAIL_KEY`}</pre>
+							<Command text={`claude mcp add --transport http contrail ${origin}/mcp/${slug} \\\n  --header "Authorization: Bearer ${key.key}"`} />
+							<p>or to Codex (it reads the key from your environment, so keep the export in your shell profile):</p>
+							<Command text={`export CONTRAIL_KEY=${key.key}\ncodex mcp add contrail --url ${origin}/mcp/${slug} --bearer-token-env-var CONTRAIL_KEY`} />
 							<p class="muted">Then tell it: “Use the contrail tools. Take off, follow the flight protocol, and keep taking off until no intents are left.”</p>
 						</>
 					) : (
@@ -308,10 +328,8 @@ export function ConnectModal({ slug, onClose }: { slug: string; onClose: () => v
 				) : (
 					<>
 						<p>This airspace is invite-only. With its join code:</p>
-						<pre class="code">{`curl -s ${origin}/api/p/${slug}/join -H 'content-type: application/json' \\
-  -d '{"joinCode":"<join code>","kind":"claude-code"}'`}</pre>
-						<pre class="code">{`claude mcp add --transport http contrail ${origin}/mcp/${slug} \\
-  --header "Authorization: Bearer <agent key>"`}</pre>
+						<Command text={`curl -s ${origin}/api/p/${slug}/join -H 'content-type: application/json' \\\n  -d '{"joinCode":"<join code>","kind":"claude-code"}'`} />
+						<Command text={`claude mcp add --transport http contrail ${origin}/mcp/${slug} \\\n  --header "Authorization: Bearer <agent key>"`} />
 					</>
 				)}
 				{err && <div class="fail mono">{err}</div>}

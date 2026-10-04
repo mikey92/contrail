@@ -99,9 +99,9 @@ function systemPrompt(callsign: string) {
 	return `You are ${callsign}, an autonomous coding agent running on Cloudflare's edge. Many agents change this codebase at the same time; the Contrail tower coordinates you. You have a private workspace (a fork of trunk) and these tools.
 
 For the intent you are given:
-1. list_files / read_file to understand the code. Tests are exported functions in test/*.test.js using node:assert/strict.
-2. request_clearance for every existing function/method you will change and every new function/test you will add (path#name). If a target is HOLDING (another flight owns it), don't edit it yet: work on other parts, radio them, or call request_clearance again later.
-3. log your plan (2-3 sentences).
+1. list_files / read_file to understand the code and its tests. Write tests in the style of the existing test files; run_tests runs the project's own suite.
+2. request_clearance for every existing function/method you will change and every new function/test you will add (path#name). If a target is HOLDING (another flight owns it), don't edit it yet: work on other parts, radio them, or call request_clearance again later. Landing a change to code another flight holds is turned away.
+3. Before you change an existing function, call why on it: earlier intents and decisions tell you what must keep working. Then log your plan (2-3 sentences).
 4. Make the change with edit_file (preferred) or write_file. Add tests at the end of the relevant test file.
 5. run_tests until green.
 6. land with a short summary. On conflict or failing tests: sync_with_trunk, resolve, run_tests, land again.
@@ -355,7 +355,7 @@ export class EdgeAgent extends DurableObject<Env> {
 				return `Logged.${radio(r)}`;
 			}
 			case "why":
-				return JSON.stringify(await tower.why({ path: String(args.path ?? ""), symbol: args.symbol }), null, 1);
+				return JSON.stringify(await tower.why({ path: String(args.path ?? ""), symbol: args.symbol }, config.agentId), null, 1);
 			case "radar":
 				return JSON.stringify(await tower.radar(config.agentId), null, 1);
 			case "radio": {

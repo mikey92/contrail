@@ -1,6 +1,7 @@
 import { hierarchy, treemap, treemapSquarify } from "d3-hierarchy";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { Agent, Clearance, Flight, Intent, TrunkFile } from "../../../src/shared/types";
+import { predictTargets, symbolIndex } from "../../../src/tower/planner";
 import { ACTIVE_STATUSES, type Flash, statusLabel } from "../store";
 
 interface Rect {
@@ -29,43 +30,69 @@ interface GroupBox extends Rect {
 	name: string;
 }
 
+/** The files of a directory that no flight is working on, drawn as one block in a big codebase. */
+interface RestBox extends Rect {
+	group: string;
+	count: number;
+	paths: Set<string>;
+}
+
 const HEADER = 18;
 const APRON = 54;
 /** Strip under the map for the legend. */
 const LEGEND = 26;
 const SOURCE_DIRS = new Set(["src", "source", "lib", "app", "pkg"]);
+/** Above this many files every box would be too small to label, so the map shows the files in play. */
+const FOCUS_ABOVE = 120;
+const groupOf = (path: string) => (path.includes("/") ? path.split("/")[0] : "·");
 
-function layout(files: TrunkFile[], width: number, height: number) {
+/**
+ * The codebase as a treemap: a block per top-level directory, a box per file, a band per function. In a
+ * big codebase only the files in play (`focus`) get a box; the rest of each directory is one block.
+ */
+function layout(files: TrunkFile[], width: number, height: number, focus: Set<string> | null) {
 	const groups = new Map<string, TrunkFile[]>();
 	for (const f of files) {
-		const dir = f.path.includes("/") ? f.path.split("/")[0] : "·";
+		const dir = groupOf(f.path);
 		if (!groups.has(dir)) groups.set(dir, []);
 		groups.get(dir)!.push(f);
 	}
 	const data = {
 		name: "root",
-		children: [...groups.entries()].map(([name, fs]) => ({ name, children: fs.map((f) => ({ name: f.path, file: f, value: Math.max(f.lines, 10) })) })),
+		children: [...groups.entries()].map(([name, fs]) => {
+			if (!focus) return { name, children: fs.map((f) => ({ name: f.path, file: f, value: Math.max(f.lines, 10) })) };
+			const shown = fs.filter((f) => focus.has(f.path));
+			const rest = fs.filter((f) => !focus.has(f.path)).map((f) => f.path);
+			const children: any[] = shown.map((f) => ({ name: f.path, file: f, value: Math.max(f.lines, 40) }));
+			// Sized by file count, but kept smaller than the files in play: it is context, not the story.
+			if (rest.length) children.push({ name: "\uffff", rest, value: 40 + rest.length * 1.5 });
+			return { name, children };
+		}),
 	};
 	// Stable ordering keeps the map from reshuffling as files grow: the source directory first, then the
 	// others from large to small (tiny ones end up together in a corner), root last; files by path.
 	const rank = (name: string) => (SOURCE_DIRS.has(name) ? 0 : name === "·" ? 2 : 1);
-	const size = new Map([...groups.entries()].map(([name, fs]) => [name, fs.reduce((n, f) => n + Math.max(f.lines, 10), 0)]));
 	const root = hierarchy<any>(data)
 		.sum((d) => d.value ?? 0)
 		.sort((a, b) =>
 			a.depth === 1
-				? rank(a.data.name) - rank(b.data.name) || size.get(b.data.name)! - size.get(a.data.name)! || a.data.name.localeCompare(b.data.name)
+				? rank(a.data.name) - rank(b.data.name) || (b.value ?? 0) - (a.value ?? 0) || a.data.name.localeCompare(b.data.name)
 				: a.data.name.localeCompare(b.data.name),
 		);
 	treemap<any>().size([width, height]).tile(treemapSquarify.ratio(1.15)).paddingOuter(4).paddingTop(22).paddingInner(5).round(true)(root);
 
 	const groupBoxes: GroupBox[] = [];
 	const fileBoxes: FileBox[] = [];
+	const restBoxes: RestBox[] = [];
 	for (const g of root.children ?? []) {
 		const gb = g as any;
 		groupBoxes.push({ name: gb.data.name === "·" ? "root" : `${gb.data.name}/`, x: gb.x0, y: gb.y0, w: gb.x1 - gb.x0, h: gb.y1 - gb.y0 });
 		for (const leaf of g.children ?? []) {
 			const l = leaf as any;
+			if (l.data.rest) {
+				restBoxes.push({ group: gb.data.name, count: l.data.rest.length, paths: new Set(l.data.rest), x: l.x0, y: l.y0, w: l.x1 - l.x0, h: l.y1 - l.y0 });
+				continue;
+			}
 			const f: TrunkFile = l.data.file;
 			const box: FileBox = {
 				path: f.path,
@@ -88,18 +115,23 @@ function layout(files: TrunkFile[], width: number, height: number) {
 			fileBoxes.push(box);
 		}
 	}
-	return { groupBoxes, fileBoxes };
+	return { groupBoxes, fileBoxes, restBoxes };
 }
 
 /** Screen rectangle for a clearance target; unknown symbols (new code) get a stub at the file's end. */
-function rectFor(target: string, files: FileBox[], groups: GroupBox[]): Rect | null {
+function rectFor(target: string, files: FileBox[], groups: GroupBox[], rests: RestBox[]): Rect | null {
 	const [path, symbol] = target.split("#");
 	if (path.endsWith("/")) {
 		const g = groups.find((g) => g.name === path);
 		return g ?? null;
 	}
 	const file = files.find((f) => f.path === path);
-	if (!file) return null;
+	if (!file) {
+		// An existing file still folded into its directory's block (the next layout gives it a box).
+		// A file that doesn't exist yet has no place on the map until it lands.
+		const rest = rests.find((r) => r.paths.has(path));
+		return rest ? { x: rest.x + rest.w / 2 - 20, y: rest.y + rest.h / 2 - 5, w: 40, h: 10 } : null;
+	}
 	if (!symbol) return file.content;
 	const band = file.bands.find((b) => b.name === symbol) ?? file.bands.find((b) => symbol.startsWith(`${b.name}.`));
 	if (band) return band;
@@ -152,11 +184,22 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 	}, []);
 
 	const mapH = Math.max(200, size.h - APRON - LEGEND);
-	const { groupBoxes, fileBoxes } = useMemo(() => layout(files, size.w, mapH), [files, size.w, mapH]);
+	// In a big codebase, the files in play: those the Tower expects the intents to change, and those
+	// flights have claimed or touched. The set only grows, so boxes don't come and go while agents work.
+	const inPlay = useRef(new Set<string>());
+	const big = files.length > FOCUS_ABOVE;
+	const index = useMemo(() => (big ? symbolIndex(files) : null), [files, big]);
+	if (index) {
+		for (const i of Object.values(intents)) for (const t of predictTargets(i, index)) inPlay.current.add(t.split("#")[0]);
+		for (const c of clearances) inPlay.current.add(c.target.split("#")[0]);
+		for (const f of Object.values(flights)) for (const p of f.touched ?? []) inPlay.current.add(p);
+	}
+	const focusKey = big ? inPlay.current.size : -1;
+	const { groupBoxes, fileBoxes, restBoxes } = useMemo(() => layout(files, size.w, mapH, big ? inPlay.current : null), [files, size.w, mapH, focusKey]);
 
 	const active = Object.values(flights).filter((f) => ACTIVE_STATUSES.includes(f.status));
 	const claims = clearances
-		.map((c) => ({ c, rect: rectFor(c.target, fileBoxes, groupBoxes), flight: flights[c.flightId] }))
+		.map((c) => ({ c, rect: rectFor(c.target, fileBoxes, groupBoxes, restBoxes), flight: flights[c.flightId] }))
 		.filter((x) => x.rect && x.flight && ACTIVE_STATUSES.includes(x.flight.status));
 
 	// Where each active flight is drawn.
@@ -185,8 +228,8 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 	}
 	const showTag = new Set<string>();
 	const crowded = active.length > 14;
-	// With dozens of flights the planes and their colors tell the story; tags would bury the map.
-	const tagless = active.length > 30;
+	// With dozens of flights, or on a phone, the planes and their colors tell the story; tags would bury the map.
+	const tagless = active.length > 30 || size.w < 640;
 	for (const ids of buckets.values()) {
 		ids.sort((a, b) => (flights[a].status === "holding" ? 1 : 0) - (flights[b].status === "holding" ? 1 : 0) || flights[a].createdAt - flights[b].createdAt);
 		const holders = ids.filter((id) => flights[id].status === "holding");
@@ -217,7 +260,7 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 	const flashTargets = new Map<string, Flash>();
 	for (const fl of flashes) for (const t of fl.targets) flashTargets.set(t, fl);
 	const flashRects = [...flashTargets.entries()]
-		.map(([t, fl]) => ({ t, fl, rect: rectFor(t, fileBoxes, groupBoxes) }))
+		.map(([t, fl]) => ({ t, fl, rect: rectFor(t, fileBoxes, groupBoxes, restBoxes) }))
 		.filter((x) => x.rect);
 
 	return (
@@ -241,6 +284,11 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 				</span>
 			</div>
 			<svg width={size.w} height={size.h} class="map">
+				<defs>
+					<pattern id="rest-files" width="9" height="9" patternUnits="userSpaceOnUse">
+						<rect x="1" y="1" width="6" height="6" rx="1.2" class="rest-cell" />
+					</pattern>
+				</defs>
 				<g transform={`translate(0, ${APRON})`}>
 					{groupBoxes.map((g) => (
 						<g key={g.name} data-group={g.name}>
@@ -248,6 +296,19 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 							<text x={g.x + 8} y={g.y + 15} class="group-label">
 								{g.name}
 							</text>
+						</g>
+					))}
+					{restBoxes.map((r) => (
+						<g key={`rest-${r.group}`} class="rest" data-rest={r.group}>
+							<title>{`${r.count} ${r.count === 1 ? "file" : "files"} in ${r.group === "·" ? "the root" : `${r.group}/`} that no agent is working on`}</title>
+							<rect x={r.x} y={r.y} width={r.w} height={r.h} rx={5} class="file rest-box" />
+							{r.w > 24 && r.h > 24 && <rect x={r.x + 4} y={r.y + (r.h >= 40 ? 20 : 4)} width={r.w - 8} height={r.h - (r.h >= 40 ? 24 : 8)} fill="url(#rest-files)" />}
+							{r.w > 90 && r.h >= 40 && (
+								<text x={r.x + 6} y={r.y + 13} class="file-label rest-label">
+									{r.count} more {r.count === 1 ? "file" : "files"}
+									<tspan class="file-lines"> no agent here</tspan>
+								</text>
+							)}
 						</g>
 					))}
 					{fileBoxes.map((f) => (

@@ -22,7 +22,9 @@ const tower = (env: Env, slug: string) => env.TOWER.get(env.TOWER.idFromName(slu
 function bearer(req: Request): string | null {
 	const h = req.headers.get("Authorization");
 	if (h?.startsWith("Bearer ")) return h.slice(7).trim();
-	return new URL(req.url).searchParams.get("key");
+	// Browsers can't set headers on a WebSocket, so only the live feed takes a key from the URL.
+	const url = new URL(req.url);
+	return url.pathname.endsWith("/live") ? url.searchParams.get("key") : null;
 }
 
 function isAdmin(c: { req: { raw: Request }; env: Env }): boolean {
@@ -77,6 +79,16 @@ async function canView(c: { req: { raw: Request }; env: Env }, slug: string) {
 	if (!entry.info.public && !isAdmin(c)) return null;
 	return entry;
 }
+
+app.patch("/api/projects/:slug", async (c) => {
+	if (!isAdmin(c)) return c.json({ error: "admin key required" }, 401);
+	const slug = c.req.param("slug");
+	if (!(await registry(c.env).get(slug))) return c.json({ error: "not found" }, 404);
+	const body = await c.req.json<{ name?: string; description?: string }>();
+	const project = await tower(c.env, slug).describe(body);
+	await registry(c.env).update(project);
+	return c.json({ project });
+});
 
 app.delete("/api/projects/:slug", async (c) => {
 	if (!isAdmin(c)) return c.json({ error: "admin key required" }, 401);
@@ -243,7 +255,7 @@ app.post("/api/p/:slug/join", async (c) => {
 		mcp: {
 			url: mcpUrl,
 			claudeCode: `claude mcp add --transport http contrail ${mcpUrl} --header "Authorization: Bearer ${key}"`,
-			codex: `codex mcp add contrail --url ${mcpUrl} --bearer-token-env-var CONTRAIL_KEY  # with CONTRAIL_KEY=${key}`,
+			codex: `export CONTRAIL_KEY=${key} && codex mcp add contrail --url ${mcpUrl} --bearer-token-env-var CONTRAIL_KEY`,
 		},
 	});
 });
@@ -251,8 +263,11 @@ app.post("/api/p/:slug/join", async (c) => {
 // ── agent REST API (same operations as the MCP tools) ─────
 
 app.use("/api/p/:slug/agent/*", async (c, next) => {
+	const slug = c.req.param("slug");
+	// Look the project up first: an unknown slug must not wake (and create) a Tower.
+	if (!(await registry(c.env).get(slug))) return c.json({ error: "not found" }, 404);
 	const key = bearer(c.req.raw);
-	const agent = key ? await tower(c.env, c.req.param("slug")).authenticate(key) : null;
+	const agent = key ? await tower(c.env, slug).authenticate(key) : null;
 	if (!agent) return c.json({ error: "agent key required (Authorization: Bearer ct_…)" }, 401);
 	c.set("agentId", agent.id);
 	await next();
@@ -278,6 +293,8 @@ app.all("/mcp/:slug", async (c) => {
 	const agent = key ? await t.authenticate(key) : null;
 	return handleMcp(c.req.raw, { tower: t, agentId: agent?.id ?? null, projectName: entry.info.name });
 });
+
+app.all("/api/*", (c) => c.json({ error: "not found" }, 404));
 
 // ── Radar UI (static assets with SPA fallback) ────────────
 

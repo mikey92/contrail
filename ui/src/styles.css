@@ -187,21 +187,28 @@ code {
 	padding-left: 18px;
 	border-left: 1px solid var(--line);
 	min-width: 0;
+	flex: 0 1 auto;
+	overflow: hidden;
+}
+.proj-name,
+.proj-sub {
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
 }
 .proj-name {
 	font-weight: 600;
 	font-size: 15px;
-	white-space: nowrap;
 }
 .proj-sub {
 	color: var(--muted);
 	font-size: 12px;
-	white-space: nowrap;
 }
 .stats {
 	display: flex;
 	gap: 4px;
 	margin-left: auto;
+	flex: none;
 }
 .stat {
 	padding: 2px 12px;
@@ -370,6 +377,17 @@ code {
 .file-lines {
 	fill: var(--faint);
 	font-weight: 400;
+}
+/* In a big codebase, the files no agent is working on fold into one block per directory. */
+.rest-box {
+	fill: var(--paper);
+	stroke-dasharray: 3 3;
+}
+.rest-cell {
+	fill: var(--line);
+}
+.rest-label {
+	fill: var(--ink-2);
 }
 .band {
 	fill: #efeee9;
@@ -1374,6 +1392,32 @@ pre.code {
 	white-space: pre-wrap;
 	word-break: break-all;
 }
+.cmd {
+	position: relative;
+}
+.cmd pre.code {
+	white-space: pre;
+	word-break: normal;
+	overflow-x: auto;
+	padding-right: 70px;
+}
+.cmd .copy {
+	position: absolute;
+	top: 7px;
+	right: 7px;
+	font-size: 11.5px;
+	font-weight: 500;
+	padding: 3px 9px;
+	border-radius: 6px;
+	border: 1px solid var(--line-2);
+	background: var(--surface);
+	color: var(--ink-2);
+	cursor: pointer;
+}
+.cmd .copy:hover {
+	border-color: var(--ink-2);
+	color: var(--ink);
+}
 
 /* operator */
 .operator .field {
@@ -1837,11 +1881,15 @@ details.diffs summary {
 	}
 }
 @media (max-width: 1100px) {
+	/* One column: the map keeps a usable height and the page scrolls down to the feed. */
 	.main {
 		grid-template-columns: 1fr;
+		grid-template-rows: max(440px, 72vh) 70vh;
+		overflow-y: auto;
 	}
-	.side {
-		height: 45vh;
+	.sky {
+		border-right: none;
+		border-bottom: 1px solid var(--line);
 	}
 	.stats .stat:nth-child(n + 4) {
 		display: none;
@@ -1876,5 +1924,10 @@ details.diffs summary {
 	}
 	.home-nav .links {
 		gap: 14px;
+	}
+}
+@media (max-width: 560px) {
+	.home-nav .links a:not(:last-child) {
+		display: none;
 	}
 }

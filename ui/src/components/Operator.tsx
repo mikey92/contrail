@@ -1,4 +1,5 @@
 import { useState } from "preact/hooks";
+import { Command } from "./Detail";
 
 const MODELS = [
 	["@cf/zai-org/glm-5.3-flash", "GLM-5.3 Flash (fast, cheap)"],
@@ -111,7 +112,7 @@ export function ClonePanel({ slug, onClose }: { slug: string; onClose: () => voi
 				<h3>Clone trunk with its contrail</h3>
 				<p>Trunk is an Artifacts repo. Every landed commit carries its flight's intent, plan, decisions and evidence as a git note in refs/notes/contrail. This read-only URL is valid for an hour.</p>
 				{err && <div class="muted">{err}</div>}
-				{cmds && <pre class="code">{cmds.join("\n")}</pre>}
+				{cmds && <Command text={cmds.join("\n")} />}
 			</div>
 		</div>
 	);

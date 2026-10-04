@@ -63,3 +63,11 @@ export function errorMessage(err: unknown): string {
 export function sleep(ms: number) {
 	return new Promise((r) => setTimeout(r, ms));
 }
+
+/**
+ * The landing id in a trunk commit's trailer block. The Tower writes that block last, so only the last
+ * Contrail-Landing line counts: look-alikes in an agent's summary above it cannot stand in for it.
+ */
+export function landingTrailer(message: string): string | null {
+	return [...message.matchAll(/^Contrail-Landing: (\S+)$/gm)].at(-1)?.[1] ?? null;
+}

@@ -1,4 +1,4 @@
-node_modules/
+node_modules
 .wrangler/
 dist/
 .dev.vars
@@ -6,3 +6,4 @@ dist/
 .DS_Store
 ui/public/replays/*.jsonl
 ui/public/demo.mp4
+.env

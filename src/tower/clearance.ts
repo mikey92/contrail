@@ -64,3 +64,20 @@ export function findCollisions(requested: string[], held: HeldTarget[], selfFlig
 	}
 	return collisions;
 }
+
+/** A target another flight is cleared to change, as the runway sees it when a landing comes in. */
+export interface HeldByOther {
+	target: string;
+	flight: string;
+	callsign: string;
+}
+
+/**
+ * The cleared targets of other flights that a landing's changes touch. Changes outside any function
+ * (imports, top-level statements) only collide with a claim on the whole file.
+ */
+export function airspaceViolations(held: HeldByOther[], changes: { path: string; symbols: string[] }[]): HeldByOther[] {
+	if (!held.length) return [];
+	const touched = changes.flatMap((c) => (c.symbols.length ? c.symbols.map((sym) => `${c.path}#${sym}`) : [`${c.path}#(top)`]));
+	return held.filter((h) => touched.some((t) => targetsOverlap(h.target, t)));
+}

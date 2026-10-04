@@ -13,6 +13,8 @@ export interface Flash {
 export interface RadarState {
 	ready: boolean;
 	connected: boolean;
+	/** The project does not exist (or is private). */
+	missing: boolean;
 	project: RadarSnapshot["project"] | null;
 	agents: Record<string, Agent>;
 	intents: Record<string, Intent>;
@@ -31,11 +33,13 @@ type Action =
 	| { type: "patch"; entity: string; value: any }
 	| { type: "event"; event: RadarEvent }
 	| { type: "connected"; value: boolean }
+	| { type: "missing" }
 	| { type: "expire" };
 
 const empty: RadarState = {
 	ready: false,
 	connected: false,
+	missing: false,
 	project: null,
 	agents: {},
 	intents: {},
@@ -139,6 +143,8 @@ function reducer(state: RadarState, action: Action): RadarState {
 		}
 		case "connected":
 			return { ...state, connected: action.value };
+		case "missing":
+			return { ...state, missing: true };
 		case "expire": {
 			const cutoff = Date.now() - 4000;
 			const flashes = state.flashes.filter((f) => f.at > cutoff);
@@ -159,7 +165,9 @@ export function useRadar(slug: string, fixture: string | null) {
 
 	useEffect(() => {
 		const params = new URLSearchParams(location.search);
-		const replayUrl = params.get("replay");
+		// Replays come from this site only (e.g. /replays/ramda.jsonl.gz), never from an arbitrary origin.
+		const replayParam = params.get("replay");
+		const replayUrl = replayParam?.startsWith("/") && !replayParam.startsWith("//") ? replayParam : null;
 		if (replayUrl) {
 			// Replays a recorded radar stream (scripts/tap.mjs) at `speed`×, starting at `from` seconds.
 			const speed = Number(params.get("speed") ?? 1);
@@ -223,12 +231,14 @@ export function useRadar(slug: string, fixture: string | null) {
 		}
 		let ws: WebSocket | null = null;
 		let closed = false;
+		let opened = false;
 		let retry = 500;
 		let ping: number | undefined;
 		const connect = () => {
 			const proto = location.protocol === "https:" ? "wss" : "ws";
 			ws = new WebSocket(`${proto}://${location.host}/api/p/${slug}/live`);
 			ws.onopen = () => {
+				opened = true;
 				retry = 500;
 				dispatch({ type: "connected", value: true });
 				ping = setInterval(() => ws?.readyState === 1 && ws.send("ping"), 25000) as unknown as number;
@@ -240,10 +250,20 @@ export function useRadar(slug: string, fixture: string | null) {
 				else if (msg.kind === "patch") dispatch({ type: "patch", entity: msg.entity, value: msg.value });
 				else if (msg.kind === "event") dispatch({ type: "event", event: msg.event });
 			};
-			ws.onclose = () => {
+			ws.onclose = async () => {
 				clearInterval(ping);
 				dispatch({ type: "connected", value: false });
-				if (!closed) setTimeout(connect, (retry = Math.min(retry * 2, 8000)));
+				if (closed) return;
+				// A socket that never opened may mean there is no such project: ask once before retrying.
+				if (!opened) {
+					const res = await fetch(`/api/p/${slug}/join-info`).catch(() => null);
+					if (res?.status === 404) {
+						closed = true;
+						dispatch({ type: "missing" });
+						return;
+					}
+				}
+				setTimeout(connect, (retry = Math.min(retry * 2, 8000)));
 			};
 		};
 		connect();

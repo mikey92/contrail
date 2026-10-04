@@ -14,10 +14,12 @@ Flight protocol:
    claimed by their new name (e.g. "test/cart.test.js#mergesDuplicates") and never collide. Only claim a
    whole file if you will restructure it. If another flight holds a target you are put in a holding
    pattern for it: work on something else, coordinate over the radio, or wait. Request more clearance
-   whenever your plan grows.
+   whenever your plan grows. Clearance is enforced at landing: a change to code another flight holds is
+   turned away until that code is yours.
 3. log — record your plan and every non-obvious decision (kind "plan" / "decision"). This becomes the
    contrail: the context future agents read to understand why the code is the way it is.
-4. why — before changing code you did not write, ask why it exists. Respect earlier intents.
+4. why — before changing an existing function you did not write, ask why it is the way it is: the
+   intents, plans and decisions behind it. Keep those earlier intents working.
 5. Commit and push to your workspace (origin). Run the tests if you can.
 6. request_landing — the Tower merges your workspace onto trunk, runs the test suite in an isolated
    Worker and lands it. If it reports a conflict or failing tests: git pull upstream main, fix, push,

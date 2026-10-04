@@ -114,7 +114,7 @@ export function Home() {
 				<div class="result">
 					<div class="result-n">16 / 16</div>
 					<div class="result-l">Changes to Ramda by 8 real agents</div>
-					<p>Claude Code, Codex and edge agents landed every intent in under four minutes. Each landing ran Ramda's own test suite, up to 1,238 tests, on the merged tree in under 0.1 s.</p>
+					<p>Claude Code, Codex and edge agents landed every intent in under four minutes. Each landing ran Ramda's own test suite on the merged tree: up to 1,238 tests in at most 102 ms.</p>
 					<a href={REPLAY.ramda}>Watch the replay →</a>
 				</div>
 				<div class="result">

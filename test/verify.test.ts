@@ -86,6 +86,16 @@ describe("verify helpers", () => {
 		expect(modules["__contrail_mocha.js"]).toBeTruthy();
 	});
 
+	it("runs a tree with the configuration it is given, not the one the tree brings", () => {
+		const trunkConfig = testConfig(new Map([["contrail.json", JSON.stringify({ tests: { files: ["test/*.test.js"] } })]]));
+		const files = new Map([
+			["contrail.json", JSON.stringify({ tests: { files: ["nothing/*.js"] } })],
+			["test/a.test.js", "export function works() {}"],
+		]);
+		expect(testWorkerModules(files).tests).toEqual([]);
+		expect(testWorkerModules(files, trunkConfig).tests).toEqual(["test/a.test.js"]);
+	});
+
 	it("leaves ES namespaces alone when nothing requires them", () => {
 		const files = new Map([
 			["test/counters.test.js", "import * as counters from '../src/counters.js';\nexport function allNumbers() { Object.values(counters).forEach((f) => f()); }"],
