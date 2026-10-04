@@ -275,11 +275,13 @@ const scenes = {
 
 	"05-clearance": {
 		url: (s) =>
-			replay("bookshop", "bookshop.jsonl", 44, {
+			replay("bookshop", "bookshop.jsonl", 46, {
 				pins: [
-					[51.9, cue(s, "put in a holding pattern") - 0.3],
-					[71.0, cue(s, "and the radio tells it")],
-					[72.8, cue(s, "the moment subtotal is free") + 0.2],
+					[47.7, cue(s, "both need subtotal") - 0.8],
+					[51.9, cue(s, "put in a holding pattern") - 0.2],
+					[52.0, cue(s, "put in a holding pattern")],
+					[71.0, cue(s, "and the radio tells it") - 0.3],
+					[72.8, cue(s, "the moment subtotal is free") + 0.3],
 				],
 			}),
 		prepare: replayReady,
