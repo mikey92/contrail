@@ -26,7 +26,7 @@ Flight protocol:
 Every response may carry radio messages from the Tower or other agents. Read them: they tell you when
 trunk changed under you, when a clearance you were waiting for is granted, or when someone needs you.`;
 
-export function workspaceInstructions(opts: { cloneUrl: string; upstreamUrl: string; dir: string; flightCode: string; callsign: string }) {
+export function workspaceInstructions(opts: { cloneUrl: string; upstreamUrl: string; dir: string; flightCode: string; callsign: string; testCommand?: string }) {
 	// One command per line, no `cd`: agents with strict shell allowlists can run each line as-is.
 	return [
 		`git clone ${opts.cloneUrl} ${opts.dir}`,
@@ -35,5 +35,6 @@ export function workspaceInstructions(opts: { cloneUrl: string; upstreamUrl: str
 		`git -C ${opts.dir} config user.email "${opts.callsign.toLowerCase()}@agents.contrail.dev"`,
 		`# then work inside ${opts.dir}; publish with: git push origin HEAD:main`,
 		`# catch up with trunk with: git pull --no-rebase upstream main`,
+		...(opts.testCommand ? [`# run the test suite (the same one the runway runs) inside ${opts.dir} with: ${opts.testCommand}`] : []),
 	].join("\n");
 }

@@ -8,6 +8,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../env";
 import type { BatchResult, LandingJob, LandingOutcome } from "../runway/runway";
+import { CONFIG_FILE } from "../runway/verify";
 import type {
 	Agent,
 	AgentKind,
@@ -394,12 +395,27 @@ export class Tower extends DurableObject<Env> {
 		if (!existing) this.bump("repos");
 		this.emit("project.created", `Trunk repo ${trunkRepo} is ready`, { data: { trunkRepo } });
 		await this.refreshTrunk();
+		await this.readTestCommand();
 		this.setMeta("ready", true);
 		return info;
 	}
 
 	async info(): Promise<ProjectInfo | null> {
 		return this.meta<ProjectInfo | null>("project", null);
+	}
+
+	/** The project's own way to run its tests (contrail.json), told to agents when they take off. */
+	private async readTestCommand() {
+		const repo = await this.env.ARTIFACTS.get(this.project().trunkRepo);
+		try {
+			const blob = await repo.readFile({ ref: "main", path: CONFIG_FILE });
+			const command = blob ? (JSON.parse(await new Response(blob).text()) as { tests?: { command?: unknown } }).tests?.command : null;
+			this.setMeta("testCommand", typeof command === "string" ? command : null);
+		} catch {
+			this.setMeta("testCommand", null);
+		} finally {
+			repo[Symbol.dispose]?.();
+		}
 	}
 
 	private async refreshTrunk(): Promise<TrunkState> {
@@ -612,7 +628,7 @@ export class Tower extends DurableObject<Env> {
 				...(previousAttempts.length ? { previousAttempts } : {}),
 				workspace,
 				upstream,
-				setup: workspaceInstructions({ cloneUrl: workspace.cloneUrl, upstreamUrl: upstream.cloneUrl, dir, flightCode: code, callsign: agent.callsign }),
+				setup: workspaceInstructions({ cloneUrl: workspace.cloneUrl, upstreamUrl: upstream.cloneUrl, dir, flightCode: code, callsign: agent.callsign, testCommand: this.meta<string | null>("testCommand", null) ?? undefined }),
 				briefing: PROTOCOL,
 				radio: this.drainRadio(flightId),
 			};
@@ -1015,6 +1031,7 @@ export class Tower extends DurableObject<Env> {
 					const l = queued.find((q) => q.id === outcome.landingId)!;
 					this.applyOutcome(l, outcome);
 				}
+				if (result.outcomes.some((o) => o.status === "landed" && o.changes.some((c) => c.path === CONFIG_FILE))) await this.readTestCommand();
 				if (result.trunk) {
 					const stats = this.meta<Record<string, number>>("stats", {});
 					const state: TrunkState = { head: result.head, files: result.trunk, landedCount: stats.landings ?? 0 };

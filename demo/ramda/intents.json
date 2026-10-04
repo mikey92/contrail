@@ -1,0 +1,82 @@
+[
+  {
+    "title": "Add R.omitBy",
+    "body": "Add omitBy(pred, obj): the complement of R.pickBy. It returns a copy of obj without the own enumerable keys for which pred(value, key, obj) is truthy. Curry it like pickBy, export it from source/index.js in alphabetical order, write JSDoc in the house style (@func, @memberOf R, @since v0.33.0, @category Object, @sig, @see R.pickBy, @example) and add test/omitBy.js.",
+    "priority": 5
+  },
+  {
+    "title": "Add R.sumBy",
+    "body": "Add sumBy(fn, list): the sum of fn(x) over the list (sumBy(prop('price'), items)); sumBy(fn, []) is 0. Curried, exported from source/index.js in alphabetical order, JSDoc in the house style (@since v0.33.0, @category Math), tests in test/sumBy.js.",
+    "priority": 4
+  },
+  {
+    "title": "Add R.unzip",
+    "body": "Add unzip(pairs), the inverse of R.zip: unzip([[1, 'a'], [2, 'b']]) is [[1, 2], ['a', 'b']] and unzip([]) is [[], []]. Export it from source/index.js in alphabetical order with house-style JSDoc (@since v0.33.0, @category List, @see R.zip) and add test/unzip.js.",
+    "priority": 4
+  },
+  {
+    "title": "Add R.rangeStep",
+    "body": "Add rangeStep(step, from, to): like R.range (to is exclusive) but advancing by step. rangeStep(2, 0, 7) is [0, 2, 4, 6]; negative steps count down, rangeStep(-2, 10, 1) is [10, 8, 6, 4, 2]. A step of 0 throws a RangeError and non-number arguments throw a TypeError, like range. Do not change R.range itself. Export from source/index.js, house-style JSDoc (@since v0.33.0, @category List, @see R.range), tests in test/rangeStep.js.",
+    "priority": 4
+  },
+  {
+    "title": "R.clamp: accept the bounds in either order",
+    "body": "R.clamp(min, max, value) throws when min > max. Accept the bounds in either order instead: clamp(10, 1, 15) is 10 and clamp(10, 1, -5) is 1. Update the JSDoc and test/clamp.js (replace the test that expects the throw).",
+    "priority": 4
+  },
+  {
+    "title": "R.clamp: reject NaN bounds",
+    "body": "R.clamp returns NaN or a wrong bound when min or max is NaN. Throw a TypeError that names the argument instead ('clamp: min must not be NaN' / 'clamp: max must not be NaN'). A NaN value still returns NaN. Add the cases to test/clamp.js.",
+    "priority": 4
+  },
+  {
+    "title": "R.times: reject fractional counts",
+    "body": "R.times(fn, 2.5) fails with the engine's unhelpful 'Invalid array length'. Throw RangeError('times: n must be a non-negative integer, got 2.5') for fractional, negative and NaN n, and keep accepting numeric strings like '3' as today. Update test/times.js.",
+    "priority": 3
+  },
+  {
+    "title": "Add R.interleave",
+    "body": "Add interleave(as, bs): alternate the elements of two lists starting with as; leftovers of the longer list are appended in order. interleave([1, 3, 5], [2, 4]) is [1, 2, 3, 4, 5]. Export from source/index.js, house-style JSDoc (@since v0.33.0, @category List, @see R.intersperse), tests in test/interleave.js.",
+    "priority": 3
+  },
+  {
+    "title": "Add R.compact",
+    "body": "Add compact(list): a copy of list without null and undefined (0, '', NaN and false are kept). Export from source/index.js, house-style JSDoc (@since v0.33.0, @category List, @see R.reject, R.isNil), tests in test/compact.js.",
+    "priority": 3
+  },
+  {
+    "title": "Add R.maximumBy",
+    "body": "Add maximumBy(fn, list): the element of list for which fn returns the greatest value (compared with >); the first one wins ties and an empty list gives undefined. Export from source/index.js, house-style JSDoc (@since v0.33.0, @category List, @see R.maxBy), tests in test/maximumBy.js.",
+    "priority": 3
+  },
+  {
+    "title": "Add R.minimumBy",
+    "body": "Add minimumBy(fn, list): the element of list for which fn returns the smallest value (compared with <); the first one wins ties and an empty list gives undefined. Export from source/index.js, house-style JSDoc (@since v0.33.0, @category List, @see R.minBy), tests in test/minimumBy.js.",
+    "priority": 3
+  },
+  {
+    "title": "Add R.partitionBy",
+    "body": "Add partitionBy(fn, list): split a list into runs of consecutive elements for which fn returns the same value (compared with R.equals). partitionBy(x => x % 2, [1, 3, 2, 4, 5]) is [[1, 3], [2, 4], [5]]; an empty list gives []. Export from source/index.js, house-style JSDoc (@since v0.33.0, @category List, @see R.groupWith), tests in test/partitionBy.js.",
+    "priority": 3
+  },
+  {
+    "title": "R.range: accept BigInt bounds",
+    "body": "R.range(1n, 4n) throws 'Both arguments to range must be numbers'. Accept two BigInt bounds and return BigInts ([1n, 2n, 3n]). Mixing a number and a BigInt still throws a TypeError. Update the JSDoc and test/range.js.",
+    "priority": 2
+  },
+  {
+    "title": "Add R.toggle",
+    "body": "Add toggle(x, list): a copy of list without x when list contains it (by R.equals), otherwise list with x appended. toggle(2, [1, 2, 3]) is [1, 3] and toggle(4, [1, 2, 3]) is [1, 2, 3, 4]. Export from source/index.js, house-style JSDoc (@since v0.33.0, @category List), tests in test/toggle.js.",
+    "priority": 2
+  },
+  {
+    "title": "Add R.isPlainObject",
+    "body": "Add isPlainObject(x): true for objects whose prototype is Object.prototype or null, false for arrays, dates, maps, class instances, functions and primitives. Export from source/index.js, house-style JSDoc (@since v0.33.0, @category Type, @see R.is), tests in test/isPlainObject.js.",
+    "priority": 2
+  },
+  {
+    "title": "Add R.findMap",
+    "body": "Add findMap(fn, list): the first result of fn(x) that is not null or undefined, or undefined if there is none (stops calling fn at the first hit). findMap(x => x > 2 ? x * 10 : null, [1, 2, 3, 4]) is 30. Export from source/index.js, house-style JSDoc (@since v0.33.0, @category List, @see R.find), tests in test/findMap.js.",
+    "priority": 1
+  }
+]

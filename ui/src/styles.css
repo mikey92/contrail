@@ -274,6 +274,12 @@ a {
 .band-const {
 	fill: rgba(51, 65, 85, 0.22);
 }
+.band-export {
+	fill: rgba(51, 65, 85, 0.18);
+}
+.band-suite {
+	fill: rgba(67, 56, 202, 0.12);
+}
 .band-g:hover .band {
 	fill: rgba(94, 234, 212, 0.16);
 	stroke: rgba(94, 234, 212, 0.6);

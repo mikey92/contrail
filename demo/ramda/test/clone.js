@@ -1,0 +1,429 @@
+var assert = require('assert');
+
+var R = require('../source/index.js');
+var eq = require('./shared/eq.js');
+
+
+describe('deep clone integers, strings and booleans', function() {
+  it('clones integers', function() {
+    eq(R.clone(-4), -4);
+    eq(R.clone(9007199254740991), 9007199254740991);
+  });
+
+  it('clones floats', function() {
+    eq(R.clone(-4.5), -4.5);
+    eq(R.clone(0.0), 0.0);
+  });
+
+  it('clones strings', function() {
+    eq(R.clone('ramda'), 'ramda');
+  });
+
+  it('clones booleans', function() {
+    eq(R.clone(true), true);
+  });
+
+});
+
+describe('deep clone objects', function() {
+  it('clones shallow object', function() {
+    var obj = {a: 1, b: 'ramda', c: true, d: new Date(2013, 11, 25)};
+    var clone = R.clone(obj);
+    obj.c = false;
+    obj.d.setDate(31);
+    eq(clone, {a: 1, b: 'ramda', c: true, d: new Date(2013, 11, 25)});
+  });
+
+  it('clones deep object', function() {
+    var obj = {a: {b: {c: 'ramda'}}};
+    var clone = R.clone(obj);
+    obj.a.b.c = null;
+    eq(clone, {a: {b: {c: 'ramda'}}});
+  });
+
+  it('clones own enumerable symbol properties and their values', function() {
+    var key = Symbol('key');
+    var inherited = Symbol('inherited');
+    var hidden = Symbol('hidden');
+    var prototype = {};
+    prototype[inherited] = 'prototype';
+    var obj = Object.create(prototype);
+    obj[key] = {value: 1};
+    Object.defineProperty(obj, hidden, {value: 'hidden'});
+
+    var clone = R.clone(obj);
+
+    assert.deepStrictEqual(Object.getOwnPropertySymbols(clone), [key]);
+    eq(clone[key], {value: 1});
+    assert.notStrictEqual(clone[key], obj[key]);
+    assert.strictEqual(clone[inherited], 'prototype');
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(clone, inherited), false);
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(clone, hidden), false);
+  });
+
+  it('preserves shared and circular references through symbol properties', function() {
+    var key = Symbol('shared');
+    var obj = {nested: {}};
+    obj[key] = obj.nested;
+    obj.nested[key] = obj;
+
+    var clone = R.clone(obj);
+
+    assert.notStrictEqual(clone, obj);
+    assert.strictEqual(clone[key], clone.nested);
+    assert.strictEqual(clone.nested[key], clone);
+  });
+
+  it('clones objects with circular references', function() {
+    var x = {c: null};
+    var y = {a: x};
+    var z = {b: y};
+    x.c = z;
+    var clone = R.clone(x);
+    assert.notStrictEqual(x, clone);
+    assert.notStrictEqual(x.c, clone.c);
+    assert.notStrictEqual(x.c.b, clone.c.b);
+    assert.notStrictEqual(x.c.b.a, clone.c.b.a);
+    assert.notStrictEqual(x.c.b.a.c, clone.c.b.a.c);
+    eq(R.keys(clone), R.keys(x));
+    eq(R.keys(clone.c), R.keys(x.c));
+    eq(R.keys(clone.c.b), R.keys(x.c.b));
+    eq(R.keys(clone.c.b.a), R.keys(x.c.b.a));
+    eq(R.keys(clone.c.b.a.c), R.keys(x.c.b.a.c));
+
+    x.c.b = 1;
+    assert.notDeepEqual(clone.c.b, x.c.b);
+  });
+
+  it('clone instances', function() {
+    var Obj = function(x) {
+      this.x = x;
+    };
+    Obj.prototype.get = function() {
+      return this.x;
+    };
+    Obj.prototype.set = function(x) {
+      this.x = x;
+    };
+
+    var obj = new Obj(10);
+    eq(obj.get(), 10);
+
+    var clone = R.clone(obj);
+    eq(clone.get(), 10);
+
+    assert.notStrictEqual(obj, clone);
+
+    obj.set(11);
+    eq(obj.get(), 11);
+    eq(clone.get(), 10);
+  });
+
+  it('only own properties be copied', function() {
+    function Obj() {
+      this.x = 'own property';
+    }
+
+    Obj.prototype = {
+      y: 'not own property'
+    };
+
+    const obj = new Obj();
+    const cloneObj = R.clone(obj);
+    eq(Object.keys(obj), Object.keys(cloneObj));
+  });
+
+  it('the prototype should keep the same', function() {
+    function Obj() {}
+
+    Obj.prototype = {
+      x: 'prototype property'
+    };
+
+    const obj = new Obj();
+    const cloneObj = R.clone(obj);
+    eq(Object.getPrototypeOf(obj), Object.getPrototypeOf(cloneObj));
+  });
+
+});
+
+describe('deep clone arrays', function() {
+  it('clones shallow arrays', function() {
+    var list = [1, 2, 3];
+    var clone = R.clone(list);
+    list.pop();
+    eq(clone, [1, 2, 3]);
+  });
+
+  it('clones deep arrays', function() {
+    var list = [1, [1, 2, 3], [[[5]]]];
+    var clone = R.clone(list);
+
+    assert.notStrictEqual(list, clone);
+    assert.notStrictEqual(list[2], clone[2]);
+    assert.notStrictEqual(list[2][0], clone[2][0]);
+
+    eq(clone, [1, [1, 2, 3], [[[5]]]]);
+  });
+
+});
+
+describe('deep clone typed arrays', function() {
+  it('clones Uint16Array', function() {
+    var array = new Uint16Array([1, 2, 3]);
+    var clone = R.clone(array);
+
+    assert.notStrictEqual(array, clone);
+    eq(clone, new Uint16Array([1, 2, 3]));
+  });
+
+  it('clones Int8Array', function() {
+    var array = new Int8Array([1,2,3]);
+    var clone = R.clone(array);
+
+    assert.notStrictEqual(array, clone);
+    eq(clone, new Int8Array([1,2,3]));
+  });
+  it('clones Uint8Array', function() {
+    var array = new Uint8Array([1,2,3]);
+    var clone = R.clone(array);
+
+    assert.notStrictEqual(array, clone);
+    eq(clone, new Uint8Array([1,2,3]));
+  });
+  it('clones Uint8ClampedArray', function() {
+    var array = new Uint8ClampedArray([1,2,3]);
+    var clone = R.clone(array);
+
+    assert.notStrictEqual(array, clone);
+    eq(clone, new Uint8ClampedArray([1,2,3]));
+  });
+  it('clones Int16Array', function() {
+    var array = new Int16Array([1,2,3]);
+    var clone = R.clone(array);
+
+    assert.notStrictEqual(array, clone);
+    eq(clone, new Int16Array([1,2,3]));
+  });
+  it('clones Uint16Array', function() {
+    var array = new Uint16Array([1,2,3]);
+    var clone = R.clone(array);
+
+    assert.notStrictEqual(array, clone);
+    eq(clone, new Uint16Array([1,2,3]));
+  });
+  it('clones Int32Array', function() {
+    var array = new Int32Array([1,2,3]);
+    var clone = R.clone(array);
+
+    assert.notStrictEqual(array, clone);
+    eq(clone, new Int32Array([1,2,3]));
+  });
+  it('clones Uint32Array', function() {
+    var array = new Uint32Array([1,2,3]);
+    var clone = R.clone(array);
+
+    assert.notStrictEqual(array, clone);
+    eq(clone, new Uint32Array([1,2,3]));
+  });
+  it('clones Float32Array', function() {
+    var array = new Float32Array([1,2,3]);
+    var clone = R.clone(array);
+
+    assert.notStrictEqual(array, clone);
+    eq(clone, new Float32Array([1,2,3]));
+  });
+  it('clones Float64Array', function() {
+    var array = new Float64Array([1,2,3]);
+    var clone = R.clone(array);
+
+    assert.notStrictEqual(array, clone);
+    eq(clone, new Float64Array([1,2,3]));
+  });
+
+});
+
+describe('deep clone functions', function() {
+  it('keep reference to function', function() {
+    var fn = function(x) { return x + x;};
+    var list = [{a: fn}];
+
+    var clone = R.clone(list);
+
+    eq(clone[0].a(10), 20);
+    eq(list[0].a, clone[0].a);
+  });
+
+});
+
+describe('built-in types', function() {
+  it('clones Date object', function() {
+    var date = new Date(2014, 10, 14, 23, 59, 59, 999);
+
+    var clone = R.clone(date);
+
+    assert.notStrictEqual(date, clone);
+    eq(clone, new Date(2014, 10, 14, 23, 59, 59, 999));
+
+    eq(clone.getDay(), 5); // friday
+  });
+
+  it('clones RegExp object', function() {
+    R.forEach(function(pattern) {
+      var clone = R.clone(pattern);
+      assert.notStrictEqual(clone, pattern);
+      eq(clone.constructor, RegExp);
+      eq(clone.source, pattern.source);
+      eq(clone.global, pattern.global);
+      eq(clone.ignoreCase, pattern.ignoreCase);
+      eq(clone.multiline, pattern.multiline);
+    }, [/x/, /x/g, /x/i, /x/m, /x/gi, /x/gm, /x/im, /x/gim]);
+  });
+
+  it('clones Error object without retaining a reference to the source', function() {
+    var error = new Error('boom');
+    Object.defineProperty(error, 'cause', {value: new Error('root cause')});
+    error.code = {value: 42};
+    var clone = R.clone(error);
+
+    assert.notStrictEqual(clone, error);
+    eq(clone instanceof Error, true);
+    eq(clone.message, 'boom');
+    eq(clone.stack, error.stack);
+    assert.notStrictEqual(clone.cause, error.cause);
+    eq(clone.cause.message, 'root cause');
+    // own enumerable properties are deep cloned
+    assert.notStrictEqual(clone.code, error.code);
+    eq(clone.code, {value: 42});
+
+    clone.code.value = 0;
+    eq(error.code.value, 42);
+  });
+
+  it('preserves circular Error causes', function() {
+    var error = new Error('boom');
+    Object.defineProperty(error, 'cause', {value: error});
+    var clone = R.clone(error);
+
+    assert.notStrictEqual(clone, error);
+    assert.strictEqual(clone.cause, clone);
+    eq(clone.message, 'boom');
+  });
+
+  it('preserves mutual Error causes', function() {
+    var first = new Error('first');
+    var second = new Error('second');
+    Object.defineProperty(first, 'cause', {value: second});
+    Object.defineProperty(second, 'cause', {value: first});
+    var clone = R.clone([first, second]);
+
+    assert.notStrictEqual(clone[0], first);
+    assert.notStrictEqual(clone[1], second);
+    assert.strictEqual(clone[0].cause, clone[1]);
+    assert.strictEqual(clone[1].cause, clone[0]);
+  });
+
+  it('preserves the prototype of Error subtypes', function() {
+    R.forEach(function(Ctor) {
+      var clone = R.clone(new Ctor('oops'));
+      assert.notStrictEqual(clone, undefined);
+      eq(clone instanceof Ctor, true);
+      eq(clone instanceof Error, true);
+      eq(clone.message, 'oops');
+    }, [TypeError, RangeError, SyntaxError, ReferenceError]);
+  });
+
+  it('clones AggregateError including its non-enumerable errors', function() {
+    if (typeof global.AggregateError === 'undefined') { return; }
+    var errors = [new Error('a'), new Error('b')];
+    var aggregate = new global.AggregateError(errors, 'many');
+    var clone = R.clone(aggregate);
+
+    assert.notStrictEqual(clone, aggregate);
+    eq(clone instanceof global.AggregateError, true);
+    eq(clone.message, 'many');
+    eq(clone.errors.length, 2);
+    assert.notStrictEqual(clone.errors, aggregate.errors);
+    assert.notStrictEqual(clone.errors[0], aggregate.errors[0]);
+    eq(clone.errors[0].message, 'a');
+  });
+
+});
+
+describe('deep clone deep nested mixed objects', function() {
+  it('clones array with objects', function() {
+    var list = [{a: {b: 1}}, [{c: {d: 1}}]];
+    var clone = R.clone(list);
+    list[1][0] = null;
+    eq(clone, [{a: {b: 1}}, [{c: {d: 1}}]]);
+  });
+
+  it('clones array with arrays', function() {
+    var list = [[1], [[3]]];
+    var clone = R.clone(list);
+    list[1][0] = null;
+    eq(clone, [[1], [[3]]]);
+  });
+
+  it('clones array with mutual ref object', function() {
+    var obj = {a: 1};
+    var list = [{b: obj}, {b: obj}];
+    var clone = R.clone(list);
+
+    assert.strictEqual(list[0].b, list[1].b);
+    assert.strictEqual(clone[0].b, clone[1].b);
+    assert.notStrictEqual(clone[0].b, list[0].b);
+    assert.notStrictEqual(clone[1].b, list[1].b);
+
+    eq(clone[0].b, {a:1});
+    eq(clone[1].b, {a:1});
+
+    obj.a = 2;
+    eq(clone[0].b, {a:1});
+    eq(clone[1].b, {a:1});
+  });
+
+});
+
+describe('deep clone edge cases', function() {
+  it('nulls, undefineds and empty objects and arrays', function() {
+    eq(R.clone(null), null);
+    eq(R.clone(undefined), undefined);
+    assert.notStrictEqual(R.clone(undefined), null);
+
+    var obj = {};
+    assert.notStrictEqual(R.clone(obj), obj);
+
+    var list = [];
+    assert.notStrictEqual(R.clone(list), list);
+  });
+
+});
+
+describe('clone objects with no prototypes', function() {
+  it('nested object with no prototype', function() {
+    const obj = Object.create(null);
+    obj.intValue = 1;
+    obj.a = Object.create(null);
+    obj.a.stringValue = 'Yeah';
+    const clonedObj = R.clone(obj);
+    assert.strictEqual(Object.getPrototypeOf(clonedObj), null);
+    assert.strictEqual(Object.getPrototypeOf(clonedObj.a), null);
+    assert.strictEqual(clonedObj.intValue, 1);
+    assert.strictEqual(clonedObj.a.stringValue, 'Yeah');
+  });
+});
+
+describe('Let `R.clone` use an arbitrary user defined `clone` method', function() {
+
+  it('dispatches to `clone` method if present', function() {
+    function ArbitraryClone(x) { this.value = x; }
+    ArbitraryClone.prototype.clone = function() { return new ArbitraryClone(this.value); };
+
+    var obj = new ArbitraryClone(42);
+    var arbitraryClonedObj = R.clone(obj);
+    eq(arbitraryClonedObj, new ArbitraryClone(42));
+    eq(arbitraryClonedObj instanceof ArbitraryClone, true);
+  });
+
+});

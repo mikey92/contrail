@@ -1,0 +1,10 @@
+{
+  "name": "ramda",
+  "version": "0.32.0",
+  "description": "A practical functional library for JavaScript programmers.",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "test": "node --no-warnings scripts/test.mjs"
+  }
+}

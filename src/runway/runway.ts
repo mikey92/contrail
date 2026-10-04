@@ -322,7 +322,7 @@ export class Runway extends DurableObject<Env> {
 	private async test(r: Repo, tree: string, files: FlatTree): Promise<TestReport> {
 		const texts = new Map<string, string>();
 		for (const [path, item] of files) {
-			if (!/\.(m?js|json)$/.test(path)) continue;
+			if (!/\.(m?js|cjs|json)$/.test(path)) continue;
 			const text = await readText(r, item.oid);
 			if (text !== null) texts.set(path, text);
 		}

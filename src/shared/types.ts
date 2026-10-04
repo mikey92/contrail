@@ -105,11 +105,14 @@ export interface TestResult {
 	ok: boolean;
 	ms?: number;
 	error?: string;
+	skipped?: boolean;
 }
 
 export interface TestReport {
 	passed: number;
 	failed: number;
+	skipped?: number;
+	/** Every result for small suites; only the failures (up to 50) for big ones. */
 	results: TestResult[];
 	/** Load-time failure (syntax error, missing import) for the whole suite. */
 	error?: string;

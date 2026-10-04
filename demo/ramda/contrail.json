@@ -1,0 +1,14 @@
+{
+  "tests": {
+    "style": "mocha",
+    "files": [
+      "test/*.js",
+      "test/internal/*.js"
+    ],
+    "modules": {
+      "fast-check": "vendor/fast-check.cjs"
+    },
+    "command": "npm test",
+    "timeoutMs": 5000
+  }
+}
