@@ -1086,7 +1086,7 @@ export class Tower extends DurableObject<Env> {
 				flight.id,
 				null,
 				"landing",
-				`Landed ${o.trunkAfter?.slice(0, 8)} — ${o.changes.length} file(s), +${o.changes.reduce((s, c) => s + c.additions, 0)}/−${o.changes.reduce((s, c) => s + c.deletions, 0)}${o.tests ? `, ${o.tests.passed} tests green` : ""}`,
+				`Landed ${o.trunkAfter?.slice(0, 8)} — ${o.changes.length} file(s), +${o.changes.reduce((s, c) => s + c.additions, 0)}/−${o.changes.reduce((s, c) => s + c.deletions, 0)}${o.tests ? `, ${o.tests.passed} tests green${o.tests.train ? ` (train of ${o.tests.train})` : ""}` : ""}`,
 				o.changes.flatMap((c) => c.symbols.map((s) => `${c.path}#${s}`)),
 			);
 			this.releaseAll(flight.id);

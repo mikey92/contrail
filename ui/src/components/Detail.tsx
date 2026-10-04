@@ -176,6 +176,7 @@ export function FlightDrawer({
 					{l.tests && (
 						<div class={`tests ${l.tests.failed ? "bad" : "good"}`}>
 							Tests in a Dynamic Worker: {l.tests.passed} passed{l.tests.failed ? `, ${l.tests.failed} failed` : ""} · {l.tests.ms}ms
+							{l.tests.train ? ` · run once for a train of ${l.tests.train} landings` : ""}
 							{l.tests.results
 								.filter((r) => !r.ok)
 								.slice(0, 5)

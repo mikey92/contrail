@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// End-to-end smoke test against a deployed Contrail: four scripted agents use real git against
+// End-to-end smoke test against a deployed Contrail: scripted agents use real git against
 // Artifacts workspaces and exercise clearances, parallel landings, insert/insert unions, a real
-// conflict, its resolution, and the why() lookup.
+// conflict, its resolution, the why() lookup, review by exception, and a landing train with a culprit.
 //   CONTRAIL_URL=… CONTRAIL_ADMIN_KEY=… node scripts/smoke.mjs <slug>
 import { execSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -198,6 +198,43 @@ for (let i = 0; i < 20; i++) {
 }
 check(le2.landing.status === "landed", `${fe.flight.code} landed after approval`);
 await call(`/api/p/${slug}/policy`, { review: [] }, admin);
+
+// ── 5. a train with a culprit: tested once as a whole, replayed one landing at a time when red ─────
+const [F, G, H, X] = await Promise.all(["SMOKE-F", "SMOKE-G", "SMOKE-H", "SMOKE-X"].map(agent));
+const [ff, fg, fh, fx] = await Promise.all([fly(F, "14"), fly(G, "11"), fly(H, "13"), fly(X, "1")]);
+const newFiles = (dir, files) => {
+  for (const [path, text] of Object.entries(files)) writeFileSync(join(dir, path), `${text.trim()}\n`);
+};
+newFiles(ff.dir, {
+  "src/loyalty.js": "export function pointsFor(totalCents) {\n  const points = Math.floor(totalCents / 100);\n  return totalCents >= 10000 ? points * 2 : points;\n}",
+  "test/loyalty.test.js": 'import assert from "node:assert/strict";\nimport { pointsFor } from "../src/loyalty.js";\n\nexport function earnsPointsPerDollar() {\n  assert.equal(pointsFor(4599), 45);\n  assert.equal(pointsFor(10000), 200);\n}',
+});
+newFiles(fg.dir, {
+  "src/zones.js": 'export const ZONE_SURCHARGE_CENTS = { domestic: 0, "ca-mx": 600, intl: 1500 };',
+  "test/zones.test.js": 'import assert from "node:assert/strict";\nimport { ZONE_SURCHARGE_CENTS } from "../src/zones.js";\n\nexport function intlCostsMore() {\n  assert.ok(ZONE_SURCHARGE_CENTS.intl > ZONE_SURCHARGE_CENTS["ca-mx"]);\n}',
+});
+newFiles(fh.dir, {
+  "src/gift.js": "export const giftWrapCents = (copies) => 399 * copies;",
+  "test/gift.test.js": 'import assert from "node:assert/strict";\nimport { giftWrapCents } from "../src/gift.js";\n\nexport function wrapsPerCopy() {\n  assert.equal(giftWrapCents(3), 1197);\n}',
+});
+// X "improves" search and breaks the existing searchesTitles test.
+edit(fx.dir, "src/catalog.js", (s) => s.replace("book.title.includes(query)", "book.title.toLowerCase().startsWith(query.toLowerCase())"));
+for (const f of [ff, fg, fh, fx]) commitPush(f.dir, "change");
+// F's landing occupies the runway while G, H and X queue up behind it and board the next train together.
+const lf = F.tool("request_landing", { summary: "Loyalty points." });
+await new Promise((r) => setTimeout(r, 150));
+const [lg, lh, lx] = await Promise.all([
+  G.tool("request_landing", { summary: "Zone surcharges." }),
+  H.tool("request_landing", { summary: "Gift wrap price." }),
+  X.tool("request_landing", { summary: "Case-insensitive search." }),
+]);
+const settled = [await lf, lg, lh];
+check(settled.every((l) => l.landing.status === "landed"), `good landings landed (${settled.map((l) => l.landing.status).join(", ")})`);
+const xFailing = lx.landing.tests?.results?.filter((r) => !r.ok).map((r) => r.name) ?? [];
+check(lx.landing.status === "failed" && xFailing.includes("searchesTitles"), `the culprit was turned away by its own test run (${xFailing.join(", ") || lx.landing.status})`);
+const trains = (await (await fetch(`${base}/api/p/${slug}/events?type=runway.train&limit=20`)).json()).events;
+const xTrain = trains.find((e) => e.data?.landings?.includes(lx.landing.id));
+console.log(`    (the culprit rode a train of ${xTrain?.data?.landings?.length ?? "?"})`);
 
 console.log(failures ? `\n${failures} check(s) failed` : "\nall checks passed");
 process.exit(failures ? 1 : 0);

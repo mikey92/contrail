@@ -114,6 +114,8 @@ export interface TestReport {
 	/** Load-time failure (syntax error, missing import) for the whole suite. */
 	error?: string;
 	ms: number;
+	/** Number of landings verified together in this run (a train), when more than one. */
+	train?: number;
 }
 
 export interface FileChange {

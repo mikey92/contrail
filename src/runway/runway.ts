@@ -2,10 +2,10 @@
 //
 // One Runway Durable Object per project keeps a warm in-memory clone of the trunk Artifacts repo.
 // Landings arrive in batches ("trains") from the Tower. For each landing the Runway fetches the
-// flight's workspace fork, three-way merges it onto the current trunk tip, runs the test suite of
-// the merged tree in a Dynamic Worker, and — if everything is green — commits it as one squashed,
-// attributed commit with the flight's contrail attached as a git note. The whole train is pushed
-// to trunk in a single push.
+// flight's workspace fork, three-way merges it onto the current trunk tip and commits it as one
+// squashed, attributed commit with the flight's contrail attached as a git note. The train's
+// merged tree is tested in a Dynamic Worker (a failing train is replayed landing by landing), and
+// the whole train is pushed to trunk in a single push.
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../env";
 import { extractSymbols } from "../git/symbols";
@@ -18,6 +18,7 @@ import {
 	commit,
 	commitTreeOid,
 	fetchFork,
+	type FlatTree,
 	fetchMain,
 	fetchNotes,
 	listTree,
@@ -45,8 +46,6 @@ export interface LandingJob {
 	message: string;
 	author: Person;
 	note: Record<string, unknown>;
-	/** Skip the test gate (used for docs-only changes when the project allows it). */
-	skipTests?: boolean;
 	/** Targets the project's policy reserves for a human; touching one parks the landing for review. */
 	review?: string[];
 	/** A human approved this landing. */
@@ -74,6 +73,27 @@ export interface BatchResult {
 	outcomes: LandingOutcome[];
 	head: string;
 	trunk: TrunkFile[] | null;
+}
+
+interface TrainOptions {
+	retry: number;
+	/** Replaying a train whose combined test run failed: test every landing on its own. */
+	oneByOne: boolean;
+	/** Fork heads already fetched in this train, by landing id. */
+	heads: Map<string, string>;
+}
+
+/** The protected targets (from the project's review policy) that a change touches. */
+function reviewRequired(policy: string[], changes: FileChange[]): string[] {
+	if (!policy.length) return [];
+	const touched = changes.flatMap((c) => (c.symbols.length ? c.symbols.map((sym) => `${c.path}#${sym}`) : [c.path]));
+	return policy.filter((p) => touched.some((t) => targetsOverlap(p, t)));
+}
+
+function failTests(outcome: LandingOutcome, tests: TestReport) {
+	outcome.status = "failed";
+	outcome.tests = tests;
+	outcome.error = tests.error ? `test suite failed to load: ${tests.error}` : `${tests.failed} test(s) failed`;
 }
 
 const MAX_SUMMARY_FILE_BYTES = 256 * 1024;
@@ -146,14 +166,24 @@ export class Runway extends DurableObject<Env> {
 	}
 
 	async land(trunk: string, jobs: LandingJob[]): Promise<BatchResult> {
-		return this.exclusive(() => this.landTrain(trunk, jobs, 0));
+		return this.exclusive(() => this.landTrain(trunk, jobs, { retry: 0, oneByOne: false, heads: new Map() }));
 	}
 
-	private async landTrain(trunk: string, jobs: LandingJob[], retry: number): Promise<BatchResult> {
+	/**
+	 * Each landing in a train is merged onto the tip left by the one before it, and the train's final
+	 * tree is tested once, like a merge queue. If that run fails, the train is replayed one landing at a
+	 * time so only the culprit is turned away. Landings that need a human review are tested on their own.
+	 */
+	private async landTrain(trunk: string, jobs: LandingJob[], opts: TrainOptions): Promise<BatchResult> {
+		const before = this.repo;
 		const start = await this.sync(trunk);
 		const r = this.repo!;
+		// Fetched fork heads are reused by a replay, unless the clone was replaced.
+		if (r !== before) opts.heads.clear();
 		let tip = start;
+		let tipFiles: FlatTree | null = null;
 		const outcomes: LandingOutcome[] = [];
+		const boarded: { job: LandingJob; outcome: LandingOutcome; head: string }[] = [];
 		// Exactly-once: a train interrupted after its push (deploy, eviction) is replayed by the Tower.
 		// Landings already on trunk are recognised by their Contrail-Landing trailer, not merged again.
 		const onTrunk = new Map<string, { oid: string; parent: string }>();
@@ -197,8 +227,12 @@ export class Runway extends DurableObject<Env> {
 				ms: 0,
 			};
 			try {
-				const fork = await this.forkReadToken(job.repo);
-				const head = await fetchFork(r, job.repo, fork.remote, fork.token);
+				let head = opts.heads.get(job.landingId);
+				if (!head) {
+					const fork = await this.forkReadToken(job.repo);
+					head = await fetchFork(r, job.repo, fork.remote, fork.token);
+					opts.heads.set(job.landingId, head);
+				}
 				outcome.forkHead = head;
 				const base = await mergeBase(r, tip, head);
 				outcome.base = base;
@@ -218,44 +252,26 @@ export class Runway extends DurableObject<Env> {
 				const tree = await writeFlatTree(r, merged.files);
 				if (tree === (await commitTreeOid(r, tip))) throw new Error("nothing to land: trunk already contains these changes");
 
-				if (!job.skipTests) {
-					const texts = new Map<string, string>();
-					for (const [path, item] of merged.files) {
-						if (!/\.(m?js|json)$/.test(path)) continue;
-						const text = await readText(r, item.oid);
-						if (text !== null) texts.set(path, text);
-					}
-					outcome.tests = await verifyTree(this.env.LOADER, tree, texts);
+				const required = job.approved ? [] : reviewRequired(job.review ?? [], merged.changes);
+				if (required.length || opts.oneByOne) {
+					outcome.tests = await this.test(r, tree, merged.files);
 					if (outcome.tests.failed > 0) {
-						outcome.status = "failed";
-						outcome.error = outcome.tests.error ? `test suite failed to load: ${outcome.tests.error}` : `${outcome.tests.failed} test(s) failed`;
+						failTests(outcome, outcome.tests);
 						continue;
 					}
 				}
-
-				if (job.review?.length && !job.approved) {
-					const touched = merged.changes.flatMap((c) => (c.symbols.length ? c.symbols.map((sym) => `${c.path}#${sym}`) : [c.path]));
-					const required = job.review.filter((p) => touched.some((t) => targetsOverlap(p, t)));
-					if (required.length) {
-						outcome.status = "review";
-						outcome.reviewRequired = required;
-						continue;
-					}
+				if (required.length) {
+					outcome.status = "review";
+					outcome.reviewRequired = required;
+					continue;
 				}
 
 				const landed = await commit(r, { tree, parents: [tip], message: job.message, author: job.author });
-				await addNote(
-					r,
-					landed,
-					JSON.stringify(
-						{ ...job.note, forkHead: head, changes: merged.changes, tests: outcome.tests && { passed: outcome.tests.passed, failed: outcome.tests.failed } },
-						null,
-						2,
-					),
-				);
 				outcome.status = "landed";
 				outcome.trunkAfter = landed;
 				tip = landed;
+				tipFiles = merged.files;
+				boarded.push({ job, outcome, head });
 			} catch (err) {
 				outcome.status = "failed";
 				outcome.error = errorMessage(err);
@@ -263,6 +279,27 @@ export class Runway extends DurableObject<Env> {
 				outcome.ms = Date.now() - t0;
 				outcomes.push(outcome);
 			}
+		}
+
+		if (!opts.oneByOne && boarded.length > 0) {
+			const report = await this.test(r, await commitTreeOid(r, tip), tipFiles!).catch(
+				(err): TestReport => ({ passed: 0, failed: 1, results: [], error: errorMessage(err), ms: 0 }),
+			);
+			if (report.failed > 0) {
+				if (boarded.length > 1) return this.landTrain(trunk, jobs, { ...opts, oneByOne: true });
+				// A train of one: that landing is the culprit.
+				failTests(boarded[0].outcome, report);
+				boarded[0].outcome.trunkAfter = null;
+				boarded.length = 0;
+				tip = start;
+			} else {
+				for (const b of boarded) b.outcome.tests = boarded.length > 1 ? { ...report, train: boarded.length } : report;
+			}
+		}
+
+		for (const { job, outcome, head } of boarded) {
+			const tests = outcome.tests && { passed: outcome.tests.passed, failed: outcome.tests.failed, train: outcome.tests.train };
+			await addNote(r, outcome.trunkAfter!, JSON.stringify({ ...job.note, forkHead: head, changes: outcome.changes, tests }, null, 2));
 		}
 
 		if (tip !== start) {
@@ -273,12 +310,23 @@ export class Runway extends DurableObject<Env> {
 			} catch (err) {
 				// Someone else moved trunk underneath us: drop the clone and replay the train once.
 				this.repo = null;
-				if (retry < 1) return this.landTrain(trunk, jobs, retry + 1);
+				if (opts.retry < 1) return this.landTrain(trunk, jobs, { ...opts, retry: opts.retry + 1, heads: new Map() });
 				throw err;
 			}
 			await pushNotes(r, token).catch(() => {});
 		}
-		return { outcomes, head: tip, trunk: tip !== start || retry > 0 ? await this.summarize(tip) : null };
+		return { outcomes, head: tip, trunk: tip !== start || opts.retry > 0 ? await this.summarize(tip) : null };
+	}
+
+	/** Runs the test suite of `tree` in a Dynamic Worker. */
+	private async test(r: Repo, tree: string, files: FlatTree): Promise<TestReport> {
+		const texts = new Map<string, string>();
+		for (const [path, item] of files) {
+			if (!/\.(m?js|json)$/.test(path)) continue;
+			const text = await readText(r, item.oid);
+			if (text !== null) texts.set(path, text);
+		}
+		return verifyTree(this.env.LOADER, tree, texts);
 	}
 
 	/** File list with line counts and symbols for the Radar's codebase map. */
