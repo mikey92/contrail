@@ -21,19 +21,19 @@
       radial-gradient(900px 600px at 10% 90%, rgba(167, 139, 250, 0.06), transparent 60%),
       linear-gradient(rgba(148, 163, 184, 0.045) 1px, transparent 1px) 0 0 / 64px 64px,
       linear-gradient(90deg, rgba(148, 163, 184, 0.045) 1px, transparent 1px) 0 0 / 64px 64px; }
-  section { position: absolute; inset: 0; display: none; padding: 110px 140px; }
-  section.on { display: block; }
+  section { position: absolute; inset: 0; display: none; padding: 90px 130px; }
+  section.on { display: flex; flex-direction: column; justify-content: center; }
   .rv { opacity: 0; transform: translateY(16px); transition: opacity 0.7s ease, transform 0.7s cubic-bezier(0.2, 0.7, 0.2, 1); }
   .rv.on { opacity: 1; transform: none; }
-  .kicker { font-family: var(--mono); font-size: 22px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--teal); margin-bottom: 26px; }
+  .kicker { font-family: var(--mono); font-size: 26px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--teal); margin-bottom: 24px; }
   h1 { font-size: 76px; line-height: 1.05; margin: 0 0 22px; font-weight: 800; letter-spacing: -0.02em; }
-  h2 { font-size: 60px; line-height: 1.1; margin: 0 0 56px; font-weight: 800; letter-spacing: -0.02em; }
+  h2 { font-size: 72px; line-height: 1.08; margin: 0 0 50px; font-weight: 800; letter-spacing: -0.025em; }
   .sub { font-size: 30px; color: var(--muted); line-height: 1.45; }
   .mono { font-family: var(--mono); }
 
   /* title */
-  #title { display: none; padding: 0; }
-  #title.on { display: flex; align-items: center; justify-content: center; flex-direction: column; text-align: center; }
+  #title { padding: 0; }
+  #title.on { align-items: center; text-align: center; }
   .logo-big { width: 170px; height: 170px; margin-bottom: 26px; }
   .wordmark { font-size: 132px; font-weight: 800; letter-spacing: -0.035em; margin: 0; }
   .tagline { font-size: 42px; color: var(--teal); margin-top: 12px; font-weight: 600; }
@@ -42,30 +42,32 @@
   .chip b { color: var(--orange); font-weight: 600; }
 
   /* problem */
-  .problems { display: grid; grid-template-columns: 1fr 1fr; gap: 34px 46px; margin-top: 10px; }
-  .problem { border: 1px solid var(--line2); border-radius: 18px; padding: 34px 38px; background: rgba(15, 23, 42, 0.72); }
-  .problem .t { font-size: 38px; font-weight: 700; margin-bottom: 14px; display: flex; align-items: center; gap: 16px; }
-  .problem .t i { font-style: normal; width: 46px; height: 46px; border-radius: 12px; display: grid; place-items: center; font-size: 26px; }
-  .problem .d { font-size: 26px; color: var(--muted); line-height: 1.45; }
-  .flow { display: flex; align-items: center; gap: 18px; font-family: var(--mono); font-size: 25px; color: var(--muted); margin: -26px 0 50px; }
-  .flow span { padding: 8px 16px; border: 1px solid var(--line2); border-radius: 10px; color: var(--text); }
+  .problems { display: grid; grid-template-columns: 1fr 1fr; gap: 36px 44px; }
+  .problem { border: 1px solid var(--line2); border-radius: 20px; padding: 42px 46px; background: rgba(15, 23, 42, 0.72); min-height: 210px; }
+  .problem .t { font-size: 46px; font-weight: 750; margin-bottom: 18px; display: flex; align-items: center; gap: 20px; letter-spacing: -0.01em; }
+  .problem .t i { font-style: normal; width: 58px; height: 58px; border-radius: 14px; display: grid; place-items: center; font-size: 32px; flex: none; }
+  .problem .d { font-size: 31px; color: #9fb0c8; line-height: 1.42; }
+  .flow { display: flex; align-items: center; gap: 20px; font-family: var(--mono); font-size: 29px; color: var(--muted); margin: -20px 0 52px; }
+  .flow span { padding: 10px 20px; border: 1px solid var(--line2); border-radius: 12px; color: var(--text); }
 
   /* protocol */
-  table.map { width: 100%; border-collapse: separate; border-spacing: 0 12px; margin-top: -24px; }
-  table.map td { font-size: 27px; padding: 17px 26px; background: rgba(15, 23, 42, 0.78); border-top: 1px solid var(--line2); border-bottom: 1px solid var(--line2); vertical-align: middle; }
-  table.map td:first-child { border-left: 1px solid var(--line2); border-radius: 14px 0 0 14px; color: var(--muted); width: 330px; font-family: var(--mono); font-size: 24px; }
-  table.map td:nth-child(2) { width: 70px; text-align: center; color: var(--teal); font-size: 30px; padding: 0; }
-  table.map td:nth-child(3) { font-weight: 700; width: 360px; font-size: 32px; }
-  table.map td:last-child { border-right: 1px solid var(--line2); border-radius: 0 14px 14px 0; color: #b6c3d6; font-size: 25px; line-height: 1.35; }
+  table.map { width: 100%; border-collapse: separate; border-spacing: 0 12px; margin-top: -30px; }
+  table.map td { font-size: 30px; padding: 19px 28px; background: rgba(15, 23, 42, 0.78); border-top: 1px solid var(--line2); border-bottom: 1px solid var(--line2); vertical-align: middle; }
+  table.map td:first-child { border-left: 1px solid var(--line2); border-radius: 14px 0 0 14px; color: var(--muted); width: 330px; font-family: var(--mono); font-size: 27px; }
+  table.map td:nth-child(2) { width: 70px; text-align: center; color: var(--teal); font-size: 32px; padding: 0; }
+  table.map td:nth-child(3) { font-weight: 750; width: 400px; font-size: 35px; }
+  table.map td:last-child { border-right: 1px solid var(--line2); border-radius: 0 14px 14px 0; color: #b6c3d6; font-size: 28px; line-height: 1.3; }
   table.map tr.rv { transform: translateX(-20px); }
   table.map tr.rv.on { transform: none; }
 
   /* architecture */
   #architecture { padding: 80px 110px; }
+  #architecture.on { display: block; }
   #architecture h2 { margin-bottom: 30px; }
   .arch { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; }
-  .cloud { position: absolute; left: 560px; top: 210px; width: 1260px; height: 800px; border: 2px dashed rgba(249, 115, 22, 0.55); border-radius: 30px; background: rgba(249, 115, 22, 0.035); }
-  .cloud-label { position: absolute; left: 590px; top: 190px; padding: 2px 14px; background: var(--bg); color: var(--orange); font-family: var(--mono); font-size: 24px; letter-spacing: 0.12em; }
+  .cloud { position: absolute; left: 520px; top: 262px; width: 1370px; height: 790px; border: 2px dashed rgba(249, 115, 22, 0.55); border-radius: 30px; background: rgba(249, 115, 22, 0.035); }
+  .cloud-label { position: absolute; left: 1700px; top: 1037px; padding: 2px 14px; background: var(--bg); color: var(--orange); font-family: var(--mono); font-size: 22px; letter-spacing: 0.14em; }
+  #architecture h2 { font-size: 64px; margin-bottom: 0; }
   .box { position: absolute; border: 1.5px solid var(--line2); border-radius: 16px; background: rgba(15, 23, 42, 0.94); padding: 18px 22px; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35); }
   .box .n { font-size: 29px; font-weight: 800; margin-bottom: 6px; display: flex; align-items: center; gap: 12px; }
   .box .n .tag { font-family: var(--mono); font-size: 16px; font-weight: 500; color: var(--muted); border: 1px solid var(--line2); border-radius: 6px; padding: 2px 8px; }
@@ -83,7 +85,6 @@
   svg.wires g.rv { transform: none; }
 
   /* close */
-  #close.on { display: flex; flex-direction: column; justify-content: center; }
   .quote { font-size: 84px; font-weight: 800; letter-spacing: -0.025em; line-height: 1.08; }
   .quote .hl { color: var(--teal); }
   .links { margin-top: 70px; display: grid; grid-template-columns: auto 1fr; gap: 18px 30px; font-size: 32px; align-items: baseline; }
@@ -158,46 +159,49 @@
     <div class="cloud rv" data-at="0.4"></div>
     <div class="cloud-label rv" data-at="0.4">CLOUDFLARE</div>
 
-    <div class="box accent-teal rv" id="b-agents" data-say="a Worker serves" style="left:110px; top:250px; width:370px">
+    <div class="box accent-teal rv" id="b-agents" data-say="a Worker serves" style="left:90px; top:300px; width:350px">
       <div class="n">Coding agents</div>
       <div class="d">Claude Code · Codex · any MCP client</div>
     </div>
-    <div class="box accent-teal rv" id="b-radar" data-say="and the radar" style="left:110px; top:560px; width:370px">
+    <div class="box accent-teal rv" id="b-radar" data-say="and the radar" style="left:90px; top:610px; width:350px">
       <div class="n">Radar</div>
       <div class="d">Live view in the browser</div>
     </div>
 
-    <div class="box cf accent-orange rv" id="b-worker" data-say="a Worker serves" style="left:620px; top:400px; width:330px">
+    <div class="box cf accent-orange rv" id="b-worker" data-say="a Worker serves" style="left:575px; top:430px; width:320px">
       <div class="n">Worker</div>
       <div class="d">REST API · MCP endpoint · WebSocket · static Radar</div>
     </div>
-    <div class="box cf accent-amber rv" id="b-tower" data-say="Each project has a Tower" style="left:1050px; top:250px; width:380px">
-      <div class="n">Tower <span class="tag">Durable Object</span></div>
-      <div class="d">Flights, clearances, landing queue, contrail, event stream</div>
-    </div>
-    <div class="box cf accent-green rv" id="b-runway" data-say="And a Runway" style="left:1050px; top:540px; width:380px">
-      <div class="n">Runway <span class="tag">Durable Object</span></div>
-      <div class="d">Warm clone of trunk; trunk's only writer</div>
-    </div>
-    <div class="box cf accent-orange rv" id="b-artifacts" data-say="All code lives in Artifacts" style="left:1500px; top:250px; width:290px">
-      <div class="n">Artifacts</div>
-      <div class="d">Trunk repo + one fork per flight · git notes · scoped tokens</div>
-    </div>
-    <div class="box cf accent-violet rv" id="b-dw" data-say="Tests run in Dynamic Workers" style="left:1500px; top:560px; width:290px">
-      <div class="n">Dynamic Workers</div>
-      <div class="d">Test every candidate tree, no network</div>
-    </div>
-    <div class="box cf accent-blue rv" id="b-edge" data-say="Edge agents think" style="left:620px; top:790px; width:330px">
+    <div class="box cf accent-blue rv" id="b-edge" data-say="Edge agents think" style="left:575px; top:800px; width:320px">
       <div class="n">Edge agents <span class="tag">DO</span></div>
       <div class="d">Coding agents that live on Cloudflare</div>
     </div>
-    <div class="box cf accent-blue rv" id="b-ai" data-say="Edge agents think" style="left:1050px; top:810px; width:380px">
+
+    <div class="box cf accent-amber rv" id="b-tower" data-say="Each project has a Tower" style="left:1030px; top:300px; width:360px">
+      <div class="n">Tower <span class="tag">Durable Object</span></div>
+      <div class="d">Flights, clearances, landing queue, contrail, event stream</div>
+    </div>
+    <div class="box cf accent-green rv" id="b-runway" data-say="And a Runway" style="left:1030px; top:560px; width:360px">
+      <div class="n">Runway <span class="tag">Durable Object</span></div>
+      <div class="d">Warm clone of trunk; trunk's only writer</div>
+    </div>
+    <div class="box cf accent-blue rv" id="b-ai" data-say="Edge agents think" style="left:1030px; top:830px; width:360px">
       <div class="n">Workers AI</div>
       <div class="d">Any tool-calling model</div>
+    </div>
+
+    <div class="box cf accent-orange rv" id="b-artifacts" data-say="All code lives in Artifacts" style="left:1560px; top:300px; width:290px">
+      <div class="n">Artifacts</div>
+      <div class="d">Trunk repo + a fork per flight · git notes · repo-scoped tokens</div>
+    </div>
+    <div class="box cf accent-violet rv" id="b-dw" data-say="Tests run in Dynamic Workers" style="left:1560px; top:640px; width:290px">
+      <div class="n">Dynamic Workers</div>
+      <div class="d">Test every candidate tree, no network</div>
     </div>
     <svg class="wires" id="wires"></svg>
   </div>
 </section>
+
 
 <section id="close">
   <div class="quote rv" data-at="0">Agents don't need pull requests.</div>
@@ -212,45 +216,48 @@
 <script>
   // Wires of the architecture diagram: [from, fromSide, to, toSide, label, color, revealPhrase]
   const WIRES = [
-    ["b-agents", "r", "b-worker", "l", "MCP over HTTP", "#5eead4", "a Worker serves"],
-    ["b-radar", "r", "b-worker", "l", "WebSocket", "#5eead4", "and the radar"],
-    ["b-worker", "r", "b-tower", "l", "", "#fbbf24", "Each project has a Tower"],
+    ["b-agents", "r", "b-worker", "l@0.35", "MCP over HTTP", "#5eead4", "a Worker serves", [452, 336, "start"]],
+    ["b-radar", "r", "b-worker", "l@0.75", "WebSocket", "#5eead4", "and the radar", [456, 706, "start"]],
+    ["b-worker", "r@0.4", "b-tower", "l@0.45", "", "#fbbf24", "Each project has a Tower"],
     ["b-tower", "b", "b-runway", "t", "trains", "#4ade80", "And a Runway"],
-    ["b-tower", "r", "b-artifacts", "l", "fork per flight", "#f97316", "All code lives in Artifacts"],
-    ["b-runway", "r", "b-artifacts", "b", "fetch · land", "#f97316", "All code lives in Artifacts"],
+    ["b-tower", "r@0.35", "b-artifacts", "l@0.3", "fork per flight", "#f97316", "All code lives in Artifacts"],
+    ["b-runway", "r@0.3", "b-artifacts", "l@0.8", "fetch · land", "#f97316", "All code lives in Artifacts", [1468, 606, "start"]],
     ["b-agents", "t", "b-artifacts", "t", "git push to own fork", "#5eead4", "a fork for every flight"],
-    ["b-runway", "r", "b-dw", "l", "tests", "#a78bfa", "Tests run in Dynamic Workers"],
-    ["b-edge", "r", "b-ai", "l", "reason", "#60a5fa", "Edge agents think"],
-    ["b-edge", "t", "b-worker", "b", "", "#60a5fa", "Edge agents think"],
+    ["b-runway", "r@0.75", "b-dw", "l@0.5", "tests", "#a78bfa", "Tests run in Dynamic Workers", [1436, 728, "start"]],
+    ["b-edge", "r@0.3", "b-tower", "l@0.85", "RPC", "#60a5fa", "Edge agents think", [970, 650, "start"]],
+    ["b-edge", "r@0.75", "b-ai", "l@0.55", "reason", "#60a5fa", "Edge agents think"],
   ];
-  function anchor(el, side) {
+  function anchor(el, spec) {
+    const [side, f] = spec.split("@");
+    const k = f === undefined ? 0.5 : Number(f);
     const r = { x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight };
-    return { l: [r.x, r.y + r.h / 2], r: [r.x + r.w, r.y + r.h / 2], t: [r.x + r.w / 2, r.y], b: [r.x + r.w / 2, r.y + r.h] }[side];
+    return { l: [r.x, r.y + r.h * k], r: [r.x + r.w, r.y + r.h * k], t: [r.x + r.w * k, r.y], b: [r.x + r.w * k, r.y + r.h] }[side];
   }
   function drawWires() {
     const svg = document.getElementById("wires");
     let html = '<defs>' + [...new Set(WIRES.map((w) => w[5]))].map((c) => `<marker id="m${c.slice(1)}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="${c}"/></marker>`).join("") + "</defs>";
-    for (const [a, as, b, bs, label, color, say] of WIRES) {
-      const [x1, y1] = anchor(document.getElementById(a), as);
-      const [x2, y2] = anchor(document.getElementById(b), bs);
-      let d, lx, ly;
+    for (const [a, aspec, b, bspec, label, color, say, at] of WIRES) {
+      const [x1, y1] = anchor(document.getElementById(a), aspec);
+      const [x2, y2] = anchor(document.getElementById(b), bspec);
+      const as = aspec[0];
+      const bs = bspec[0];
+      let d, lx, ly, align = "middle";
       if (as === "t" && bs === "t") {
-        const top = 196;
-        d = `M${x1} ${y1} C ${x1} ${top}, ${x1} ${top}, ${x1 + 40} ${top} L ${x2 - 40} ${top} C ${x2} ${top}, ${x2} ${top}, ${x2} ${y2 - 2}`;
+        const top = 238;
+        d = `M${x1} ${y1} C ${x1} ${top}, ${x1} ${top}, ${x1 + 40} ${top} L ${x2 - 40} ${top} C ${x2} ${top}, ${x2} ${top}, ${x2} ${y2 - 3}`;
         lx = (x1 + x2) / 2; ly = top - 10;
-      } else if ((as === "r" && bs === "l") || (as === "l" && bs === "r")) {
+      } else if (as === "r" && bs === "l") {
         const mx = (x1 + x2) / 2;
-        d = `M${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2 - 2} ${y2}`;
-        lx = mx; ly = (y1 + y2) / 2 - 10;
-      } else if (as === "r" && bs === "b") {
-        d = `M${x1} ${y1} C ${x2} ${y1}, ${x2} ${y1}, ${x2} ${y2 + 2}`;
-        lx = (x1 + x2) / 2 + 20; ly = y1 - 12;
+        d = `M${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2 - 3} ${y2}`;
+        lx = mx; ly = (y1 + y2) / 2 - 12;
+        if (Math.abs(y2 - y1) < 30) ly = Math.min(y1, y2) - 12;
       } else {
         const my = (y1 + y2) / 2;
-        d = `M${x1} ${y1} C ${x1} ${my}, ${x2} ${my}, ${x2} ${y2 + (bs === "t" ? -2 : 2)}`;
-        lx = (x1 + x2) / 2 + 12; ly = my + 6;
+        d = `M${x1} ${y1} C ${x1} ${my}, ${x2} ${my}, ${x2} ${y2 - 3}`;
+        lx = x1 + 14; ly = my + 6; align = "start";
       }
-      html += `<g class="rv" data-say="${say}"><path d="${d}" stroke="${color}" marker-end="url(#m${color.slice(1)})" stroke-opacity=".85"/>${label ? `<text class="lbl" x="${lx}" y="${ly}" text-anchor="${as === "t" && bs === "t" ? "middle" : "start"}">${label}</text>` : ""}</g>`;
+      if (at) [lx, ly, align] = at;
+      html += `<g class="rv" data-say="${say}"><path d="${d}" stroke="${color}" marker-end="url(#m${color.slice(1)})" stroke-opacity=".9"/>${label ? `<text class="lbl" x="${lx}" y="${ly}" text-anchor="${align}">${label}</text>` : ""}</g>`;
     }
     svg.innerHTML = html;
   }

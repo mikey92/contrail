@@ -32,7 +32,7 @@ export async function record(context, { url, out, scene, prepare, width = 1920, 
 	cdp.on("Page.screencastFrame", async ({ data, metadata, sessionId }) => {
 		const file = join(dir, `${String(frames.length).padStart(6, "0")}.jpg`);
 		writeFileSync(file, Buffer.from(data, "base64"));
-		frames.push({ file, t: metadata.timestamp });
+		frames.push({ file, t: metadata.timestamp, received: Date.now() / 1000 });
 		await cdp.send("Page.screencastFrameAck", { sessionId }).catch(() => {});
 	});
 	await cdp.send("Page.startScreencast", { format: "jpeg", quality: 92, maxWidth: width, maxHeight: height, everyNthFrame: 1 });
@@ -42,9 +42,13 @@ export async function record(context, { url, out, scene, prepare, width = 1920, 
 	await cdp.send("Page.stopScreencast");
 	await page.close();
 	if (frames.length === 0) throw new Error(`no frames recorded for ${out}`);
+	// Screencast timestamps come from Chrome's clock, which can be seconds off Node's: shift them by
+	// the smallest observed delivery delay so they line up with `started`/`stopped`.
+	const shift = Math.min(...frames.map((f) => f.received - f.t));
+	for (const f of frames) f.t += shift;
+	while (frames.length > 1 && frames[frames.length - 1].t > stopped) frames.pop();
 	// ffmpeg concat list: each frame lasts until the next one (last one until the scene ended).
 	const lines = [];
-	// Screencast timestamps are wall-clock seconds, like `started`/`stopped`.
 	for (let i = 0; i < frames.length; i++) {
 		const from = i === 0 ? Math.min(started, frames[0].t) : frames[i].t;
 		const next = i + 1 < frames.length ? frames[i + 1].t : Math.max(stopped, frames[i].t + 1 / fps);
