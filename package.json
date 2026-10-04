@@ -2,12 +2,16 @@
   "name": "contrail",
   "version": "0.1.0",
   "private": true,
-  "description": "Air traffic control for coding agents — the next GitHub, built on Cloudflare Workers + Artifacts",
+  "description": "Air traffic control for coding agents \u2014 the next GitHub, built on Cloudflare Workers + Artifacts",
   "license": "MIT",
   "type": "module",
   "scripts": {
+    "build": "vite build",
+    "deploy": "vite build && wrangler deploy",
+    "dev:ui": "vite",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.ui.json",
+    "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
     "hono": "^4.13.13",
@@ -16,8 +20,14 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261004.1",
+    "@preact/preset-vite": "^2.10.6",
+    "@types/d3-hierarchy": "^3.1.7",
     "@types/node": "^22.20.5",
+    "d3-hierarchy": "^3.1.2",
+    "playwright": "^1.63.0",
+    "preact": "^11.0.0",
     "typescript": "^5.9.3",
+    "vite": "^7.3.6",
     "vitest": "^4.1.0",
     "wrangler": "^4.147.0"
   }
