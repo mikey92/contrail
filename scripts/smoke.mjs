@@ -268,7 +268,7 @@ const settled = [await lf, lg, lh];
 check(settled.every((l) => l.landing.status === "landed"), `good landings landed (${settled.map((l) => l.landing.status).join(", ")})`);
 const xFailing = lx.landing.tests?.results?.filter((r) => !r.ok).map((r) => r.name) ?? [];
 check(lx.landing.status === "failed" && xFailing.includes("searchesTitles"), `the culprit was turned away by its own test run (${xFailing.join(", ") || lx.landing.status})`);
-const trains = (await (await fetch(`${base}/api/p/${slug}/events?type=runway.train&limit=20`)).json()).events;
+const trains = (await (await fetch(`${base}/api/p/${slug}/events?type=runway.train&limit=20`, { headers: { authorization: `Bearer ${admin}` } })).json()).events ?? [];
 const xTrain = trains.find((e) => e.data?.landings?.includes(lx.landing.id));
 console.log(`    (the culprit rode a train of ${xTrain?.data?.landings?.length ?? "?"})`);
 
