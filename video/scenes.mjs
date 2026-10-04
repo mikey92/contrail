@@ -312,7 +312,7 @@ const scenes = {
 			await t.at(cue(s, "It fetches the flight's fork") - 1.2);
 			await click(page, '.tabs button:has-text("Flights")');
 			await page.waitForTimeout(500);
-			await click(page, page.locator(".flights .fcard", { hasText: "FL-006" }).first());
+			await click(page, page.locator(".flights .fcard", { hasText: "FL-005" }).first());
 			await t.at(cue(s, "runs the merged tree's tests"));
 			await spotlight(page, ".drawer .tests", { ms: 3400, pad: 6 });
 			await t.at(cue(s, "This Codex agent") - 1.0);
@@ -372,7 +372,7 @@ const scenes = {
 			await t.at(cue(s, "And because it's plain Git") - 0.4);
 			await click(page, ".why .close");
 			await page.waitForTimeout(300);
-			await spotlight(page, 'button:has-text("Clone trunk")', { ms: 3000, pad: 6 });
+			await spotlight(page, ".topbar .btn.ghost", { ms: 3000, pad: 6 });
 		},
 	},
 
