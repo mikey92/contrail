@@ -236,7 +236,7 @@ check(le2.landing.status === "landed", `${fe.flight.code} landed after approval`
 await call(`/api/p/${slug}/policy`, { review: [] }, admin);
 
 // ── 5. a train with a culprit: tested once as a whole, replayed one landing at a time when red ─────
-const [F, G, H, X] = await Promise.all(["SMOKE-F", "SMOKE-G", "SMOKE-H", "SMOKE-X"].map(agent));
+const [F, G, H, X] = await Promise.all(["SMOKE-F", "SMOKE-G", "SMOKE-H", "SMOKE-X"].map((callsign) => agent(callsign)));
 const [ff, fg, fh, fx] = await Promise.all([fly(F, "14"), fly(G, "11"), fly(H, "13"), fly(X, "1")]);
 const newFiles = (dir, files) => {
   for (const [path, text] of Object.entries(files)) writeFileSync(join(dir, path), `${text.trim()}\n`);
