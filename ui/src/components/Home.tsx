@@ -120,7 +120,7 @@ export function Home() {
 				<div class="result">
 					<div class="result-n">300 / 300</div>
 					<div class="result-l">Changes by 100 agents, none lost</div>
-					<p>Three hundred changes aimed at 24 shared functions. Every counter on trunk equals its landed increments, even across a redeploy in the middle of the run.</p>
+					<p>Three hundred changes aimed at 24 shared functions. Every counter on trunk equals its landed increments, and landings stay exactly-once even across a redeploy in the middle of a run.</p>
 					<a href={REPLAY.stress}>Watch the replay →</a>
 				</div>
 				<div class="result">
