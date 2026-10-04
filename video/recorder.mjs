@@ -49,7 +49,7 @@ export async function record(context, { url, out, scene, prepare, width = 1920, 
 	const shift = Math.min(...frames.map((f) => f.received - f.t));
 	for (const f of frames) f.t = Math.max(started, f.t + shift);
 	while (frames.length > 1 && frames[frames.length - 1].t > stopped) frames.pop();
-	// Constant frame rate: output frame k shows the latest screencast frame painted by started + k/fps.
+	// Constant frame rate (intermediate quality: the final cut is re-encoded): output frame k shows the latest screencast frame painted by started + k/fps.
 	// (ffmpeg's concat demuxer stretches sub-40ms frames, which made clips run long.)
 	const count = Math.max(1, Math.round((stopped - started) * fps));
 	for (let k = 0, j = 0; k < count; k++) {
@@ -57,7 +57,7 @@ export async function record(context, { url, out, scene, prepare, width = 1920, 
 		linkSync(frames[j].file, join(dir, `out_${String(k).padStart(6, "0")}.jpg`));
 	}
 	mkdirSync(join(out, ".."), { recursive: true });
-	execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-framerate", String(fps), "-i", join(dir, "out_%06d.jpg"), "-vf", `scale=${width}:${height}:flags=lanczos,format=yuv420p`, "-c:v", "libx264", "-preset", "slow", "-crf", "16", out]);
+	execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-framerate", String(fps), "-i", join(dir, "out_%06d.jpg"), "-vf", `scale=${width}:${height}:flags=lanczos,format=yuv420p`, "-c:v", "libx264", "-preset", "veryfast", "-crf", "12", out]);
 	rmSync(dir, { recursive: true, force: true });
 	return stopped - started;
 }
