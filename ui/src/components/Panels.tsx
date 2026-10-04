@@ -117,7 +117,7 @@ export function IntentBoard({ intents, flights, agents, onSelect }: { intents: R
 
 export function Runway({ landings, flights, agents, intents, onSelect }: { landings: Record<string, Landing>; flights: Record<string, Flight>; agents: Record<string, Agent>; intents: Record<string, Intent>; onSelect: (id: string) => void }) {
 	const all = Object.values(landings).sort((a, b) => a.seq - b.seq);
-	const approach = all.filter((l) => ["queued", "merging", "verifying"].includes(l.status));
+	const approach = all.filter((l) => ["queued", "merging", "verifying", "review"].includes(l.status));
 	const landed = all.filter((l) => l.status === "landed").slice(-14);
 	return (
 		<div class="runway">
@@ -132,7 +132,7 @@ export function Runway({ landings, flights, agents, intents, onSelect }: { landi
 					const a = f && agents[f.agentId];
 					return (
 						<div key={l.id} class={`rw-chip ${l.status}`} style={{ "--c": a?.color } as any} onClick={() => f && onSelect(f.id)}>
-							<span class="mono">{f?.code}</span> {l.status === "queued" ? "on approach" : l.status}
+							<span class="mono">{f?.code}</span> {l.status === "queued" ? "on approach" : l.status === "review" ? "awaiting review" : l.status}
 						</div>
 					);
 				})}

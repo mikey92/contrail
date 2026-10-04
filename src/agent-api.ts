@@ -88,6 +88,7 @@ export const TOOLS: ToolDef[] = [
 			if (l.status === "landed") return `🛬 Landed as ${l.trunkAfter?.slice(0, 8)}${l.tests ? ` — ${l.tests.passed} tests green` : ""}. ${r.next}`;
 			if (l.status === "conflict") return `⚠ Conflict — not landed. ${r.next}`;
 			if (l.status === "failed") return `✖ Not landed: ${l.error}. ${r.next}`;
+			if (l.status === "review" || l.status === "rejected") return `👩‍✈️ ${l.status === "review" ? "Awaiting human review" : "Changes requested"}. ${r.next}`;
 			return `On approach (queue position ${r.position}). ${r.next}`;
 		},
 	},

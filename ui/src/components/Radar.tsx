@@ -3,11 +3,12 @@ import { ACTIVE_STATUSES, useRadar } from "../store";
 import { Airspace } from "./Airspace";
 import { ConnectModal, FlightDrawer, WhyPanel } from "./Detail";
 import { ClonePanel, OperatorPanel } from "./Operator";
+import { ReviewInbox } from "./Review";
 import { Feed, FlightList, IntentBoard, Runway } from "./Panels";
 
 export function Radar({ slug, fixture }: { slug: string; fixture: string | null }) {
 	const s = useRadar(slug, fixture);
-	const [tab, setTab] = useState<"live" | "flights" | "intents">("live");
+	const [tab, setTab] = useState<"live" | "flights" | "intents" | "review">("live");
 	const [selected, setSelected] = useState<string | null>(null);
 	const [why, setWhy] = useState<string | null>(null);
 	const [connect, setConnect] = useState(false);
@@ -28,6 +29,7 @@ export function Radar({ slug, fixture }: { slug: string; fixture: string | null 
 	const holding = flights.filter((f) => f.status === "holding").length;
 	const intents = Object.values(s.intents);
 	const landedIntents = intents.filter((i) => i.status === "landed").length;
+	const reviews = Object.values(s.landings).filter((l) => l.status === "review").length;
 
 	return (
 		<div class="radar">
@@ -93,11 +95,15 @@ export function Radar({ slug, fixture }: { slug: string; fixture: string | null 
 						<button class={tab === "intents" ? "on" : ""} onClick={() => setTab("intents")}>
 							Intents <span class="count">{intents.length - landedIntents}</span>
 						</button>
+						<button class={`${tab === "review" ? "on" : ""} ${reviews ? "attn" : ""}`} onClick={() => setTab("review")}>
+							Review <span class="count">{reviews}</span>
+						</button>
 					</nav>
 					<div class="tab-body">
 						{tab === "live" && <Feed events={s.events} flights={s.flights} agents={s.agents} onSelect={setSelected} />}
 						{tab === "flights" && <FlightList flights={s.flights} agents={s.agents} intents={s.intents} onSelect={setSelected} />}
 						{tab === "intents" && <IntentBoard intents={s.intents} flights={s.flights} agents={s.agents} onSelect={setSelected} />}
+						{tab === "review" && <ReviewInbox slug={slug} landings={s.landings} flights={s.flights} agents={s.agents} intents={s.intents} onSelect={setSelected} />}
 					</div>
 					{selected && (
 						<FlightDrawer

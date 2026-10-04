@@ -9,6 +9,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../env";
 import { extractSymbols } from "../git/symbols";
+import { targetsOverlap } from "../tower/clearance";
 import type { ConflictReport, FileChange, TestReport, TrunkFile } from "../shared/types";
 import { errorMessage } from "../util";
 import {
@@ -46,11 +47,17 @@ export interface LandingJob {
 	note: Record<string, unknown>;
 	/** Skip the test gate (used for docs-only changes when the project allows it). */
 	skipTests?: boolean;
+	/** Targets the project's policy reserves for a human; touching one parks the landing for review. */
+	review?: string[];
+	/** A human approved this landing. */
+	approved?: boolean;
 }
 
 export interface LandingOutcome {
 	landingId: string;
-	status: "landed" | "conflict" | "failed";
+	status: "landed" | "conflict" | "failed" | "review";
+	/** For "review": the protected targets the change touches. */
+	reviewRequired?: string[];
 	forkHead: string | null;
 	base: string | null;
 	trunkBefore: string;
@@ -222,6 +229,16 @@ export class Runway extends DurableObject<Env> {
 					if (outcome.tests.failed > 0) {
 						outcome.status = "failed";
 						outcome.error = outcome.tests.error ? `test suite failed to load: ${outcome.tests.error}` : `${outcome.tests.failed} test(s) failed`;
+						continue;
+					}
+				}
+
+				if (job.review?.length && !job.approved) {
+					const touched = merged.changes.flatMap((c) => (c.symbols.length ? c.symbols.map((sym) => `${c.path}#${sym}`) : [c.path]));
+					const required = job.review.filter((p) => touched.some((t) => targetsOverlap(p, t)));
+					if (required.length) {
+						outcome.status = "review";
+						outcome.reviewRequired = required;
 						continue;
 					}
 				}

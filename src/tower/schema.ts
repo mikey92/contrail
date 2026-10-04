@@ -21,6 +21,7 @@ export const SCHEMA = [
 		conflicts TEXT NOT NULL DEFAULT '[]', tests TEXT, error TEXT, unioned INTEGER NOT NULL DEFAULT 0,
 		created_at INTEGER NOT NULL, finished_at INTEGER)`,
 	`CREATE INDEX IF NOT EXISTS landings_status ON landings(status, seq)`,
+	`ALTER TABLE landings ADD COLUMN review TEXT`,
 	`CREATE TABLE IF NOT EXISTS contrail (
 		id INTEGER PRIMARY KEY AUTOINCREMENT, flight_id TEXT NOT NULL, agent_id TEXT, kind TEXT NOT NULL,
 		text TEXT NOT NULL, refs TEXT NOT NULL DEFAULT '[]', at INTEGER NOT NULL)`,

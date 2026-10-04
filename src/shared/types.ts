@@ -73,7 +73,17 @@ export interface Clearance {
 	expiresAt: number;
 }
 
-export type LandingStatus = "queued" | "merging" | "verifying" | "landed" | "conflict" | "failed";
+/** review: green, but touches code the project's policy reserves for a human decision. */
+export type LandingStatus = "queued" | "merging" | "verifying" | "review" | "landed" | "conflict" | "failed" | "rejected";
+
+export interface ReviewState {
+	/** Protected targets (from the project policy) this landing touches. */
+	required: string[];
+	decision: "approved" | "rejected" | null;
+	reviewer: string | null;
+	comment: string | null;
+	at: number | null;
+}
 
 export interface ConflictReport {
 	path: string;
@@ -112,6 +122,8 @@ export interface FileChange {
 	symbols: string[];
 	additions: number;
 	deletions: number;
+	/** Compact diff for reviewers (truncated). */
+	hunks?: { start: number; removed: string[]; added: string[] }[];
 }
 
 export interface Landing {
@@ -128,6 +140,7 @@ export interface Landing {
 	tests: TestReport | null;
 	error: string | null;
 	unioned: number;
+	review: ReviewState | null;
 	createdAt: number;
 	finishedAt: number | null;
 }

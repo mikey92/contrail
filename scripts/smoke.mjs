@@ -174,5 +174,29 @@ check(why.history.length >= 2, `why(src/pricing.js#subtotal) returns ${why.histo
 const radar = await A.tool("radar", {});
 check(Array.isArray(radar.traffic), "radar works");
 
+// ── 4. review by exception: money formatting needs a human ─────
+await call(`/api/p/${slug}/policy`, { review: ["src/money.js#formatMoney"] }, admin);
+const E = await agent("SMOKE-E");
+const fe = await fly(E, "6");
+await E.tool("request_clearance", { targets: ["src/money.js#formatMoney"], reason: "EUR and JPY" });
+edit(fe.dir, "src/money.js", (s) =>
+  s.replace(
+    '  return currency === "USD" ? `$${dollars}` : `${dollars} ${currency}`;',
+    '  if (currency === "EUR") return `€${dollars}`;\n  if (currency === "JPY") return `¥${cents}`;\n  return currency === "USD" ? `$${dollars}` : `${dollars} ${currency}`;',
+  ),
+);
+commitPush(fe.dir, "EUR and JPY");
+const le = await E.tool("request_landing", { summary: "Format EUR with € and JPY without decimals." });
+check(le.landing.status === "review" && le.landing.review?.required?.includes("src/money.js#formatMoney"), `${fe.flight.code} parked for human review by policy`);
+await call(`/api/p/${slug}/landings/${le.landing.id}/review`, { decision: "approve", comment: "Looks right; JPY has no minor unit.", reviewer: "smoke" }, admin);
+let le2;
+for (let i = 0; i < 20; i++) {
+  le2 = await E.tool("landing_status", {});
+  if (le2.landing.status === "landed") break;
+  await new Promise((r) => setTimeout(r, 1500));
+}
+check(le2.landing.status === "landed", `${fe.flight.code} landed after approval`);
+await call(`/api/p/${slug}/policy`, { review: [] }, admin);
+
 console.log(failures ? `\n${failures} check(s) failed` : "\nall checks passed");
 process.exit(failures ? 1 : 0);

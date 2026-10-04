@@ -157,6 +157,23 @@ app.post("/api/p/:slug/intents", async (c) => {
 	return c.json({ intents: await tower(c.env, c.req.param("slug")).addIntents(body.intents ?? [], "operator") });
 });
 
+app.get("/api/p/:slug/policy", async (c) => {
+	const slug = c.req.param("slug");
+	if (!(await canView(c, slug))) return c.json({ error: "not found" }, 404);
+	return c.json(await tower(c.env, slug).policy());
+});
+
+app.post("/api/p/:slug/policy", async (c) => {
+	if (!isAdmin(c)) return c.json({ error: "admin key required" }, 401);
+	return c.json(await tower(c.env, c.req.param("slug")).setPolicy(await c.req.json()));
+});
+
+app.post("/api/p/:slug/landings/:id/review", async (c) => {
+	if (!isAdmin(c)) return c.json({ error: "admin key required" }, 401);
+	const body = await c.req.json<{ decision: "approve" | "reject"; comment?: string; reviewer?: string }>();
+	return c.json(await tower(c.env, c.req.param("slug")).reviewLanding({ landingId: c.req.param("id"), ...body }));
+});
+
 app.post("/api/p/:slug/resync", async (c) => {
 	if (!isAdmin(c)) return c.json({ error: "admin key required" }, 401);
 	return c.json(await tower(c.env, c.req.param("slug")).resync());

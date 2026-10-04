@@ -99,7 +99,14 @@ export class Tower extends DurableObject<Env> {
 		super(ctx, env);
 		this.sql = ctx.storage.sql;
 		ctx.blockConcurrencyWhile(async () => {
-			for (const stmt of SCHEMA) this.sql.exec(stmt);
+			for (const stmt of SCHEMA) {
+				try {
+					this.sql.exec(stmt);
+				} catch (err) {
+					// ALTER TABLE … ADD COLUMN is not idempotent in SQLite; an existing column is fine.
+					if (!/duplicate column/i.test(errorMessage(err))) throw err;
+				}
+			}
 			// A restart (deploy, eviction) can interrupt a train: put its landings back in the queue.
 			const stale = this.sql.exec("UPDATE landings SET status = 'queued' WHERE status IN ('merging', 'verifying') RETURNING id").toArray();
 			if (stale.length) await ctx.storage.setAlarm(Date.now() + 500);
@@ -216,6 +223,7 @@ export class Tower extends DurableObject<Env> {
 			tests: json(r.tests as string, null),
 			error: (r.error as string) ?? null,
 			unioned: r.unioned as number,
+			review: json(r.review as string, null),
 			createdAt: r.created_at as number,
 			finishedAt: (r.finished_at as number) ?? null,
 		};
@@ -839,7 +847,7 @@ export class Tower extends DurableObject<Env> {
 		}
 		const agent = this.agentById(agentId);
 		this.touchAgent(agentId);
-		const pending = this.row("SELECT * FROM landings WHERE flight_id = ? AND status IN ('queued', 'merging', 'verifying')", flight.id);
+		const pending = this.row("SELECT * FROM landings WHERE flight_id = ? AND status IN ('queued', 'merging', 'verifying', 'review')", flight.id);
 		let landing: Landing;
 		if (pending) {
 			landing = this.toLanding(pending);
@@ -859,6 +867,7 @@ export class Tower extends DurableObject<Env> {
 				tests: null,
 				error: null,
 				unioned: 0,
+				review: null,
 				createdAt: now(),
 				finishedAt: null,
 			};
@@ -905,6 +914,10 @@ export class Tower extends DurableObject<Env> {
 		switch (l.status) {
 			case "landed":
 				return `Landed on trunk as ${l.trunkAfter?.slice(0, 8)}. Your flight is complete — call take_off for the next intent.`;
+			case "review":
+				return `Merged and green, but it touches ${l.review?.required.join(", ")}, which policy reserves for a human. Hold position: you will get a radio message with the decision (or call landing_status).`;
+			case "rejected":
+				return `A reviewer requested changes${l.review?.comment ? `: ${l.review.comment}` : ""}. Fix it, push, and request_landing again.`;
 			case "conflict":
 				return "Conflict with trunk. Run `git pull --no-rebase upstream main`, resolve the conflicting hunks (the report shows who changed them and why), commit, push to origin, then request_landing again.";
 			case "failed":
@@ -938,6 +951,8 @@ export class Tower extends DurableObject<Env> {
 						landingId: l.id,
 						flightId: flight.id,
 						repo: flight.repo,
+						review: this.meta<{ review?: string[] }>("policy", {}).review ?? [],
+						approved: l.review?.decision === "approved",
 						author: { name: agent.callsign, email: `${agent.callsign.toLowerCase()}@agents.contrail.dev` },
 						message: [
 							`${intent.title} (INT-${intent.seq})`,
@@ -992,7 +1007,7 @@ export class Tower extends DurableObject<Env> {
 	private finishLanding(l: Landing, patch: Partial<Landing>) {
 		const landing: Landing = { ...l, ...patch, finishedAt: now() };
 		this.sql.exec(
-			"UPDATE landings SET status = ?, fork_head = ?, trunk_before = ?, trunk_after = ?, changes = ?, conflicts = ?, tests = ?, error = ?, unioned = ?, finished_at = ? WHERE id = ?",
+			"UPDATE landings SET status = ?, fork_head = ?, trunk_before = ?, trunk_after = ?, changes = ?, conflicts = ?, tests = ?, error = ?, unioned = ?, review = ?, finished_at = ? WHERE id = ?",
 			landing.status,
 			landing.forkHead,
 			landing.trunkBefore,
@@ -1002,6 +1017,7 @@ export class Tower extends DurableObject<Env> {
 			landing.tests ? JSON.stringify(landing.tests) : null,
 			landing.error,
 			landing.unioned,
+			landing.review ? JSON.stringify(landing.review) : null,
 			landing.finishedAt,
 			landing.id,
 		);
@@ -1063,6 +1079,16 @@ export class Tower extends DurableObject<Env> {
 				{ flightId: flight.id, agentId: agent.id, data: { landingId: landing.id, commit: o.trunkAfter, changes: o.changes, ms: o.ms } },
 			);
 			this.notifyTurbulence(flight, agent.callsign, intent, o.changes);
+			return;
+		}
+
+		if (o.status === "review") {
+			const review = { required: o.reviewRequired ?? [], decision: null, reviewer: null, comment: null, at: null };
+			this.finishLanding(l, { status: "review", forkHead: o.forkHead, trunkBefore: o.trunkBefore, changes: o.changes, tests: o.tests, unioned: o.unioned, review });
+			this.addContrail(flight.id, null, "note", `Green and ready, but policy requires a human review for ${review.required.join(", ")}. Waiting on the tower.`);
+			this.sendRadio(flight.id, "review", `Your landing passed merge and tests but touches ${review.required.join(", ")}, which needs a human review. Hold position; you will be told the decision.`);
+			this.emit("landing.review", `${flight.code} needs a human review: touches ${review.required.join(", ")}`, { flightId: flight.id, agentId: agent.id, data: { landingId: l.id } });
+			this.bump("reviews");
 			return;
 		}
 
@@ -1311,6 +1337,46 @@ export class Tower extends DurableObject<Env> {
 
 	async resync(): Promise<TrunkState> {
 		return this.refreshTrunk();
+	}
+
+	// ───────────────────────── review by exception ─────────────────────────
+
+	async setPolicy(policy: { review?: string[] }): Promise<{ review: string[] }> {
+		const review = (policy.review ?? []).map(normalizeTarget).filter(Boolean).slice(0, 100);
+		this.setMeta("policy", { review });
+		this.emit("policy.updated", review.length ? `Human review required for: ${review.join(", ")}` : "No human review required: every green landing lands");
+		return { review };
+	}
+
+	async policy(): Promise<{ review: string[] }> {
+		return { review: this.meta<{ review?: string[] }>("policy", {}).review ?? [] };
+	}
+
+	async reviewLanding(input: { landingId: string; decision: "approve" | "reject"; comment?: string; reviewer?: string }): Promise<Landing> {
+		const r = this.row("SELECT * FROM landings WHERE id = ?", input.landingId);
+		if (!r) throw new Error("no such landing");
+		const l = this.toLanding(r);
+		if (l.status !== "review") throw new Error(`landing is ${l.status}, not awaiting review`);
+		const flight = this.flightById(l.flightId);
+		const reviewer = (input.reviewer ?? "operator").slice(0, 40);
+		const comment = input.comment?.slice(0, 2000) ?? null;
+		if (input.decision === "approve") {
+			const review = { ...(l.review ?? { required: [] }), decision: "approved" as const, reviewer, comment, at: now() };
+			this.sql.exec("UPDATE landings SET status = 'queued', review = ? WHERE id = ?", JSON.stringify(review), l.id);
+			this.patch("landing", { ...l, status: "queued", review });
+			this.addContrail(flight.id, null, "decision", `Approved by ${reviewer}${comment ? `: ${comment}` : ""}`);
+			this.emit("review.approved", `${reviewer} approved ${flight.code}${comment ? ` — ${comment}` : ""}`, { flightId: flight.id });
+			this.ctx.waitUntil(this.processQueue());
+			return { ...l, status: "queued", review };
+		}
+		const review = { ...(l.review ?? { required: [] }), decision: "rejected" as const, reviewer, comment, at: now() };
+		const landing = this.finishLanding(l, { status: "rejected", review });
+		this.setFlightStatus(flight.id, "diverted");
+		this.patch("flight", this.flightById(flight.id));
+		this.sendRadio(flight.id, "review", `${reviewer} requested changes: ${comment ?? "(no comment)"}. Fix, push, and request_landing again.`);
+		this.addContrail(flight.id, null, "decision", `Changes requested by ${reviewer}: ${comment ?? ""}`);
+		this.emit("review.rejected", `${reviewer} sent ${flight.code} back${comment ? ` — ${comment}` : ""}`, { flightId: flight.id });
+		return landing;
 	}
 
 	// ───────────────────────── edge agents ─────────────────────────

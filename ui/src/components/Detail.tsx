@@ -1,6 +1,7 @@
 import { useEffect, useState } from "preact/hooks";
 import type { Agent, Clearance, ContrailEntry, Flight, Intent, Landing } from "../../../src/shared/types";
 import { relTime } from "../store";
+import { Diff } from "./Review";
 
 interface FlightDetail {
 	flight: Flight;
@@ -134,6 +135,20 @@ export function FlightDrawer({
 									<span class="minus">−{c.deletions}</span>
 								</div>
 							))}
+							<details class="diffs">
+								<summary>Show diff</summary>
+								{l.changes.map((c) => (
+									<div key={c.path}>
+										<div class="mono muted diff-file">{c.path}</div>
+										<Diff change={c} />
+									</div>
+								))}
+							</details>
+						</div>
+					)}
+					{l.review && (
+						<div class={`reviewnote ${l.review.decision ?? "pending"}`}>
+							{l.review.decision ? `${l.review.decision === "approved" ? "Approved" : "Changes requested"} by ${l.review.reviewer}${l.review.comment ? `: ${l.review.comment}` : ""}` : `Waiting for a human: ${l.review.required.join(", ")}`}
 						</div>
 					)}
 					{l.conflicts.map((c) => (

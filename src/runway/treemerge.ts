@@ -13,6 +13,21 @@ export interface TreeMergeResult {
 	unioned: number;
 }
 
+/** Keeps diffs small enough to ship to the Radar: at most 60 changed lines per file. */
+function truncateHunks(hunks: NonNullable<FileChange["hunks"]>): FileChange["hunks"] {
+	const out: NonNullable<FileChange["hunks"]> = [];
+	let budget = 60;
+	for (const h of hunks) {
+		if (budget <= 0) break;
+		const removed = h.removed.slice(0, budget);
+		budget -= removed.length;
+		const added = h.added.slice(0, Math.max(0, budget));
+		budget -= added.length;
+		out.push({ start: h.start, removed, added });
+	}
+	return out;
+}
+
 const same = (a?: TreeItem, b?: TreeItem) => (!a && !b) || (!!a && !!b && a.oid === b.oid && a.mode === b.mode);
 
 export async function describeChanges(repo: Repo, base: FlatTree, next: FlatTree): Promise<FileChange[]> {
@@ -27,16 +42,19 @@ export async function describeChanges(repo: Repo, base: FlatTree, next: FlatTree
 		const status: FileChange["status"] = !b ? "added" : !n ? "deleted" : "modified";
 		let additions = 0;
 		let deletions = 0;
+		let hunks: FileChange["hunks"] = [];
 		if (before !== null && after !== null) {
-			for (const h of lineChanges(before, after)) {
+			hunks = lineChanges(before, after);
+			for (const h of hunks) {
 				additions += h.added.length;
 				deletions += h.removed.length;
 			}
 		} else {
 			additions = after?.split("\n").length ?? 0;
 			deletions = before?.split("\n").length ?? 0;
+			if (after !== null) hunks = [{ start: 1, removed: [], added: after.split("\n") }];
 		}
-		changes.push({ path, status, symbols: touchedSymbols(path, before, after), additions, deletions });
+		changes.push({ path, status, symbols: touchedSymbols(path, before, after), additions, deletions, hunks: truncateHunks(hunks) });
 	}
 	return changes;
 }
