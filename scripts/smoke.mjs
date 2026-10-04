@@ -39,7 +39,15 @@ async function call(path, body, key) {
   return json;
 }
 
-const sh = (cmd, cwd) => execSync(cmd, { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" });
+// Clone URLs carry short-lived repo tokens: keep them out of error messages.
+const redact = (text) => String(text).replace(/:\/\/[^@\s/]+@/g, "://***@");
+function sh(cmd, cwd) {
+  try {
+    return execSync(cmd, { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" });
+  } catch (err) {
+    throw new Error(redact(`${err.message}\n${err.stderr ?? ""}`));
+  }
+}
 
 function demoFiles(root = demo, out = {}) {
   for (const entry of readdirSync(root)) {
@@ -64,12 +72,12 @@ async function deleteProject(projectSlug) {
 async function agent(callsign, projectSlug = slug) {
   const { key, agent } = await call(`/api/p/${projectSlug}/join`, { callsign, kind: "other", model: "scripted" }, admin);
   const tool = (name, args) => call(`/api/p/${projectSlug}/agent/${name}`, args, key);
-  return { key, agent, tool };
+  return { key, agent, tool, projectSlug };
 }
 
 async function fly(a, intent) {
   const t = await a.tool("take_off", { intent });
-  const dir = join(work, t.flight.code.toLowerCase());
+  const dir = join(work, `${a.projectSlug}-${t.flight.code.toLowerCase()}`);
   sh(`git clone -q ${t.workspace.cloneUrl} ${dir}`);
   sh(`git remote add upstream ${t.upstream.cloneUrl}`, dir);
   sh(`git config user.name ${a.agent.callsign} && git config user.email ${a.agent.callsign.toLowerCase()}@agents.contrail.dev`, dir);
