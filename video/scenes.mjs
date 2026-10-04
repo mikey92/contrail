@@ -520,13 +520,13 @@ const scenes = {
 	},
 
 	"11b-ramda": {
-		// The real-codebase run: the planned take-off first, then a landing's test report, then the
-		// load-test comparison.
+		// The real-codebase run: the planned take-off (in slow motion), the rest of the run fast, a
+		// landing's test report, then the load-test comparison.
 		url: (s) =>
 			replay("ramda", "ramda.jsonl.gz", RAMDA.from, {
 				pins: [
-					[RAMDA.planned - 1.5, cue(s, "First, the tower plans") - 0.5],
-					[RAMDA.planned + 0.5, cue(s, "so the second one stays")],
+					[RAMDA.planned - 0.3, cue(s, "dispatches only work") + 0.2],
+					[RAMDA.planned + 0.5, cue(s, "so the second one stays") - 0.7],
 					[RAMDA.landed, cue(s, "Then every landing") - 0.6],
 					[RAMDA.end, cue(s, "in the hundred-agent load test") - 0.4],
 				],
@@ -538,18 +538,20 @@ const scenes = {
 			await spotlight(page, '[data-group="source/"]', { ms: 2600, pad: 2 });
 			await t.at(cue(s, "its own suite") - 0.2);
 			await spotlight(page, '[data-group="test/"]', { ms: 2600, pad: 2 });
-			await t.at(cue(s, "so the second one stays") - 0.2);
+			// Zoom in on clamp before the planner routes around it, so its flash is seen up close.
+			await t.at(cue(s, "dispatches only work") - 1.6);
 			const clamp = await boxOf(page, '[data-path="source/clamp.js"]');
 			await camera(page, { x: clamp.x - 420, y: clamp.y - 260, width: clamp.width + 840, height: clamp.height + 520 });
-			await t.at(cue(s, "while other work flies"));
-			await camera(page, null, { ms: 1000 });
-			await page.waitForTimeout(1050);
-			await spotlight(page, ".feed .ev-flight-planned", { ms: 3200, pad: 4, color: "#38bdf8" });
-			await t.at(cue(s, "Then every landing") - 0.2);
+			await t.at(cue(s, "so the second one stays") - 0.6);
+			await camera(page, null, { ms: 900 });
+			await page.waitForTimeout(950);
+			await spotlight(page, ".feed .ev-flight-planned", { ms: 1800, pad: 4, color: "#38bdf8" });
+			await t.at(cue(s, "Then every landing") - 1.9);
 			await click(page, '.tabs button:has-text("Flights")');
-			await page.waitForTimeout(500);
+			await page.waitForTimeout(250);
 			await click(page, page.locator(".flights .fcard", { hasText: RAMDA.flight }).first());
 			await t.at(cue(s, "Ramda's entire test suite"));
+			await page.locator(".drawer section.landing.landed").first().scrollIntoViewIfNeeded().catch(() => {});
 			await spotlight(page, ".drawer section.landing.landed .tests", { ms: 3600, pad: 6, color: "#4ade80" });
 			await t.at(cue(s, "in the hundred-agent load test") - 0.6);
 			await click(page, ".drawer .close");
