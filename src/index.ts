@@ -85,6 +85,12 @@ app.get("/api/p/:slug/flights/:ref", async (c) => {
 	return c.json(await tower(c.env, slug).flightDetail(c.req.param("ref")));
 });
 
+app.get("/api/p/:slug/events", async (c) => {
+	const slug = c.req.param("slug");
+	if (!(await canView(c, slug))) return c.json({ error: "not found" }, 404);
+	return c.json({ events: await tower(c.env, slug).eventLog({ type: c.req.query("type"), limit: Number(c.req.query("limit") ?? 200) }) });
+});
+
 app.get("/api/p/:slug/why", async (c) => {
 	const slug = c.req.param("slug");
 	if (!(await canView(c, slug))) return c.json({ error: "not found" }, 404);

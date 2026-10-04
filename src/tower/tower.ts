@@ -581,6 +581,7 @@ export class Tower extends DurableObject<Env> {
 			this.sql.exec("UPDATE intents SET status = 'open', flight_id = NULL WHERE id = ?", intent.id);
 			this.patch("flight", this.flightById(flightId));
 			this.patch("intent", this.intentById(intent.id));
+			this.addContrail(flightId, agentId, "note", `Aborted on the ground: ${errorMessage(err)}`);
 			this.emit("flight.aborted", `${code} aborted on the ground: ${errorMessage(err)}`, { flightId, agentId });
 			throw err;
 		}
@@ -1093,10 +1094,11 @@ export class Tower extends DurableObject<Env> {
 		for (const f of active) {
 			const held = this.rows<{ target: string }>("SELECT target FROM clearances WHERE flight_id = ?", f.id).map((r) => r.target);
 			const hits = changedTargets.filter((t) => held.some((h) => targetsOverlap(h, t)));
-			const fileHits = f.touched.filter((p) => changedPaths.has(p));
-			const sameFiles = held.map((h) => parseTarget(h).path).filter((p) => changedPaths.has(p));
-			if (hits.length === 0 && fileHits.length === 0 && sameFiles.length === 0) continue;
-			const what = hits.length ? hits.join(", ") : [...new Set([...fileHits, ...sameFiles])].join(", ");
+			// Symbol-level overlap always matters; a shared file only matters to a flight that already
+			// failed to land (it must rebase anyway). Parallel appends to one file are not turbulence.
+			const fileHits = f.status === "diverted" ? f.touched.filter((p) => changedPaths.has(p)) : [];
+			if (hits.length === 0 && fileHits.length === 0) continue;
+			const what = hits.length ? hits.join(", ") : fileHits.join(", ");
 			this.sendRadio(
 				f.id,
 				"turbulence",
@@ -1245,6 +1247,22 @@ export class Tower extends DurableObject<Env> {
 				unioned: stats.unioned ?? 0,
 			},
 		};
+	}
+
+	async eventLog(input: { type?: string; limit?: number }): Promise<RadarEvent[]> {
+		const limit = Math.min(1000, input.limit ?? 200);
+		const rows = input.type
+			? this.rows("SELECT * FROM events WHERE type = ? ORDER BY seq DESC LIMIT ?", input.type, limit)
+			: this.rows("SELECT * FROM events ORDER BY seq DESC LIMIT ?", limit);
+		return rows.map((r) => ({
+			seq: r.seq as number,
+			at: r.at as number,
+			type: r.type as string,
+			flightId: (r.flight_id as string) ?? undefined,
+			agentId: (r.agent_id as string) ?? undefined,
+			text: r.text as string,
+			data: json(r.data as string, undefined),
+		}));
 	}
 
 	async contrailFor(flightId: string): Promise<ContrailEntry[]> {
