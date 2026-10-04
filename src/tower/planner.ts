@@ -90,6 +90,16 @@ export interface AirTarget {
 	flightId: string;
 }
 
+/** The most flights in the air that touch any one of the targets. */
+export function crowding(targets: string[], air: AirTarget[]): number {
+	let most = 0;
+	for (const target of targets) {
+		const flights = new Set(air.filter((a) => targetsOverlap(target, a.target)).map((a) => a.flightId));
+		most = Math.max(most, flights.size);
+	}
+	return most;
+}
+
 /** The first predicted target that overlaps code in the air, with what it overlaps. */
 export function firstCollision(predicted: string[], air: AirTarget[]): { target: string; with: AirTarget } | null {
 	for (const target of predicted) {

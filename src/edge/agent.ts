@@ -175,6 +175,7 @@ export class EdgeAgent extends DurableObject<Env> {
 		}
 		const res = await this.tower(config.slug).takeOff(config.agentId, {});
 		if ("idle" in res) {
+			if (/lined up/.test(res.message)) return 2500 + Math.floor(Math.random() * 2500);
 			if (/blocked/.test(res.message)) return 15_000;
 			state.phase = "done";
 			return 0;

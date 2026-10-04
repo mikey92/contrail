@@ -30,7 +30,7 @@ import type {
 import { callsignFor, colorFor, errorMessage, json, now, randomId, randomToken, repoSafe, sha256, sleep } from "../util";
 import { PROTOCOL, workspaceInstructions } from "./briefing";
 import { findCollisions, normalizeTarget, parseTarget, targetsOverlap } from "./clearance";
-import { type AirTarget, firstCollision, predictTargets, type SymbolIndex, symbolIndex } from "./planner";
+import { type AirTarget, crowding, firstCollision, predictTargets, type SymbolIndex, symbolIndex } from "./planner";
 import { SCHEMA } from "./schema";
 
 type Row = Record<string, SqlStorageValue>;
@@ -527,10 +527,11 @@ export class Tower extends DurableObject<Env> {
 
 	/**
 	 * The next intent to fly. An explicit pick is taken as is. Otherwise intents go by priority, but one
-	 * whose predicted code is already in the air is passed over for the next one that is clear of it;
-	 * when every open intent collides, the first in line takes off and holds at clearance as before.
+	 * whose predicted code is already in the air is passed over for the next one that is clear of it.
+	 * When every open intent collides, one flight lines up behind each piece of busy code (it holds and
+	 * is cleared the moment that code lands); other agents are told to wait on the ground.
 	 */
-	private nextIntent(intentRef?: string | number | null): Dispatch | null {
+	private nextIntent(intentRef?: string | number | null): Dispatch | { wait: number } | null {
 		const index = symbolIndex(this.meta<TrunkState>("trunk", { head: null, files: [], landedCount: 0 }).files);
 		if (intentRef !== undefined && intentRef !== null && intentRef !== "") {
 			const ref = String(intentRef).replace(/^INT-/i, "");
@@ -543,7 +544,7 @@ export class Tower extends DurableObject<Env> {
 		const planning = this.meta<{ planning?: boolean }>("policy", {}).planning !== false;
 		const air = planning ? this.airspace(index) : [];
 		const deferred: Dispatch["deferred"] = [];
-		let first: Dispatch | null = null;
+		let lineUp: Dispatch | null = null;
 		for (const r of this.rows("SELECT * FROM intents WHERE status = 'open' ORDER BY priority DESC, seq ASC")) {
 			const intent = this.toIntent(r);
 			const blocked = intent.dependsOn.some((id) => this.row<{ status: string }>("SELECT status FROM intents WHERE id = ?", id)?.status !== "landed");
@@ -551,10 +552,10 @@ export class Tower extends DurableObject<Env> {
 			const expected = predictTargets(intent, index);
 			const collision = firstCollision(expected, air);
 			if (!collision) return { intent, expected, deferred };
-			first ??= { intent, expected, deferred: [] };
 			deferred.push({ intent, target: collision.target, flightId: collision.with.flightId });
+			if (!lineUp && crowding(expected, air) < 2) lineUp = { intent, expected, deferred: [] };
 		}
-		return first;
+		return lineUp ?? (deferred.length ? { wait: deferred.length } : null);
 	}
 
 	/** Code in the air: what active flights hold or wait for, and what their intents are expected to change. */
@@ -579,11 +580,15 @@ export class Tower extends DurableObject<Env> {
 			throw new Error(`you are already flying ${f.code} (${f.status}); land it or call abort before taking off again`);
 		}
 		const next = this.nextIntent(opts.intent);
-		if (!next) {
+		if (!next || "wait" in next) {
 			const waiting = this.row<{ c: number }>("SELECT COUNT(*) AS c FROM intents WHERE status = 'open'")?.c ?? 0;
 			return {
 				idle: true,
-				message: waiting ? `${waiting} open intent(s) are blocked by dependencies that have not landed yet. Try again shortly.` : "No open intents. Nothing to do — you may stop.",
+				message: next
+					? `${next.wait} open intent(s) touch code that other flights are changing, and a flight is already lined up behind each. Take off again in a few seconds.`
+					: waiting
+						? `${waiting} open intent(s) are blocked by dependencies that have not landed yet. Try again shortly.`
+						: "No open intents. Nothing to do — you may stop.",
 				radio: [],
 			};
 		}

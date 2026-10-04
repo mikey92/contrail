@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TrunkFile } from "../src/shared/types";
-import { codeNames, firstCollision, predictTargets, symbolIndex } from "../src/tower/planner";
+import { codeNames, crowding, firstCollision, predictTargets, symbolIndex } from "../src/tower/planner";
 
 const sym = (name: string, kind: string) => ({ name, kind, start: 1, end: 2 });
 const files: TrunkFile[] = [
@@ -59,5 +59,19 @@ describe("firstCollision", () => {
 		expect(firstCollision(target, [{ target: "src/pricing.js", flightId: "b" }])?.with.flightId).toBe("b");
 		expect(firstCollision(target, [{ target: "src/", flightId: "c" }])?.with.flightId).toBe("c");
 		expect(firstCollision(target, [{ target: "src/pricing.js#subtotal", flightId: "d" }])?.target).toBe("src/pricing.js#subtotal");
+	});
+});
+
+describe("crowding", () => {
+	it("counts the flights on the busiest target", () => {
+		const air = [
+			{ target: "src/counters.js#c00", flightId: "a" },
+			{ target: "src/counters.js#c00", flightId: "b" },
+			{ target: "src/counters.js#c01", flightId: "c" },
+			{ target: "src/counters.js#c01", flightId: "c" },
+		];
+		expect(crowding(["src/counters.js#c00"], air)).toBe(2);
+		expect(crowding(["src/counters.js#c01"], air)).toBe(1);
+		expect(crowding(["src/counters.js#c02"], air)).toBe(0);
 	});
 });

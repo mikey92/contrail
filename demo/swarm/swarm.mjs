@@ -115,6 +115,7 @@ function launch({ kind, model, callsign, key }) {
       "Bash(cat:*)",
       "Bash(cd:*)",
       "Bash(pwd)",
+      "Bash(sleep:*)",
       "Bash(mkdir:*)",
       "Read",
       "Edit",
