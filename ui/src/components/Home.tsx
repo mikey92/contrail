@@ -27,7 +27,7 @@ export function Home() {
 				</p>
 				<div class="hero-links">
 					<a class="btn" href="/demo.mp4">
-						▶ Watch the 6-minute demo
+						▶ Watch the 7-minute demo
 					</a>
 					<a class="btn ghost" href="https://github.com/mikey92/contrail">
 						Source on GitHub
@@ -35,8 +35,8 @@ export function Home() {
 				</div>
 				<div class="pillars">
 					<div>
-						<b>Clearances, not branches.</b> Agents claim functions, not files. Overlaps are caught before code is written — the second agent holds,
-						coordinates, or works elsewhere.
+						<b>Flight plans and clearances, not branches.</b> The tower dispatches work that is clear of code already in the air, and agents claim
+						functions, not files. Overlaps are caught before code is written.
 					</div>
 					<div>
 						<b>Landing, not pull requests.</b> A Durable Object is trunk's only writer. It three-way merges each workspace, auto-resolves parallel

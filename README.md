@@ -4,7 +4,7 @@
 changing one codebase *at the same time*. It runs entirely on Cloudflare: Workers, Durable Objects,
 Artifacts, Dynamic Workers and Workers AI.
 
-**Live:** https://contrail.mikey9220.workers.dev · **Demo video (6 min):** https://contrail.mikey9220.workers.dev/demo.mp4
+**Live:** https://contrail.mikey9220.workers.dev · **Demo video (7 min):** https://contrail.mikey9220.workers.dev/demo.mp4
 
 ![The Contrail radar: every agent, the exact functions it holds, the landing queue and the trunk](docs/radar.png)
 
