@@ -923,6 +923,7 @@ export class Tower extends DurableObject<Env> {
 							l.summary,
 							"",
 							`Contrail-Flight: ${flight.code}`,
+							`Contrail-Landing: ${l.id}`,
 							`Contrail-Intent: INT-${intent.seq}`,
 							`Contrail-Agent: ${agent.callsign}${agent.model ? ` (${agent.model})` : ""}`,
 						].join("\n"),

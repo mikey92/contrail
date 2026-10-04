@@ -33,7 +33,7 @@ import {
 	setMain,
 	writeFlatTree,
 } from "./gitops";
-import { mergeTrees } from "./treemerge";
+import { describeChanges, mergeTrees } from "./treemerge";
 import { verifyTree } from "./verify";
 
 export interface LandingJob {
@@ -147,9 +147,34 @@ export class Runway extends DurableObject<Env> {
 		const r = this.repo!;
 		let tip = start;
 		const outcomes: LandingOutcome[] = [];
+		// Exactly-once: a train interrupted after its push (deploy, eviction) is replayed by the Tower.
+		// Landings already on trunk are recognised by their Contrail-Landing trailer, not merged again.
+		const onTrunk = new Map<string, { oid: string; parent: string }>();
+		for (const c of await log(r, start, 300)) {
+			const id = c.commit.message.match(/^Contrail-Landing: (\S+)$/m)?.[1];
+			if (id) onTrunk.set(id, { oid: c.oid, parent: c.commit.parent[0] });
+		}
 
 		for (const job of jobs) {
 			const t0 = Date.now();
+			const already = onTrunk.get(job.landingId);
+			if (already) {
+				outcomes.push({
+					landingId: job.landingId,
+					status: "landed",
+					forkHead: null,
+					base: already.parent,
+					trunkBefore: already.parent,
+					trunkAfter: already.oid,
+					changes: await describeChanges(r, await listTree(r, already.parent), await listTree(r, already.oid)),
+					conflicts: [],
+					tests: null,
+					unioned: 0,
+					error: null,
+					ms: Date.now() - t0,
+				});
+				continue;
+			}
 			const outcome: LandingOutcome = {
 				landingId: job.landingId,
 				status: "failed",
@@ -184,17 +209,7 @@ export class Runway extends DurableObject<Env> {
 				}
 
 				const tree = await writeFlatTree(r, merged.files);
-				if (tree === (await commitTreeOid(r, tip))) {
-					// Replayed after a restart? If this flight already landed, report that landing.
-					const code = job.message.match(/^Contrail-Flight: (\S+)$/m)?.[1];
-					const prior = code ? (await log(r, tip, 100)).find((c) => c.commit.message.includes(`Contrail-Flight: ${code}\n`)) : undefined;
-					if (prior) {
-						outcome.status = "landed";
-						outcome.trunkAfter = prior.oid;
-						continue;
-					}
-					throw new Error("nothing to land: trunk already contains these changes");
-				}
+				if (tree === (await commitTreeOid(r, tip))) throw new Error("nothing to land: trunk already contains these changes");
 
 				if (!job.skipTests) {
 					const texts = new Map<string, string>();
