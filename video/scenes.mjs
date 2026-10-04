@@ -225,7 +225,8 @@ async function liveReady(page) {
 function slideScene(id) {
 	return {
 		url: () => `${SLIDES}#${id}`,
-		prepare: (page) => page.evaluate(() => document.fonts.ready),
+		// Web fonts, but never wait on a stalled font request for long.
+		prepare: (page) => page.evaluate(() => Promise.race([document.fonts.ready, new Promise((r) => setTimeout(r, 5000))]).then(() => true)),
 		run: async (page, s) => page.evaluate(({ text, duration, offset }) => window.start({ text, duration, offset }), { text: s.text, duration: s.duration, offset: LEAD }),
 	};
 }

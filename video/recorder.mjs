@@ -23,7 +23,7 @@ export async function withBrowser(fn, { width = 1920, height = 1080 } = {}) {
  */
 export async function record(context, { url, out, scene, prepare, width = 1920, height = 1080, fps = 30, settle = 2500 }) {
 	const page = await context.newPage();
-	await page.goto(url, { waitUntil: "networkidle" }).catch(() => {});
+	await page.goto(url, { waitUntil: "networkidle", timeout: 45000 }).catch(() => {});
 	await page.waitForTimeout(settle);
 	if (prepare) await prepare(page);
 	const cdp = await context.newCDPSession(page);
