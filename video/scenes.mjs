@@ -259,10 +259,9 @@ const scenes = {
 			await t.at(cue(s, "Each block is a file"));
 			await spotlight(page, '[data-path="src/cart.js"]', { ms: 2000 });
 			await t.at(cue(s, "each band inside it"));
-			await spotlight(page, '[data-target="src/pricing.js#subtotal"]', { ms: 2200, pad: 4 });
+			await spotlight(page, '[data-target="src/cart.js#Cart.add"]', { ms: 2200, pad: 4 });
 			await t.at(cue(s, "A plane is a flight"));
-			const plane = (await page.locator('[data-flight="FL-005"]').count()) ? '[data-flight="FL-005"]' : ".plane";
-			await spotlight(page, plane, { ms: 2600, pad: 16 });
+			await spotlight(page, '[data-target="src/catalog.js#search"]', { ms: 2800, pad: 10 });
 			await t.at(cue(s, "Up top, the traffic") - 1.1);
 			await camera(page, null, { ms: 1000 });
 			await t.at(cue(s, "Up top, the traffic"));
