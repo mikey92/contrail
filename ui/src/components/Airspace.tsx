@@ -226,7 +226,7 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 						</g>
 					))}
 					{fileBoxes.map((f) => (
-						<g key={f.path}>
+						<g key={f.path} data-path={f.path}>
 							<rect x={f.x} y={f.y} width={f.w} height={f.h} rx={5} class="file" />
 							{f.w > 40 && (
 								<text x={f.x + 6} y={f.y + 13} class="file-label">
@@ -235,7 +235,7 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 								</text>
 							)}
 							{f.bands.map((b) => (
-								<g key={b.target} class="band-g" onMouseEnter={() => setHover(b)} onMouseLeave={() => setHover(null)} onClick={() => onWhy(b.target)}>
+								<g key={b.target} class="band-g" data-target={b.target} onMouseEnter={() => setHover(b)} onMouseLeave={() => setHover(null)} onClick={() => onWhy(b.target)}>
 									<rect x={b.x} y={b.y} width={b.w} height={b.h} rx={2} class={`band band-${b.kind}`} />
 									{b.h >= 11 && b.w > 50 && !(b.kind === "class" && f.bands.some((m) => m.depth === 1 && m.target.startsWith(`${b.target}.`) && m.y - b.y < 12)) && (
 										<text x={b.x + 5} y={b.y + Math.min(b.h / 2 + 4, 12)} class="band-label">
@@ -303,6 +303,7 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 				return (
 					<div
 						key={f.id}
+						data-flight={f.code}
 						class={`plane ${f.status} ${selected === f.id ? "selected" : ""}`}
 						style={{ transform: `translate(${p.x}px, ${p.y}px)`, "--c": agent?.color ?? "#e2e8f0" } as any}
 						onClick={() => onSelect(f.id)}

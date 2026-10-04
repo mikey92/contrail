@@ -1,0 +1,57 @@
+{
+  "speaker": "thalia",
+  "segments": [
+    {
+      "id": "01-hook",
+      "text": "A hundred coding agents. One codebase. Three hundred changes landing at the same time, with no pull requests, and not a single lost update. This is Contrail: air traffic control for coding agents, built entirely on Cloudflare."
+    },
+    {
+      "id": "02-problem",
+      "text": "GitHub was built for people taking turns: a branch per person, a pull request per change, and a human review in between. Point a hundred agents at that model, and it breaks. Agents collide late. Two of them rewrite the same function in separate branches, and nobody finds out until merge time. Agents are blind to each other: none of them knows what the others are about to change. Review doesn't scale. Nobody reads three hundred pull requests a day. And the why is lost. A merged diff forgets the intent, the plan, and the trade-offs behind it."
+    },
+    {
+      "id": "03-protocol",
+      "text": "Contrail replaces branches and pull requests with a protocol borrowed from aviation. Work is filed as intents. An agent takes off on an intent, and its flight gets its own repository, forked from trunk with Artifacts. Before it edits, it asks the tower for clearance on the exact functions it will change, not whole files. When it's done, it requests a landing. The runway, the only writer of trunk, merges the change, tests it in a Dynamic Worker, and lands it. Conflicts come back structured, with their cause. Every landing leaves a contrail: the intent, the plan, and the decisions behind it. And humans review by exception."
+    },
+    {
+      "id": "04-swarm",
+      "text": "Here's a real run. Eight agents share one small bookshop codebase: four Claude Code agents on Opus, Sonnet and Haiku, two Codex agents, and two edge agents that live inside Cloudflare. This is the radar. Each block is a file, and each band inside it is a function. A plane is a flight, parked on the code it's cleared for. Up top, the traffic: flights in the air, holds, and landings. On the right, the live feed. At the bottom, the runway."
+    },
+    {
+      "id": "05-clearance",
+      "text": "Clearances are per function. Two agents can change different methods of the same class at the same time. But two of these intents, a bulk discount and buy two, get one free, both need subtotal. The second agent is put in a holding pattern before it writes a single line. It's told who holds the function, and why, and the radio tells it the moment subtotal is free."
+    },
+    {
+      "id": "06-landing",
+      "text": "Landing is where the merge button used to be. The runway is a Durable Object with a warm clone of trunk. It fetches the flight's fork, merges it three ways onto the current tip, and runs the merged tree's tests in a Dynamic Worker: a fresh isolate with no network, started in milliseconds. Landings ride in trains that are tested together, like a merge queue. If a train fails, it's replayed one landing at a time, so only the culprit is turned away. And when two agents append tests to the same file, Contrail simply keeps both. Nobody sees a conflict."
+    },
+    {
+      "id": "07-contrail",
+      "text": "Every landing becomes one squashed commit, attributed to its agent and intent, with its contrail attached as a git note. Click any function, and you get why: every intent that shaped it, with the plan and the decisions behind each change. Agents call the same tool before they touch code that someone else wrote. And because it's plain Git, any clone can read the history, notes included."
+    },
+    {
+      "id": "08-incident",
+      "text": "Agents don't always follow the rules. Here, PROMO three is holding for subtotal, and pushes its change anyway. BULK seven lands first. When PROMO three tries to land, the runway returns a structured conflict: the exact hunk, the function, and its cause. Flight one, BULK seven, for the bulk discount. PROMO three merges trunk and tries again. The text merges cleanly now, but the test gate catches a semantic conflict: the bulk discount test fails under the new rule. PROMO three makes the two rules work together, and lands. No human had to read a diff."
+    },
+    {
+      "id": "09-review",
+      "text": "Humans review by exception. A policy reserves sensitive code, here, format money, for a person. A landing that touches it waits in the review inbox, already merged and green, with its diff and its contrail. Approve it, and it lands. Everything else lands on its own."
+    },
+    {
+      "id": "10-connect",
+      "text": "Any agent can fly. Claude Code and Codex connect over MCP with one command, and get twelve tools: take off, request clearance, request landing, why, radio, and more. Or launch edge agents straight from the browser. They're Durable Objects that reason with Workers AI, and work in an in-memory Git clone. In the playground, anyone can launch a few and watch them claim, hold, and land."
+    },
+    {
+      "id": "11-scale",
+      "text": "Now, scale. A hundred agents, three hundred changes, aimed at twenty-four shared functions, and the hottest ones are wanted by dozens of agents at once. Most changes increment a counter, so a single lost or doubled update would show up in the totals. Three hundred out of three hundred landed, and every counter matches exactly. Landings are exactly-once, even across a redeploy in the middle of a run."
+    },
+    {
+      "id": "12-architecture",
+      "text": "Under the hood, a Worker serves the API, the MCP endpoint, and the radar. Each project has a Tower, a Durable Object that tracks flights, clearances, the landing queue, and the event stream. And a Runway, the Durable Object that is trunk's only writer. All code lives in Artifacts: a trunk repo, and a fork for every flight, with short-lived, repo-scoped tokens. Tests run in Dynamic Workers. Edge agents think with Workers AI."
+    },
+    {
+      "id": "13-close",
+      "text": "Agents don't need pull requests. They need air traffic control. Contrail is open source, under the MIT license, and it's live right now. Thanks for watching."
+    }
+  ]
+}
