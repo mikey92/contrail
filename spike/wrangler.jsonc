@@ -1,0 +1,13 @@
+{
+	"$schema": "../node_modules/wrangler/config-schema.json",
+	"name": "contrail-spike",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-10-01",
+	"compatibility_flags": ["nodejs_compat"],
+	"artifacts": [{ "binding": "ARTIFACTS", "namespace": "contrail-spike" }],
+	"worker_loaders": [{ "binding": "LOADER" }],
+	"durable_objects": { "bindings": [{ "name": "RUNWAY", "class_name": "Runway" }] },
+	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["Runway"] }],
+	"limits": { "cpu_ms": 120000 },
+	"observability": { "enabled": true }
+}
