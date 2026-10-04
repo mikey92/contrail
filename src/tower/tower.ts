@@ -76,6 +76,11 @@ export interface RadioMessage {
 	at: number;
 }
 
+interface Policy {
+	review: string[];
+	planning: boolean;
+}
+
 interface Dispatch {
 	intent: Intent;
 	expected: string[];
@@ -535,7 +540,8 @@ export class Tower extends DurableObject<Env> {
 			if (intent.status !== "open") throw new Error(`INT-${intent.seq} is ${intent.status}`);
 			return { intent, expected: predictTargets(intent, index), deferred: [] };
 		}
-		const air = this.airspace(index);
+		const planning = this.meta<{ planning?: boolean }>("policy", {}).planning !== false;
+		const air = planning ? this.airspace(index) : [];
 		const deferred: Dispatch["deferred"] = [];
 		let first: Dispatch | null = null;
 		for (const r of this.rows("SELECT * FROM intents WHERE status = 'open' ORDER BY priority DESC, seq ASC")) {
@@ -1428,15 +1434,21 @@ export class Tower extends DurableObject<Env> {
 
 	// ───────────────────────── review by exception ─────────────────────────
 
-	async setPolicy(policy: { review?: string[] }): Promise<{ review: string[] }> {
-		const review = (policy.review ?? []).map(normalizeTarget).filter(Boolean).slice(0, 100);
-		this.setMeta("policy", { review });
-		this.emit("policy.updated", review.length ? `Human review required for: ${review.join(", ")}` : "No human review required: every green landing lands");
-		return { review };
+	/** review: targets whose landings wait for a human. planning: dispatch around code in the air (default on). */
+	async setPolicy(policy: { review?: string[]; planning?: boolean }): Promise<Policy> {
+		const current = await this.policy();
+		const review = policy.review === undefined ? current.review : policy.review.map(normalizeTarget).filter(Boolean).slice(0, 100);
+		const planning = policy.planning ?? current.planning;
+		this.setMeta("policy", { review, planning });
+		if (policy.review !== undefined)
+			this.emit("policy.updated", review.length ? `Human review required for: ${review.join(", ")}` : "No human review required: every green landing lands");
+		if (planning !== current.planning) this.emit("policy.updated", planning ? "Flight planning on" : "Flight planning off: intents fly in priority order");
+		return { review, planning };
 	}
 
-	async policy(): Promise<{ review: string[] }> {
-		return { review: this.meta<{ review?: string[] }>("policy", {}).review ?? [] };
+	async policy(): Promise<Policy> {
+		const p = this.meta<{ review?: string[]; planning?: boolean }>("policy", {});
+		return { review: p.review ?? [], planning: p.planning !== false };
 	}
 
 	async reviewLanding(input: { landingId: string; decision: "approve" | "reject"; comment?: string; reviewer?: string }): Promise<Landing> {
