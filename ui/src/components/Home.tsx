@@ -1,5 +1,5 @@
 import { useEffect, useState } from "preact/hooks";
-import type { ProjectInfo } from "../../../src/shared/types";
+import type { CenterInfo, ProjectInfo } from "../../../src/shared/types";
 import { Logo } from "./Icons";
 
 // Airspaces in the order a first-time visitor should see them, with what makes each one worth opening.
@@ -41,14 +41,20 @@ function Play() {
 
 export function Home() {
 	const [projects, setProjects] = useState<ProjectInfo[] | null>(null);
+	const [centers, setCenters] = useState<CenterInfo[]>([]);
 	useEffect(() => {
 		fetch("/api/projects")
 			.then((r) => r.json())
 			.then((d) => setProjects(d.projects ?? []))
 			.catch(() => setProjects([]));
+		fetch("/api/centers")
+			.then((r) => r.json())
+			.then((d) => setCenters(d.centers ?? []))
+			.catch(() => {});
 	}, []);
 	const rank = (slug: string) => (ORDER.includes(slug) ? ORDER.indexOf(slug) : ORDER.length);
-	const sorted = [...(projects ?? [])].filter((p) => !FOLDED.has(p.slug)).sort((a, b) => rank(a.slug) - rank(b.slug) || a.createdAt - b.createdAt);
+	// Sectors are shown inside their monorepo's card, not one by one.
+	const sorted = [...(projects ?? [])].filter((p) => !FOLDED.has(p.slug) && !p.center).sort((a, b) => rank(a.slug) - rank(b.slug) || a.createdAt - b.createdAt);
 
 	return (
 		<div class="home">
@@ -149,6 +155,22 @@ export function Home() {
 				{projects === null && <div class="muted">Loading…</div>}
 				{projects?.length === 0 && <div class="muted">No public projects yet.</div>}
 				<div class="cards">
+					{centers.map((c) => (
+						<div key={c.slug} class="pcard">
+							<div class="pcard-top">
+								<a class="pcard-name" href={`/c/${c.slug}`}>
+									{c.name}
+								</a>
+								<span class="badge load">Sectors</span>
+							</div>
+							<p>{c.description}</p>
+							<div class="pcard-links">
+								<a class="open" href={`/c/${c.slug}`}>
+									See the {c.sectors.length} sectors →
+								</a>
+							</div>
+						</div>
+					))}
 					{sorted.map((p) => {
 						const badge = BADGE[p.slug];
 						return (
