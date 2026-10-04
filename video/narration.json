@@ -23,7 +23,7 @@
     },
     {
       "id": "05-clearance",
-      "text": "Clearances are per function. Two agents can change different methods of the same class at the same time. But two of these intents, a bulk discount and buy two, get one free, both need subtotal. The second agent is put in a holding pattern before it writes a single line. It's told who holds the function, and why, and the radio tells it the moment subtotal is free."
+      "text": "Clearances are per function, so two agents can work in the same file at the same time. But two of these intents, a bulk discount and buy two, get one free, both need subtotal. The second agent is put in a holding pattern before it writes a single line. It's told who holds the function, and why, and the radio tells it the moment subtotal is free."
     },
     {
       "id": "06-landing",

@@ -256,16 +256,16 @@
   }
 
   let timer = null;
-  // start({ text, duration }): reveals each element when the narration reaches its data-say phrase
-  // (or at data-at seconds). Without a narration, phrases are spaced evenly.
-  window.start = ({ text = "", duration = 8, lead = 0.25 } = {}) => {
+  // start({ text, duration, offset }): reveals each element when the narration (starting `offset`
+  // seconds in) reaches its data-say phrase, or at data-at seconds. Without a narration, evenly.
+  window.start = ({ text = "", duration = 8, lead = 0.25, offset = 0 } = {}) => {
     const section = document.querySelector("section.on");
     const items = [...section.querySelectorAll(".rv")];
     const lower = text.toLowerCase();
     const plan = items.map((el, i) => {
       if (el.dataset.at !== undefined) return { el, at: Number(el.dataset.at) };
       const idx = el.dataset.say ? lower.indexOf(el.dataset.say.toLowerCase()) : -1;
-      const at = idx >= 0 ? (duration * idx) / Math.max(1, text.length) - lead : (duration * i) / items.length;
+      const at = offset + (idx >= 0 ? (duration * idx) / Math.max(1, text.length) - lead : (duration * i) / items.length);
       return { el, at: Math.max(0, at) };
     });
     const t0 = performance.now();

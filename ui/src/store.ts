@@ -157,10 +157,21 @@ export function useRadar(slug: string, fixture: string | null) {
 					// Fast-forward everything before `from` without animation.
 					for (const l of lines) if (l.t <= from) apply(l.m);
 					dispatch({ type: "connected", value: true });
+					// `&map=21.3:3,35:8.5` pins recorded seconds to playback seconds (piecewise linear, then `speed`).
+					const pins = [[from, 0], ...(params.get("map") ?? "").split(",").filter(Boolean).map((p) => p.split(":").map((x) => Number(x) * 1000))];
+					const playbackAt = (t: number) => {
+						for (let i = 1; i < pins.length; i++) {
+							const [a, pa] = pins[i - 1];
+							const [b, pb] = pins[i];
+							if (t <= b) return pa + ((t - a) * (pb - pa)) / Math.max(1, b - a);
+						}
+						const [a, pa] = pins[pins.length - 1];
+						return pa + (t - a) / speed;
+					};
 					const play = () => {
 						for (const l of lines) {
 							if (l.t <= from) continue;
-							timers.push(setTimeout(() => !cancelled && apply(l.m), (l.t - from) / speed) as unknown as number);
+							timers.push(setTimeout(() => !cancelled && apply(l.m), playbackAt(l.t)) as unknown as number);
 						}
 					};
 					// `&paused` waits for window.__replayStart() (used when filming).

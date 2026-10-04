@@ -18,13 +18,14 @@ export async function withBrowser(fn, { width = 1920, height = 1080 } = {}) {
 }
 
 /**
- * Records `scene(page)` into `out` (mp4). The scene receives the page after it has loaded `url`.
- * Returns the duration in seconds.
+ * Records `scene(page)` into `out` (mp4). The scene receives the page after it has loaded `url` and
+ * `prepare(page)` (not filmed) has run. Returns the duration in seconds.
  */
-export async function record(context, { url, out, scene, width = 1920, height = 1080, fps = 30, settle = 2500 }) {
+export async function record(context, { url, out, scene, prepare, width = 1920, height = 1080, fps = 30, settle = 2500 }) {
 	const page = await context.newPage();
 	await page.goto(url, { waitUntil: "networkidle" }).catch(() => {});
 	await page.waitForTimeout(settle);
+	if (prepare) await prepare(page);
 	const cdp = await context.newCDPSession(page);
 	const dir = mkdtempSync(join(tmpdir(), "contrail-rec-"));
 	const frames = [];
