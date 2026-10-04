@@ -157,10 +157,15 @@ export function useRadar(slug: string, fixture: string | null) {
 					// Fast-forward everything before `from` without animation.
 					for (const l of lines) if (l.t <= from) apply(l.m);
 					dispatch({ type: "connected", value: true });
-					for (const l of lines) {
-						if (l.t <= from) continue;
-						timers.push(setTimeout(() => !cancelled && apply(l.m), (l.t - from) / speed) as unknown as number);
-					}
+					const play = () => {
+						for (const l of lines) {
+							if (l.t <= from) continue;
+							timers.push(setTimeout(() => !cancelled && apply(l.m), (l.t - from) / speed) as unknown as number);
+						}
+					};
+					// `&paused` waits for window.__replayStart() (used when filming).
+					if (params.has("paused")) (window as any).__replayStart = play;
+					else play();
 				});
 			return () => {
 				cancelled = true;

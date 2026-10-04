@@ -31,7 +31,7 @@ export class Registry extends DurableObject<Env> {
 
 	async list(): Promise<ProjectInfo[]> {
 		return this.sql
-			.exec("SELECT info FROM projects ORDER BY created_at DESC")
+			.exec("SELECT info FROM projects ORDER BY created_at")
 			.toArray()
 			.map((r) => json<ProjectInfo>((r as { info: string }).info, null as unknown as ProjectInfo));
 	}
