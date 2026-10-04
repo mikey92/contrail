@@ -236,7 +236,7 @@ function slideScene(id) {
 const STRESS_END = 406;
 const scenes = {
 	"01-hook": {
-		url: () => replay("stress", "stress.jsonl", 24, { speed: 3 }),
+		url: () => replay("stress", "stress.jsonl.gz", 24, { speed: 3 }),
 		prepare: replayReady,
 		run: async (page, s) => {
 			await startReplay(page);
@@ -249,7 +249,7 @@ const scenes = {
 	"03-protocol": slideScene("protocol"),
 
 	"04-swarm": {
-		url: (s) => replay("bookshop", "bookshop.jsonl", 8, { speed: (54 - 8) / s.total }),
+		url: (s) => replay("bookshop", "bookshop.jsonl.gz", 8, { speed: (54 - 8) / s.total }),
 		prepare: replayReady,
 		run: async (page, s, t) => {
 			await startReplay(page);
@@ -278,7 +278,7 @@ const scenes = {
 
 	"05-clearance": {
 		url: (s) =>
-			replay("bookshop", "bookshop.jsonl", 46, {
+			replay("bookshop", "bookshop.jsonl.gz", 46, {
 				pins: [
 					[47.7, cue(s, "both need subtotal") - 0.8],
 					[51.9, cue(s, "put in a holding pattern") - 0.2],
@@ -300,7 +300,7 @@ const scenes = {
 
 	"06-landing": {
 		url: (s) =>
-			replay("bookshop", "bookshop.jsonl", 73, {
+			replay("bookshop", "bookshop.jsonl.gz", 73, {
 				pins: [
 					[107.0, cue(s, "That matters") + 0.4],
 					[108.1, cue(s, "but failed on the merged tree")],
@@ -381,7 +381,7 @@ const scenes = {
 
 	"08-incident": {
 		url: (s) =>
-			replay("incident", "incident.jsonl", 15, {
+			replay("incident", "incident.jsonl.gz", 15, {
 				pins: [
 					[21.3, cue(s, "is holding for subtotal")],
 					[35.0, cue(s, "BULK seven lands first") + 0.3],
@@ -463,7 +463,7 @@ const scenes = {
 	},
 
 	"11-scale": {
-		url: (s) => replay("stress", "stress.jsonl", 8, { speed: (STRESS_END - 8) / (cue(s, "Three hundred out of") - 0.4) }),
+		url: (s) => replay("stress", "stress.jsonl.gz", 8, { speed: (STRESS_END - 8) / (cue(s, "Three hundred out of") - 0.4) }),
 		prepare: replayReady,
 		run: async (page, s, t) => {
 			await startReplay(page);
