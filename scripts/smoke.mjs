@@ -179,10 +179,11 @@ await call(`/api/p/${slug}/policy`, { review: ["src/money.js#formatMoney"] }, ad
 const E = await agent("SMOKE-E");
 const fe = await fly(E, "6");
 await E.tool("request_clearance", { targets: ["src/money.js#formatMoney"], reason: "EUR and JPY" });
+// (function replacer: "$$" in a replacement string would collapse to "$")
 edit(fe.dir, "src/money.js", (s) =>
   s.replace(
     '  return currency === "USD" ? `$${dollars}` : `${dollars} ${currency}`;',
-    '  if (currency === "EUR") return `€${dollars}`;\n  if (currency === "JPY") return `¥${cents}`;\n  return currency === "USD" ? `$${dollars}` : `${dollars} ${currency}`;',
+    () => '  if (currency === "EUR") return `€${dollars}`;\n  if (currency === "JPY") return `¥${cents}`;\n  return currency === "USD" ? `$${dollars}` : `${dollars} ${currency}`;',
   ),
 );
 commitPush(fe.dir, "EUR and JPY");
