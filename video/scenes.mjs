@@ -505,15 +505,22 @@ await withBrowser(async (context) => {
 		}
 		const out = join(OUT, `${s.id}.mp4`);
 		console.log(`${s.id}: ${s.total.toFixed(1)}s → ${out}`);
-		const took = await record(context, {
-			url: scene.url(s),
-			out,
-			prepare: scene.prepare,
-			scene: async (page) => {
-				const t = clock(page);
-				await scene.run(page, s, t);
-				await t.at(s.total);
-			},
+		const take = () =>
+			record(context, {
+				url: scene.url(s),
+				out,
+				prepare: scene.prepare,
+				scene: async (page) => {
+					const t = clock(page);
+					await scene.run(page, s, t);
+					await t.at(s.total);
+				},
+			});
+		// One more take if something flaked (a replay that didn't load, a slow page).
+		const took = await take().catch(async (err) => {
+			console.warn(`  ${s.id} failed (${err.message.split("\n")[0]}), filming it again`);
+			for (const p of context.pages()) await p.close().catch(() => {});
+			return take();
 		});
 		if (Math.abs(took - s.total) > 0.6) console.warn(`  ${s.id} ran ${took.toFixed(1)}s instead of ${s.total.toFixed(1)}s`);
 	}
