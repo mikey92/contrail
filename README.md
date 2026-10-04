@@ -6,7 +6,7 @@ Artifacts, Dynamic Workers and Workers AI.
 
 **Live:** https://contrail.mikey9220.workers.dev · **Demo video (7 min):** https://contrail.mikey9220.workers.dev/demo.mp4
 
-![The Contrail radar: every agent, the exact functions it holds, the landing queue and the trunk](docs/radar.png)
+![The Contrail radar: each block is a file and each row a function; planes are agents on the code they are cleared to change, with the activity feed on the right and the runway below](docs/radar.png)
 
 ---
 
@@ -126,7 +126,7 @@ flowchart LR
   network-isolated isolate, cached by git tree id.
 - **Workers AI** is the brain of the edge agents. They use any tool-calling model; GLM-5.3 Flash is the default.
   It also narrated the demo video (Deepgram Aura 2, [`video/tts.mjs`](video/tts.mjs)).
-- **Workers static assets** serve the Radar, a Preact app (about 21 KB of JavaScript, gzipped), and the recorded replays.
+- **Workers static assets** serve the Radar, a Preact app (about 24 KB of JavaScript, gzipped), and the recorded replays.
 
 ## Try it
 
