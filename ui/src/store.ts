@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useRef } from "preact/hooks";
+import { useEffect, useReducer, useRef, useState } from "preact/hooks";
 import type { Agent, Clearance, ContrailEntry, Flight, Intent, Landing, RadarEvent, RadarSnapshot, TrunkState } from "../../src/shared/types";
 
 export type Stats = RadarSnapshot["stats"];
@@ -15,6 +15,8 @@ export interface RadarState {
 	connected: boolean;
 	/** The project does not exist (or is private). */
 	missing: boolean;
+	/** A replay or fixture that could not be fetched or read. */
+	failed: boolean;
 	project: RadarSnapshot["project"] | null;
 	agents: Record<string, Agent>;
 	intents: Record<string, Intent>;
@@ -23,6 +25,10 @@ export interface RadarState {
 	landings: Record<string, Landing>;
 	trunk: TrunkState;
 	events: RadarEvent[];
+	/** The latest key events (KEY_EVENTS), kept apart so a flood of routine updates can't push them out. */
+	keyEvents: RadarEvent[];
+	/** Routine events received so far: what the feed hides by default. */
+	routine: number;
 	stats: Stats;
 	flashes: Flash[];
 	contrail: ContrailEntry[];
@@ -34,12 +40,18 @@ type Action =
 	| { type: "event"; event: RadarEvent }
 	| { type: "connected"; value: boolean }
 	| { type: "missing" }
-	| { type: "expire" };
+	| { type: "failed" }
+	| { type: "expire" }
+	/** Back to an empty radar, before a replay seeks backwards. */
+	| { type: "reset" }
+	/** Several actions, one render. `quiet` drops their flashes (a replay seeking). */
+	| { type: "batch"; actions: Action[]; quiet?: boolean };
 
 const empty: RadarState = {
 	ready: false,
 	connected: false,
 	missing: false,
+	failed: false,
 	project: null,
 	agents: {},
 	intents: {},
@@ -48,12 +60,34 @@ const empty: RadarState = {
 	landings: {},
 	trunk: { head: null, files: [], landedCount: 0 },
 	events: [],
+	keyEvents: [],
+	routine: 0,
 	stats: { repos: 0, landings: 0, conflictsPrevented: 0, conflictsResolved: 0, unioned: 0, planned: 0, holdMs: 0 },
 	flashes: [],
 	contrail: [],
 };
 
 const byId = <T extends { id: string }>(list: T[]) => Object.fromEntries(list.map((x) => [x.id, x]));
+
+/** What the feed shows by default: outcomes, waits, plans and decisions, not every taxi, take-off and alert. */
+const KEY_EVENTS = new Set([
+	"landing.landed",
+	"landing.conflict",
+	"landing.failed",
+	"landing.review",
+	"landing.reviewed",
+	"clearance.holding",
+	"flight.planned",
+	"project.reset",
+	"contrail.read",
+	"edge.launched",
+	"agent.joined",
+	"contrail.plan",
+	"contrail.decision",
+	"contrail.note",
+	"radio",
+]);
+const isKeyEvent = (type: string) => KEY_EVENTS.has(type);
 
 // The Tower hands out pastel agent colors; on the light radar each maps to a deeper ink of the same hue.
 const TONES: Record<string, string> = {
@@ -111,6 +145,8 @@ function reducer(state: RadarState, action: Action): RadarState {
 				landings: byId(s.landings),
 				trunk: s.trunk,
 				events: s.events.slice(-300),
+				keyEvents: s.events.filter((e) => isKeyEvent(e.type)).slice(-300),
+				routine: s.events.filter((e) => !isKeyEvent(e.type)).length,
 				stats: s.stats,
 			};
 		}
@@ -138,13 +174,29 @@ function reducer(state: RadarState, action: Action): RadarState {
 			}
 		}
 		case "event": {
-			if (state.events.some((e) => e.seq === action.event.seq)) return state;
-			return { ...state, events: [...state.events.slice(-299), action.event], flashes: [...state.flashes, ...flashesFor(action.event)] };
+			const e = action.event;
+			if (state.events.some((x) => x.seq === e.seq)) return state;
+			const key = isKeyEvent(e.type);
+			return {
+				...state,
+				events: [...state.events.slice(-299), e],
+				keyEvents: key ? [...state.keyEvents.slice(-299), e] : state.keyEvents,
+				routine: key ? state.routine : state.routine + 1,
+				flashes: [...state.flashes, ...flashesFor(e)],
+			};
 		}
 		case "connected":
 			return { ...state, connected: action.value };
 		case "missing":
 			return { ...state, missing: true };
+		case "failed":
+			return { ...state, failed: true };
+		case "reset":
+			return { ...empty, connected: state.connected };
+		case "batch": {
+			const next = action.actions.reduce(reducer, state);
+			return action.quiet ? { ...next, flashes: [] } : next;
+		}
 		case "expire": {
 			const cutoff = Date.now() - 4000;
 			const flashes = state.flashes.filter((f) => f.at > cutoff);
@@ -153,10 +205,157 @@ function reducer(state: RadarState, action: Action): RadarState {
 	}
 }
 
-/** Live state for a project: snapshot over WebSocket, then patches and events; reconnects. */
+/** A line of a recorded radar stream (scripts/tap.mjs): the message `m`, `t` ms after recording began. */
+interface Line {
+	t: number;
+	m: any;
+}
+
+/** A stream message, live or recorded, as a reducer action. */
+function toAction(m: any): Action | null {
+	if (m?.kind === "snapshot") return { type: "snapshot", snapshot: m.snapshot };
+	if (m?.kind === "patch") return { type: "patch", entity: m.entity, value: m.value };
+	if (m?.kind === "event") return { type: "event", event: m.event };
+	return null;
+}
+
+/** In a replay or fixture, the recorded time of the moment on screen: relTime() counts ages back from it. */
+let recordedNow: number | null = null;
+
+/**
+ * Server time at recording time 0. Events carry the server's clock and reach the recorder a few ms later,
+ * so the median of `at - t` over the events estimates it; without events, the snapshot's last event does.
+ */
+function recordingStart(lines: Line[]): number | null {
+	const offsets = lines
+		.filter((l) => l.m?.kind === "event" && typeof l.m.event?.at === "number")
+		.map((l) => l.m.event.at - l.t)
+		.sort((a, b) => a - b);
+	if (offsets.length) return offsets[offsets.length >> 1];
+	const snap = lines.find((l) => l.m?.kind === "snapshot");
+	const last = Math.max(0, ...(snap?.m.snapshot.events ?? []).map((e: RadarEvent) => e.at));
+	return snap && last ? last - snap.t : null;
+}
+
+/**
+ * Plays a recorded radar stream on a clock. Every tick moves recording time on by the elapsed time ×
+ * speed and applies all the lines it passed as one batch: one render per tick, however busy the run.
+ */
+export class Replay {
+	/** Recording time on screen, ms. */
+	t: number;
+	readonly start: number;
+	readonly total: number;
+	speed: number;
+	playing = true;
+	private next = 0;
+	private last = performance.now();
+	private timer: ReturnType<typeof setInterval>;
+	private listeners = new Set<() => void>();
+
+	constructor(
+		private lines: Line[],
+		private dispatch: (action: Action) => void,
+		/** Server time at recording time 0, for recorded ages. */
+		private base: number | null,
+		from: number,
+		speed: number,
+	) {
+		this.start = lines[0].t;
+		this.total = lines[lines.length - 1].t;
+		this.speed = speed;
+		this.t = Math.min(this.total, Math.max(this.start, from));
+		// Everything before `from` at once, without animation.
+		this.advance(true);
+		if (this.ended) this.playing = false;
+		this.timer = setInterval(() => this.tick(), 50);
+	}
+
+	get ended() {
+		return this.next >= this.lines.length;
+	}
+
+	subscribe(fn: () => void) {
+		this.listeners.add(fn);
+		return () => {
+			this.listeners.delete(fn);
+		};
+	}
+
+	/** Play or pause; at the end, play again from the start. */
+	toggle() {
+		if (this.ended) return this.restart();
+		this.playing = !this.playing;
+		this.changed();
+	}
+
+	setSpeed(speed: number) {
+		this.speed = speed;
+		this.changed();
+	}
+
+	restart() {
+		this.playing = true;
+		this.seek(this.start);
+	}
+
+	/** Jumps to recording time `t` without animation: forwards applies the lines in between, backwards rebuilds from the start. */
+	seek(t: number) {
+		this.t = Math.min(this.total, Math.max(this.start, t));
+		const back = this.next > 0 && this.lines[this.next - 1].t > this.t;
+		if (back) this.next = 0;
+		this.advance(true, back);
+		if (this.ended) this.playing = false;
+		this.changed();
+	}
+
+	stop() {
+		clearInterval(this.timer);
+		recordedNow = null;
+	}
+
+	private tick() {
+		const now = performance.now();
+		// A hidden tab ticks about once a second: catch up at most that much at a time.
+		const elapsed = Math.min(1000, now - this.last);
+		this.last = now;
+		if (!this.playing) return;
+		this.t = Math.min(this.total, this.t + elapsed * this.speed);
+		this.advance(false);
+		if (this.ended) this.playing = false;
+		this.changed();
+	}
+
+	/** Applies every line up to the clock in one batch. */
+	private advance(quiet: boolean, reset = false) {
+		const actions: Action[] = reset ? [{ type: "reset" }] : [];
+		while (this.next < this.lines.length && this.lines[this.next].t <= this.t) {
+			const action = toAction(this.lines[this.next++].m);
+			if (action) actions.push(action);
+		}
+		if (actions.length) this.dispatch({ type: "batch", actions, quiet });
+		if (this.base !== null) recordedNow = this.base + this.t;
+	}
+
+	private changed() {
+		for (const fn of this.listeners) fn();
+	}
+}
+
+/** Re-renders the caller when `pick` of the replay changes: the controls follow its clock, the radar only its end. */
+export function useReplay<T>(replay: Replay | null, pick: (r: Replay) => T): T | undefined {
+	const [, rerender] = useState(0);
+	const value = replay ? pick(replay) : undefined;
+	const shown = useRef(value);
+	shown.current = value;
+	useEffect(() => replay?.subscribe(() => pick(replay) !== shown.current && rerender((n) => n + 1)), [replay]);
+	return value;
+}
+
+/** Live state for a project: snapshot over WebSocket, then patches and events; reconnects. Or a recorded run. */
 export function useRadar(slug: string, fixture: string | null) {
 	const [state, dispatch] = useReducer(reducer, empty);
-	const replay = useRef<number | null>(null);
+	const [replay, setReplay] = useState<Replay | null>(null);
 
 	useEffect(() => {
 		const timer = setInterval(() => dispatch({ type: "expire" }), 1000);
@@ -165,68 +364,94 @@ export function useRadar(slug: string, fixture: string | null) {
 
 	useEffect(() => {
 		const params = new URLSearchParams(location.search);
-		// Replays come from this site only (e.g. /replays/ramda.jsonl.gz), never from an arbitrary origin.
 		const replayParam = params.get("replay");
-		const replayUrl = replayParam?.startsWith("/") && !replayParam.startsWith("//") ? replayParam : null;
-		if (replayUrl) {
+		if (replayParam !== null) {
+			// Replays come from this site only (e.g. /replays/ramda.jsonl.gz), never from an arbitrary origin.
+			const replayUrl = replayParam.startsWith("/") && !replayParam.startsWith("//") ? replayParam : null;
 			// Replays a recorded radar stream (scripts/tap.mjs) at `speed`×, starting at `from` seconds.
 			const speed = Number(params.get("speed") ?? 1);
 			const from = Number(params.get("from") ?? 0) * 1000;
 			let cancelled = false;
+			let player: Replay | null = null;
 			const timers: number[] = [];
-			fetch(replayUrl)
+			(replayUrl ? fetch(replayUrl) : Promise.reject(new Error("not a replay on this site")))
+				.then((r) => {
+					if (!r.ok) throw new Error(`HTTP ${r.status}`);
+					return r.arrayBuffer();
+				})
 				// Replays may be stored gzipped (.jsonl.gz) to keep the repository small.
-				.then((r) => r.arrayBuffer())
 				.then((buf) => {
 					const bytes = new Uint8Array(buf);
 					if (bytes[0] !== 0x1f || bytes[1] !== 0x8b) return new TextDecoder().decode(bytes);
 					return new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
 				})
 				.then((text) => {
-					const lines = text.trim().split("\n").map((l) => JSON.parse(l) as { t: number; m: any });
-					const apply = (m: any) => {
-						if (m.kind === "snapshot") dispatch({ type: "snapshot", snapshot: m.snapshot });
-						else if (m.kind === "patch") dispatch({ type: "patch", entity: m.entity, value: m.value });
-						else if (m.kind === "event") dispatch({ type: "event", event: { ...m.event, at: Date.now() } });
-					};
-					// Fast-forward everything before `from` without animation.
-					for (const l of lines) if (l.t <= from) apply(l.m);
+					if (cancelled) return;
+					const lines = text.trim().split("\n").map((l) => JSON.parse(l) as Line);
+					if (!lines.some((l) => l.m?.kind === "snapshot")) throw new Error("no snapshot in the recording");
+					const base = recordingStart(lines);
+					// Filming (video/scenes.mjs): `&paused` waits for window.__replayStart() and `&map` pins recorded
+					// seconds to playback seconds, so each line keeps its own timer, as the video was filmed.
+					if (params.has("paused") || params.has("map")) {
+						const apply = (l: Line) => {
+							if (base !== null) recordedNow = base + l.t;
+							const action = toAction(l.m);
+							if (action) dispatch(action);
+						};
+						// Fast-forward everything before `from` without animation.
+						for (const l of lines) if (l.t <= from) apply(l);
+						dispatch({ type: "connected", value: true });
+						// `&map=21.3:3,35:8.5` pins recorded seconds to playback seconds (piecewise linear, then `speed`).
+						const pins = [[from, 0], ...(params.get("map") ?? "").split(",").filter(Boolean).map((p) => p.split(":").map((x) => Number(x) * 1000))];
+						const playbackAt = (t: number) => {
+							for (let i = 1; i < pins.length; i++) {
+								const [a, pa] = pins[i - 1];
+								const [b, pb] = pins[i];
+								if (t <= b) return pa + ((t - a) * (pb - pa)) / Math.max(1, b - a);
+							}
+							const [a, pa] = pins[pins.length - 1];
+							return pa + (t - a) / speed;
+						};
+						const play = () => {
+							for (const l of lines) {
+								if (l.t <= from) continue;
+								timers.push(setTimeout(() => !cancelled && apply(l), playbackAt(l.t)) as unknown as number);
+							}
+						};
+						if (params.has("paused")) (window as any).__replayStart = play;
+						else play();
+						return;
+					}
 					dispatch({ type: "connected", value: true });
-					// `&map=21.3:3,35:8.5` pins recorded seconds to playback seconds (piecewise linear, then `speed`).
-					const pins = [[from, 0], ...(params.get("map") ?? "").split(",").filter(Boolean).map((p) => p.split(":").map((x) => Number(x) * 1000))];
-					const playbackAt = (t: number) => {
-						for (let i = 1; i < pins.length; i++) {
-							const [a, pa] = pins[i - 1];
-							const [b, pb] = pins[i];
-							if (t <= b) return pa + ((t - a) * (pb - pa)) / Math.max(1, b - a);
-						}
-						const [a, pa] = pins[pins.length - 1];
-						return pa + (t - a) / speed;
-					};
-					const play = () => {
-						for (const l of lines) {
-							if (l.t <= from) continue;
-							timers.push(setTimeout(() => !cancelled && apply(l.m), playbackAt(l.t)) as unknown as number);
-						}
-					};
-					// `&paused` waits for window.__replayStart() (used when filming).
-					if (params.has("paused")) (window as any).__replayStart = play;
-					else play();
-				});
+					player = new Replay(lines, dispatch, base, Number.isFinite(from) ? from : 0, speed > 0 ? speed : 1);
+					setReplay(player);
+				})
+				.catch(() => !cancelled && dispatch({ type: "failed" }));
 			return () => {
 				cancelled = true;
+				player?.stop();
 				for (const t of timers) clearTimeout(t);
+				recordedNow = null;
 			};
 		}
 		if (fixture) {
+			let cancelled = false;
 			fetch(`/fixtures/${fixture}.snapshot.json`)
-				.then((r) => r.json())
-				.then((snapshot) => {
+				.then((r) => {
+					if (!r.ok) throw new Error(`HTTP ${r.status}`);
+					return r.json();
+				})
+				.then((snapshot: RadarSnapshot) => {
+					if (cancelled) return;
+					// A fixture is a moment of a past run: ages count back from its latest change.
+					recordedNow = Math.max(0, ...snapshot.events.map((e) => e.at), ...snapshot.flights.map((f) => f.updatedAt)) || null;
 					dispatch({ type: "snapshot", snapshot });
 					dispatch({ type: "connected", value: true });
-				});
+				})
+				.catch(() => !cancelled && dispatch({ type: "failed" }));
 			return () => {
-				if (replay.current) clearInterval(replay.current);
+				cancelled = true;
+				recordedNow = null;
 			};
 		}
 		let ws: WebSocket | null = null;
@@ -245,10 +470,8 @@ export function useRadar(slug: string, fixture: string | null) {
 			};
 			ws.onmessage = (m) => {
 				if (m.data === "pong") return;
-				const msg = JSON.parse(m.data);
-				if (msg.kind === "snapshot") dispatch({ type: "snapshot", snapshot: msg.snapshot });
-				else if (msg.kind === "patch") dispatch({ type: "patch", entity: msg.entity, value: msg.value });
-				else if (msg.kind === "event") dispatch({ type: "event", event: msg.event });
+				const action = toAction(JSON.parse(m.data));
+				if (action) dispatch(action);
 			};
 			ws.onclose = async () => {
 				clearInterval(ping);
@@ -273,7 +496,7 @@ export function useRadar(slug: string, fixture: string | null) {
 		};
 	}, [slug, fixture]);
 
-	return state;
+	return { state, replay };
 }
 
 export const ACTIVE_STATUSES = ["taxiing", "airborne", "holding", "approach", "diverted"];
@@ -281,8 +504,14 @@ export const ACTIVE_STATUSES = ["taxiing", "airborne", "holding", "approach", "d
 const STATUS_LABEL: Record<string, string> = { taxiing: "taxiing", airborne: "in the air", holding: "holding", approach: "landing", diverted: "diverted", landed: "landed", aborted: "aborted" };
 export const statusLabel = (status: string) => STATUS_LABEL[status] ?? status;
 
+/** Minutes and seconds, e.g. 3:36. */
+export function duration(ms: number): string {
+	const s = Math.max(0, Math.floor(ms / 1000));
+	return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
 export function relTime(at: number): string {
-	const s = Math.max(0, Math.round((Date.now() - at) / 1000));
+	const s = Math.max(0, Math.round(((recordedNow ?? Date.now()) - at) / 1000));
 	if (s < 60) return `${s}s ago`;
 	const m = Math.round(s / 60);
 	if (m < 60) return `${m}m ago`;

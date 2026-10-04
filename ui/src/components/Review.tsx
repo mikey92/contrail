@@ -35,6 +35,7 @@ function adminKey(): string {
 
 export function ReviewInbox({
 	slug,
+	recorded,
 	landings,
 	flights,
 	agents,
@@ -42,6 +43,8 @@ export function ReviewInbox({
 	onSelect,
 }: {
 	slug: string;
+	/** A replay or fixture: the decisions were made live, so there is nothing to approve here. */
+	recorded: boolean;
 	landings: Record<string, Landing>;
 	flights: Record<string, Flight>;
 	agents: Record<string, Agent>;
@@ -60,14 +63,14 @@ export function ReviewInbox({
 			<div class="section-title">Waiting for a human · {waiting.length}</div>
 			{waiting.length === 0 && <div class="empty">Nothing needs a human right now. Green landings outside the review policy land on their own.</div>}
 			{waiting.map((l) => (
-				<ReviewCard key={l.id} slug={slug} landing={l} flight={flights[l.flightId]} agents={agents} intents={intents} onSelect={onSelect} />
+				<ReviewCard key={l.id} slug={slug} recorded={recorded} landing={l} flight={flights[l.flightId]} agents={agents} intents={intents} onSelect={onSelect} />
 			))}
 			{decided.length > 0 && <div class="section-title">Recent decisions</div>}
 			{decided.map((l) => {
 				const f = flights[l.flightId];
 				const i = f && intents[f.intentId];
 				return (
-					<div key={l.id} class={`rdone ${l.review?.decision}`} onClick={() => f && onSelect(f.id)}>
+					<div key={l.id} class={`rdone ${l.review?.decision} ${f ? "go" : ""}`} onClick={() => f && onSelect(f.id)}>
 						<span class="mono">{f?.code}</span> {i ? `INT-${i.seq} ${i.title}` : ""} — <b>{l.review?.decision}</b> by {l.review?.reviewer}
 						{l.review?.comment ? `: ${l.review.comment}` : ""}
 					</div>
@@ -77,7 +80,23 @@ export function ReviewInbox({
 	);
 }
 
-function ReviewCard({ slug, landing, flight, agents, intents, onSelect }: { slug: string; landing: Landing; flight?: Flight; agents: Record<string, Agent>; intents: Record<string, Intent>; onSelect: (id: string) => void }) {
+function ReviewCard({
+	slug,
+	recorded,
+	landing,
+	flight,
+	agents,
+	intents,
+	onSelect,
+}: {
+	slug: string;
+	recorded: boolean;
+	landing: Landing;
+	flight?: Flight;
+	agents: Record<string, Agent>;
+	intents: Record<string, Intent>;
+	onSelect: (id: string) => void;
+}) {
 	const [comment, setComment] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [err, setErr] = useState<string | null>(null);
@@ -142,16 +161,22 @@ function ReviewCard({ slug, landing, flight, agents, intents, onSelect }: { slug
 					<Diff change={c} />
 				</div>
 			))}
-			<textarea class="rcomment" placeholder="Comment for the agent (optional)" value={comment} onInput={(e) => setComment((e.target as HTMLTextAreaElement).value)} />
-			<div class="row">
-				<button class="btn" disabled={busy} onClick={() => decide("approve")}>
-					Approve &amp; land
-				</button>
-				<button class="btn ghost danger" disabled={busy} onClick={() => decide("reject")}>
-					Request changes
-				</button>
-			</div>
-			{err && <div class="fail mono">{err}</div>}
+			{recorded ? (
+				<div class="rrecorded">Recorded replay: this decision was made live.</div>
+			) : (
+				<>
+					<textarea class="rcomment" placeholder="Comment for the agent (optional)" value={comment} onInput={(e) => setComment((e.target as HTMLTextAreaElement).value)} />
+					<div class="row">
+						<button class="btn" disabled={busy} onClick={() => decide("approve")}>
+							Approve &amp; land
+						</button>
+						<button class="btn ghost danger" disabled={busy} onClick={() => decide("reject")}>
+							Request changes
+						</button>
+					</div>
+					{err && <div class="fail mono">{err}</div>}
+				</>
+			)}
 		</div>
 	);
 }

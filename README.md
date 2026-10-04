@@ -180,7 +180,7 @@ flowchart LR
   trunk, never from the change being judged, and a tree that drops every test fails.
 - **Workers AI** is the brain of the edge agents. They use any tool-calling model; GLM-5.3 Flash is the default.
   It also narrated the demo video (Deepgram Aura 2, [`video/tts.mjs`](video/tts.mjs)).
-- **Workers static assets** serve the Radar, a Preact app (about 24 KB of JavaScript, gzipped), and the recorded replays.
+- **Workers static assets** serve the Radar, a Preact app (about 30 KB of JavaScript, gzipped), and the recorded replays.
 
 ## Try it
 

@@ -1,3 +1,4 @@
+import { useState } from "preact/hooks";
 import type { Agent, Flight, Intent, Landing, RadarEvent } from "../../../src/shared/types";
 import { ACTIVE_STATUSES, relTime, statusLabel } from "../store";
 import { KindBadge } from "./Airspace";
@@ -6,6 +7,25 @@ import { eventIcon, Icon } from "./Icons";
 const TARGET = "[\\w./-]+\\.\\w+#[\\w$.-]+";
 const LIST = new RegExp(`${TARGET}(?:, ${TARGET}){2,}`, "g");
 const TOKEN = new RegExp(`(FL-\\d{3,}|INT-\\d+|${TARGET})`);
+
+/** `text` shortened to about `max` characters, ending in "…" after the last whole word. */
+function clip(text: string, max: number): string {
+	if (text.length <= max) return text;
+	const cut = text.slice(0, max);
+	const space = cut.lastIndexOf(" ");
+	return `${(space > max / 2 ? cut.slice(0, space) : cut).replace(/[\s,.;:–—-]+$/, "")}…`;
+}
+
+/** The Tower cuts plans and notes at 140 characters and landing summaries at 120, mid-word. */
+const CUT_AT: Record<string, number> = { radio: 140, "landing.queued": 120 };
+
+/** An event's text, with a body the Tower cut short ending at a word and "…". */
+function eventText(e: RadarEvent): string {
+	const limit = e.type.startsWith("contrail.") && e.type !== "contrail.read" ? 140 : CUT_AT[e.type];
+	const i = e.text.indexOf(": ");
+	if (!limit || i < 0 || e.text.length - i - 2 !== limit) return e.text;
+	return e.text.slice(0, i + 2) + clip(e.text.slice(i + 2), limit - 1);
+}
 
 /** Long lists of targets read as "a, b and 3 more"; flight codes and targets are set in mono. */
 function Text({ text }: { text: string }) {
@@ -20,29 +40,60 @@ function Text({ text }: { text: string }) {
 	);
 }
 
-export function Feed({ events, flights, agents, onSelect }: { events: RadarEvent[]; flights: Record<string, Flight>; agents: Record<string, Agent>; onSelect: (id: string) => void }) {
-	const list = [...events].reverse().slice(0, 150);
+export function Feed({
+	events,
+	keyEvents,
+	routine,
+	flights,
+	agents,
+	onSelect,
+}: {
+	events: RadarEvent[];
+	keyEvents: RadarEvent[];
+	routine: number;
+	flights: Record<string, Flight>;
+	agents: Record<string, Agent>;
+	onSelect: (id: string) => void;
+}) {
+	// Key events by default: landings, conflicts, waits, plans and decisions, not every taxi, take-off and alert.
+	const [all, setAll] = useState(false);
+	const list = [...(all ? events : keyEvents)].reverse().slice(0, 150);
 	return (
 		<div class="feed">
+			<div class="feed-filter">
+				<div class="seg" role="group" aria-label="Show">
+					<button class={all ? "" : "on"} aria-pressed={!all} onClick={() => setAll(false)}>
+						Key events
+					</button>
+					<button class={all ? "on" : ""} aria-pressed={all} onClick={() => setAll(true)}>
+						All
+					</button>
+				</div>
+				{!all && routine > 0 && (
+					<span class="feed-hidden" title="Take-offs, clearances, alerts and runway trains. Choose All to see them.">
+						{routine.toLocaleString("en-US")} routine {routine === 1 ? "line" : "lines"} hidden
+					</span>
+				)}
+			</div>
 			{list.map((e) => {
 				const flight = e.flightId ? flights[e.flightId] : null;
 				const agent = flight ? agents[flight.agentId] : e.agentId ? agents[e.agentId] : null;
 				return (
-					<div key={e.seq} class={`ev ev-${e.type.replace(/\./g, "-")}`} onClick={() => e.flightId && onSelect(e.flightId)}>
+					<div key={e.seq} class={`ev ev-${e.type.replace(/\./g, "-")} ${e.flightId ? "go" : ""}`} onClick={() => e.flightId && onSelect(e.flightId)}>
 						<span class="ev-icon">
 							<Icon name={eventIcon(e.type)} />
 						</span>
 						<div class="ev-body">
 							<div class="ev-text">
 								{agent && <span class="dot" style={{ background: agent.color }} title={agent.callsign} />}
-								<Text text={e.text} />
+								<Text text={eventText(e)} />
 							</div>
 							<div class="ev-meta">{relTime(e.at)}</div>
 						</div>
 					</div>
 				);
 			})}
-			{list.length === 0 && <div class="empty">Waiting for traffic…</div>}
+			{list.length === 0 && <div class="empty">{all || !events.length ? "Waiting for traffic…" : "No key events yet."}</div>}
 		</div>
 	);
 }
@@ -64,7 +115,7 @@ export function FlightList({ flights, agents, intents, onSelect }: { flights: Re
 					<span class={`st st-${f.status}`}>{statusLabel(f.status)}</span>
 				</div>
 				<div class="fcard-intent">{i ? `INT-${i.seq} ${i.title}` : ""}</div>
-				{f.plan && <div class="fcard-plan">{f.plan.slice(0, 160)}</div>}
+				{f.plan && <div class="fcard-plan">{clip(f.plan, 160)}</div>}
 				<div class="fcard-meta muted">
 					{a?.model ?? a?.kind} · {f.attempts ? `${f.attempts} landing attempt${f.attempts > 1 ? "s" : ""} · ` : ""}
 					{relTime(f.updatedAt)}
@@ -100,7 +151,7 @@ export function IntentBoard({ intents, flights, agents, onSelect }: { intents: R
 				const f = i.flightId ? flights[i.flightId] : null;
 				const a = f ? agents[f.agentId] : null;
 				return (
-					<div key={i.id} class={`irow is-${i.status}`} onClick={() => f && onSelect(f.id)}>
+					<div key={i.id} class={`irow is-${i.status} ${f ? "go" : ""}`} onClick={() => f && onSelect(f.id)}>
 						<span class="mono muted">INT-{i.seq}</span>
 						<span class="ititle">{i.title}</span>
 						<span class={`ist ist-${i.status === "assigned" && f ? f.status : i.status}`}>{i.status === "assigned" && f ? statusLabel(f.status) : i.status}</span>

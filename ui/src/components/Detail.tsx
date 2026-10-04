@@ -1,6 +1,6 @@
 import { useEffect, useState } from "preact/hooks";
 import type { Agent, Clearance, ContrailEntry, Flight, Intent, Landing } from "../../../src/shared/types";
-import { relTime, toned } from "../store";
+import { relTime, statusLabel, toned } from "../store";
 import { Diff } from "./Review";
 
 interface FlightDetail {
@@ -93,7 +93,7 @@ export function FlightDrawer({
 				<div class="d-callsign">
 					<span class="dot big" style={{ background: agent.color }} />
 					{agent.callsign} <span class="mono muted">{f.code}</span>
-					<span class={`st st-${f.status}`}>{f.status}</span>
+					<span class={`st st-${f.status}`}>{statusLabel(f.status)}</span>
 				</div>
 				<div class="d-model muted">
 					{agent.model ?? agent.kind} · workspace <span class="mono">{f.repo}</span>
@@ -217,13 +217,24 @@ interface WhyResult {
 
 export function WhyPanel({ slug, fixture, target, onClose }: { slug: string; fixture: string | null; target: string; onClose: () => void }) {
 	const [data, setData] = useState<WhyResult | null>(null);
+	const [error, setError] = useState<string | null>(null);
 	useEffect(() => {
 		const [path, symbol] = target.split("#");
 		const url = fixture ? `/fixtures/${fixture}.why.json` : `/api/p/${slug}/why?path=${encodeURIComponent(path)}${symbol ? `&symbol=${encodeURIComponent(symbol)}` : ""}`;
+		let cancelled = false;
 		setData(null);
+		setError(null);
 		fetch(url)
-			.then((r) => r.json())
-			.then(setData);
+			.then(async (r) => {
+				const d = await r.json().catch(() => null);
+				if (!r.ok || !Array.isArray(d?.history)) throw new Error(d?.error ?? (r.ok ? "unexpected answer" : `HTTP ${r.status}`));
+				return d as WhyResult;
+			})
+			.then((d) => !cancelled && setData(d))
+			.catch((e) => !cancelled && setError(e instanceof Error ? e.message : String(e)));
+		return () => {
+			cancelled = true;
+		};
 	}, [target]);
 	return (
 		<div class="why-backdrop" onClick={onClose}>
@@ -233,7 +244,8 @@ export function WhyPanel({ slug, fixture, target, onClose }: { slug: string; fix
 				</button>
 				<div class="why-kicker">Why this code looks the way it does</div>
 				<h3 class="mono">{target}</h3>
-				{!data && <div class="muted">Reading the contrail…</div>}
+				{!data && !error && <div class="muted">Reading the contrail…</div>}
+				{error && <div class="why-error">Couldn't read the contrail: {error}</div>}
 				{data?.note && <div class="muted">{data.note}</div>}
 				{data?.history.map((h) => (
 					<div key={h.commit} class="why-item">
@@ -285,14 +297,15 @@ export function Command({ text }: { text: string }) {
 
 export function ConnectModal({ slug, onClose }: { slug: string; onClose: () => void }) {
 	const origin = location.origin;
-	const [joinCode, setJoinCode] = useState<string | null>(null);
+	// undefined while asking the tower; null when the airspace has no public join code.
+	const [joinCode, setJoinCode] = useState<string | null | undefined>(undefined);
 	const [key, setKey] = useState<{ key: string; callsign: string } | null>(null);
 	const [err, setErr] = useState<string | null>(null);
 	useEffect(() => {
 		fetch(`/api/p/${slug}/join-info`)
 			.then((r) => r.json())
 			.then((d) => setJoinCode(d.joinCode ?? null))
-			.catch(() => {});
+			.catch(() => setJoinCode(null));
 	}, [slug]);
 	const mint = async () => {
 		const res = await fetch(`/api/p/${slug}/join`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ joinCode, kind: "claude-code", model: "claude" }) });
@@ -309,7 +322,9 @@ export function ConnectModal({ slug, onClose }: { slug: string; onClose: () => v
 				<div class="why-kicker">Join the airspace</div>
 				<h3>Connect a coding agent</h3>
 				<p>Any MCP-capable agent can fly here. It gets its own Artifacts workspace, claims functions before editing, and lands through the runway.</p>
-				{joinCode ? (
+				{joinCode === undefined ? (
+					<p class="muted">Asking the tower…</p>
+				) : joinCode ? (
 					key ? (
 						<>
 							<p>
@@ -327,7 +342,18 @@ export function ConnectModal({ slug, onClose }: { slug: string; onClose: () => v
 					)
 				) : (
 					<>
-						<p>This airspace is invite-only. With its join code:</p>
+						<div class="invite">
+							<p>
+								<b>This airspace is invite-only.</b> Anyone can connect an agent in the Playground, which has a public join code.
+							</p>
+							{slug !== "playground" && (
+								<a class="btn" href="/p/playground">
+									Open the Playground
+								</a>
+							)}
+						</div>
+						<h4 class="connect-sub">Have the join code?</h4>
+						<p>Operators of this airspace can connect an agent with its join code:</p>
 						<Command text={`curl -s ${origin}/api/p/${slug}/join -H 'content-type: application/json' \\\n  -d '{"joinCode":"<join code>","kind":"claude-code"}'`} />
 						<Command text={`claude mcp add --transport http contrail ${origin}/mcp/${slug} \\\n  --header "Authorization: Bearer <agent key>"`} />
 					</>

@@ -22,7 +22,12 @@ const PATHS: Record<string, string> = {
 	bolt: "M8.8 1.6 3.6 9h4l-.6 5.4L12.4 7h-4z",
 	review: "M5.6 7.4a2.4 2.4 0 1 0 0-4.8 2.4 2.4 0 0 0 0 4.8zM1.6 13.4c.4-2.4 2-3.8 4-3.8 1.2 0 2.3.5 3 1.4M9.6 12l1.6 1.6 3-3.2",
 	read: "M6.9 2.4a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9zM10.2 10.2l3.6 3.6",
+	play: "M4.6 2.9v10.2c0 .5.5.8.9.5l7.6-5.1c.4-.3.4-.8 0-1.1L5.5 2.4c-.4-.3-.9 0-.9.5z",
+	pause: "M4.2 2.8h2.4v10.4H4.2zM9.4 2.8h2.4v10.4H9.4z",
 };
+
+/** Solid shapes; the other icons are drawn as lines. */
+const FILLED = new Set(["plane", "play", "pause"]);
 
 const BY_EVENT: Record<string, string> = {
 	"agent.joined": "join",
@@ -56,7 +61,7 @@ const BY_EVENT: Record<string, string> = {
 
 export function Icon({ name, size = 16 }: { name: string; size?: number }) {
 	const d = PATHS[name] ?? PATHS.intent;
-	const filled = name === "plane";
+	const filled = FILLED.has(name);
 	return (
 		<svg class="icon" width={size} height={size} viewBox="0 0 16 16" aria-hidden="true">
 			<path d={d} fill={filled ? "currentColor" : "none"} stroke={filled ? "none" : "currentColor"} stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />

@@ -13,9 +13,13 @@ interface Rect {
 
 interface Band extends Rect {
 	target: string;
+	/** Unique within the file, which may define two symbols with the same name. */
+	key: string;
 	name: string;
 	kind: string;
 	depth: number;
+	/** The name as drawn, cut to the band's width; null when the band has no room for it. */
+	label: string | null;
 }
 
 interface FileBox extends Rect {
@@ -24,10 +28,14 @@ interface FileBox extends Rect {
 	lines: number;
 	bands: Band[];
 	content: Rect;
+	/** The file name as drawn, cut to the box's width, and whether the line count fits after it. */
+	label: string | null;
+	withLines: boolean;
 }
 
 interface GroupBox extends Rect {
 	name: string;
+	label: string | null;
 }
 
 /** The files of a directory that no flight is working on, drawn as one block in a big codebase. */
@@ -35,6 +43,15 @@ interface RestBox extends Rect {
 	group: string;
 	count: number;
 	paths: Set<string>;
+	/** How much of "N more files no agent here" fits: all of it (2), the count (1) or nothing (0). */
+	fits: number;
+}
+
+/** Where a label is drawn: from `x` to `end` on the baseline `y`. */
+interface Label {
+	x: number;
+	end: number;
+	y: number;
 }
 
 const HEADER = 18;
@@ -45,6 +62,54 @@ const SOURCE_DIRS = new Set(["src", "source", "lib", "app", "pkg"]);
 /** Above this many files every box would be too small to label, so the map shows the files in play. */
 const FOCUS_ABOVE = 120;
 const groupOf = (path: string) => (path.includes("/") ? path.split("/")[0] : "·");
+
+const COND = `"IBM Plex Sans Condensed", "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif`;
+const LABEL_FONT = `600 12px ${COND}`;
+const LINES_FONT = `400 12px ${COND}`;
+const BAND_FONT = `400 11px ${COND}`;
+const TAG_FONT = `600 10px "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace`;
+
+/** Glyph widths per font, each measured once (and again when the web fonts arrive). */
+const glyphs = new Map<string, Map<string, number>>();
+let ruler: CanvasRenderingContext2D | null | undefined;
+
+function textWidth(text: string, font: string): number {
+	if (ruler === undefined) ruler = document.createElement("canvas").getContext("2d");
+	let widths = glyphs.get(font);
+	if (!widths) glyphs.set(font, (widths = new Map()));
+	let w = 0;
+	for (const ch of text) {
+		let g = widths.get(ch);
+		if (g === undefined) {
+			if (ruler) {
+				ruler.font = font;
+				g = ruler.measureText(ch).width;
+			} else g = 0.6 * Number.parseFloat(font.split(" ")[1]);
+			widths.set(ch, g);
+		}
+		w += g;
+	}
+	return w;
+}
+
+/** `text` cut to `max` px, ending in "…"; null when not even one letter fits. */
+function fit(text: string, max: number, font: string): string | null {
+	if (textWidth(text, font) <= max) return text;
+	const room = max - textWidth("…", font);
+	let w = 0;
+	let n = 0;
+	for (const ch of text) {
+		w += textWidth(ch, font);
+		if (w > room) break;
+		n += ch.length;
+	}
+	// "inventory…", not "inventory.…"
+	const head = text.slice(0, n).replace(/[.\s]+$/, "");
+	return head ? `${head}…` : null;
+}
+
+/** Baseline of the label at the top of a band (or of a claim tag drawn on it). */
+const labelY = (r: Rect) => r.y + Math.min(r.h / 2 + 4, 12);
 
 /**
  * The codebase as a treemap: a block per top-level directory, a box per file, a band per function. In a
@@ -84,13 +149,22 @@ function layout(files: TrunkFile[], width: number, height: number, focus: Set<st
 	const groupBoxes: GroupBox[] = [];
 	const fileBoxes: FileBox[] = [];
 	const restBoxes: RestBox[] = [];
+	// Every label is cut to its box, so none spills into a neighbour; claim tags keep clear of them.
+	const labels: Label[] = [];
 	for (const g of root.children ?? []) {
 		const gb = g as any;
-		groupBoxes.push({ name: gb.data.name === "·" ? "root" : `${gb.data.name}/`, x: gb.x0, y: gb.y0, w: gb.x1 - gb.x0, h: gb.y1 - gb.y0 });
+		const name = gb.data.name === "·" ? "root" : `${gb.data.name}/`;
+		const group: GroupBox = { name, label: fit(name, gb.x1 - gb.x0 - 16, LABEL_FONT), x: gb.x0, y: gb.y0, w: gb.x1 - gb.x0, h: gb.y1 - gb.y0 };
+		if (group.label) labels.push({ x: group.x + 8, end: group.x + 8 + textWidth(group.label, LABEL_FONT), y: group.y + 15 });
+		groupBoxes.push(group);
 		for (const leaf of g.children ?? []) {
 			const l = leaf as any;
 			if (l.data.rest) {
-				restBoxes.push({ group: gb.data.name, count: l.data.rest.length, paths: new Set(l.data.rest), x: l.x0, y: l.y0, w: l.x1 - l.x0, h: l.y1 - l.y0 });
+				const count = l.data.rest.length;
+				const room = l.x1 - l.x0 - 12;
+				const head = textWidth(`${count} more ${count === 1 ? "file" : "files"}`, LABEL_FONT);
+				const fits = l.x1 - l.x0 > 90 && l.y1 - l.y0 >= 40 ? (head + textWidth(" no agent here", LINES_FONT) <= room ? 2 : head <= room ? 1 : 0) : 0;
+				restBoxes.push({ group: gb.data.name, count, paths: new Set(l.data.rest), fits, x: l.x0, y: l.y0, w: l.x1 - l.x0, h: l.y1 - l.y0 });
 				continue;
 			}
 			const f: TrunkFile = l.data.file;
@@ -104,18 +178,36 @@ function layout(files: TrunkFile[], width: number, height: number, focus: Set<st
 				h: l.y1 - l.y0,
 				bands: [],
 				content: { x: l.x0 + 3, y: l.y0 + HEADER, w: Math.max(0, l.x1 - l.x0 - 6), h: Math.max(0, l.y1 - l.y0 - HEADER - 3) },
+				label: null,
+				withLines: false,
 			};
+			if (box.w > 40 && box.h >= 18) {
+				const room = box.w - 12;
+				box.withLines = textWidth(box.name, LABEL_FONT) + textWidth(` ${f.lines}`, LINES_FONT) <= room;
+				box.label = box.withLines ? box.name : fit(box.name, room, LABEL_FONT);
+				if (box.label) labels.push({ x: box.x + 6, end: box.x + 6 + textWidth(box.label, LABEL_FONT), y: box.y + 13 });
+			}
 			const lines = Math.max(f.lines, 1);
+			const seen = new Map<string, number>();
 			for (const s of f.symbols) {
 				const depth = s.name.includes(".") ? 1 : 0;
 				const y = box.content.y + ((s.start - 1) / lines) * box.content.h;
 				const h = Math.max(3, ((s.end - s.start + 1) / lines) * box.content.h);
-				box.bands.push({ target: `${f.path}#${s.name}`, name: s.name, kind: s.kind, depth, x: box.content.x + depth * 9, y, w: Math.max(0, box.content.w - depth * 9), h });
+				const target = `${f.path}#${s.name}`;
+				const n = seen.get(target) ?? 0;
+				seen.set(target, n + 1);
+				box.bands.push({ target, key: n ? `${target}~${n}` : target, name: s.name, kind: s.kind, depth, label: null, x: box.content.x + depth * 9, y, w: Math.max(0, box.content.w - depth * 9), h });
+			}
+			for (const b of box.bands) {
+				// A class whose first method starts right at its top leaves the row to the method's name.
+				if (b.h < 11 || b.w <= 50 || (b.kind === "class" && box.bands.some((m) => m.depth === 1 && m.target.startsWith(`${b.target}.`) && m.y - b.y < 12))) continue;
+				b.label = fit(b.name.split(".").pop()!, b.w - 10, BAND_FONT);
+				if (b.label) labels.push({ x: b.x + 5, end: b.x + 5 + textWidth(b.label, BAND_FONT), y: labelY(b) });
 			}
 			fileBoxes.push(box);
 		}
 	}
-	return { groupBoxes, fileBoxes, restBoxes };
+	return { groupBoxes, fileBoxes, restBoxes, labels };
 }
 
 /** Screen rectangle for a clearance target; unknown symbols (new code) get a stub at the file's end. */
@@ -169,10 +261,67 @@ interface Props {
 	onWhy: (target: string) => void;
 }
 
+/** Directories, files and their functions: redrawn only when the code or the map's size changes. */
+function CodeLayer({ groups, files, rests, onHover, onWhy }: { groups: GroupBox[]; files: FileBox[]; rests: RestBox[]; onHover: (b: Band | null) => void; onWhy: (target: string) => void }) {
+	return (
+		<>
+			{groups.map((g) => (
+				<g key={g.name} data-group={g.name}>
+					<rect x={g.x} y={g.y} width={g.w} height={g.h} rx={8} class="group" />
+					{g.label && (
+						<text x={g.x + 8} y={g.y + 15} class="group-label">
+							{g.label}
+						</text>
+					)}
+				</g>
+			))}
+			{rests.map((r) => (
+				<g key={`rest-${r.group}`} class="rest" data-rest={r.group}>
+					<title>{`${r.count} ${r.count === 1 ? "file" : "files"} in ${r.group === "·" ? "the root" : `${r.group}/`} that no agent is working on`}</title>
+					<rect x={r.x} y={r.y} width={r.w} height={r.h} rx={5} class="file rest-box" />
+					{r.w > 24 && r.h > 24 && <rect x={r.x + 4} y={r.y + (r.h >= 40 ? 20 : 4)} width={r.w - 8} height={r.h - (r.h >= 40 ? 24 : 8)} fill="url(#rest-files)" />}
+					{r.fits > 0 && (
+						<text x={r.x + 6} y={r.y + 13} class="file-label rest-label">
+							{r.count} more {r.count === 1 ? "file" : "files"}
+							{r.fits > 1 && <tspan class="file-lines"> no agent here</tspan>}
+						</text>
+					)}
+				</g>
+			))}
+			{files.map((f) => (
+				<g key={f.path} data-path={f.path}>
+					<rect x={f.x} y={f.y} width={f.w} height={f.h} rx={5} class="file" />
+					{f.label && (
+						<text x={f.x + 6} y={f.y + 13} class="file-label">
+							{f.label !== f.name && <title>{f.path}</title>}
+							{f.label}
+							{f.withLines && <tspan class="file-lines"> {f.lines}</tspan>}
+						</text>
+					)}
+					{f.bands.map((b) => (
+						<g key={b.key} class="band-g" data-target={b.target} onMouseEnter={() => onHover(b)} onMouseLeave={() => onHover(null)} onClick={() => onWhy(b.target)}>
+							<rect x={b.x} y={b.y} width={b.w} height={b.h} rx={2} class={`band band-${b.kind}`} />
+							{b.label && (
+								<text x={b.x + 5} y={labelY(b)} class="band-label">
+									{b.label}
+								</text>
+							)}
+						</g>
+					))}
+				</g>
+			))}
+		</>
+	);
+}
+
+/** Holding planes drawn around one spot; the "N waiting" pill stands for the rest. */
+const MAX_CIRCLING = 3;
+
 export function Airspace({ files, clearances, flights, agents, intents, flashes, selected, onSelect, onWhy }: Props) {
 	const ref = useRef<HTMLDivElement>(null);
 	const [size, setSize] = useState({ w: 900, h: 600 });
 	const [hover, setHover] = useState<Band | null>(null);
+	const [fonts, setFonts] = useState(0);
 	const headings = useRef(new Map<string, { x: number; y: number; angle: number }>());
 
 	useEffect(() => {
@@ -181,6 +330,19 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 		ro.observe(el);
 		setSize({ w: el.clientWidth, h: el.clientHeight });
 		return () => ro.disconnect();
+	}, []);
+
+	// Labels are cut to measured widths: measure again once the web fonts have arrived.
+	useEffect(() => {
+		const set = document.fonts;
+		if (!set) return;
+		const loaded = () => {
+			glyphs.clear();
+			setFonts((n) => n + 1);
+		};
+		set.ready.then(loaded);
+		set.addEventListener("loadingdone", loaded);
+		return () => set.removeEventListener("loadingdone", loaded);
 	}, []);
 
 	const mapH = Math.max(200, size.h - APRON - LEGEND);
@@ -195,12 +357,25 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 		for (const f of Object.values(flights)) for (const p of f.touched ?? []) inPlay.current.add(p);
 	}
 	const focusKey = big ? inPlay.current.size : -1;
-	const { groupBoxes, fileBoxes, restBoxes } = useMemo(() => layout(files, size.w, mapH, big ? inPlay.current : null), [files, size.w, mapH, focusKey]);
+	const { groupBoxes, fileBoxes, restBoxes, labels } = useMemo(() => layout(files, size.w, mapH, big ? inPlay.current : null), [files, size.w, mapH, focusKey, fonts]);
+	// The same element while the code is unchanged, so planes and claims moving don't redraw it.
+	const codeLayer = useMemo(() => <CodeLayer groups={groupBoxes} files={fileBoxes} rests={restBoxes} onHover={setHover} onWhy={onWhy} />, [groupBoxes, fileBoxes, restBoxes, onWhy]);
 
 	const active = Object.values(flights).filter((f) => ACTIVE_STATUSES.includes(f.status));
 	const claims = clearances
 		.map((c) => ({ c, rect: rectFor(c.target, fileBoxes, groupBoxes, restBoxes), flight: flights[c.flightId] }))
 		.filter((x) => x.rect && x.flight && ACTIVE_STATUSES.includes(x.flight.status));
+	// Agents waiting for the same code share one outline: stacked, their fills would bury the function's name.
+	const waitingOn = new Map<string, (typeof claims)[number]>();
+	for (const x of claims) if (x.c.status === "holding" && (!waitingOn.has(x.c.target) || x.flight.id === selected)) waitingOn.set(x.c.target, x);
+	const outlines = claims.filter((x) => x.c.status !== "holding" || waitingOn.get(x.c.target) === x);
+	// A claim shows its flight's code at its right end only where that leaves every label whole.
+	const tagFits = (r: Rect, code: string) => {
+		const end = r.x + r.w - 4;
+		const start = end - textWidth(code, TAG_FONT);
+		const y = labelY(r);
+		return start > r.x + 4 && !labels.some((l) => Math.abs(l.y - y) < 11 && l.x < end && l.end + 6 > start);
+	};
 
 	// Where each active flight is drawn.
 	const cruising = active.filter((f) => !claims.some((x) => x.c.flightId === f.id));
@@ -227,6 +402,7 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 		buckets.set(key, [...(buckets.get(key) ?? []), id]);
 	}
 	const showTag = new Set<string>();
+	const hidden = new Set<string>();
 	const crowded = active.length > 14;
 	// With dozens of flights, or on a phone, the planes and their colors tell the story; tags would bury the map.
 	const tagless = active.length > 30 || size.w < 640;
@@ -239,10 +415,14 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 			positions.set(id, { ...p, x: p.x + i * 30, y: p.y + i * 22 });
 			if (!crowded || i === 0) showTag.add(id);
 		});
-		const r = Math.min(80, 24 + holders.length * 4);
-		holders.forEach((id, i) => {
+		// The first in line circle the spot (and the selected flight, wherever it is in the queue).
+		const circling = holders.slice(0, MAX_CIRCLING);
+		if (selected && holders.indexOf(selected) >= MAX_CIRCLING) circling[MAX_CIRCLING - 1] = selected;
+		for (const id of holders) if (!circling.includes(id)) hidden.add(id);
+		const r = Math.min(80, 24 + circling.length * 4);
+		circling.forEach((id, i) => {
 			const p = positions.get(id)!;
-			const a = (i / Math.max(holders.length, 1)) * Math.PI * 2 - Math.PI / 2;
+			const a = (i / Math.max(circling.length, 1)) * Math.PI * 2 - Math.PI / 2;
 			positions.set(id, { ...p, x: p.x + Math.cos(a) * r, y: p.y + Math.sin(a) * r * 0.6 });
 			if (!crowded || i < 1) showTag.add(id);
 		});
@@ -263,6 +443,9 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 		.map(([t, fl]) => ({ t, fl, rect: rectFor(t, fileBoxes, groupBoxes, restBoxes) }))
 		.filter((x) => x.rect);
 
+	// The hover card goes right of the function, or left of it where the map ends.
+	const cardX = hover ? (hover.x + hover.w + 8 + 280 <= size.w ? hover.x + hover.w + 8 : Math.max(4, hover.x - 288)) : 0;
+
 	return (
 		<div class="airspace" ref={ref}>
 			<div class="apron-label">Taxiing · agents that have not claimed any code yet</div>
@@ -277,10 +460,12 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 					<svg viewBox="0 0 24 24" class="lg-plane">
 						<path d="M12 2c.8 0 1.4.7 1.4 1.6v6.1l7.6 4.6v2l-7.6-2.3v4.6l2.1 1.6V22L12 21l-3.5 1v-1.8l2.1-1.6V15L3 17.3v-2l7.6-4.6V3.6C10.6 2.7 11.2 2 12 2z" />
 					</svg>{" "}
-					Agent on the code it is cleared to change
+					<span class="lg-long">Agent on the code it is cleared to change</span>
+					<span class="lg-short">Agent on code it may change</span>
 				</span>
 				<span>
-					<i class="lg-hold" /> Waiting for code another agent holds
+					<i class="lg-hold" /> <span class="lg-long">Waiting for code another agent holds</span>
+					<span class="lg-short">Waiting for held code</span>
 				</span>
 			</div>
 			<svg width={size.w} height={size.h} class="map">
@@ -290,49 +475,8 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 					</pattern>
 				</defs>
 				<g transform={`translate(0, ${APRON})`}>
-					{groupBoxes.map((g) => (
-						<g key={g.name} data-group={g.name}>
-							<rect x={g.x} y={g.y} width={g.w} height={g.h} rx={8} class="group" />
-							<text x={g.x + 8} y={g.y + 15} class="group-label">
-								{g.name}
-							</text>
-						</g>
-					))}
-					{restBoxes.map((r) => (
-						<g key={`rest-${r.group}`} class="rest" data-rest={r.group}>
-							<title>{`${r.count} ${r.count === 1 ? "file" : "files"} in ${r.group === "·" ? "the root" : `${r.group}/`} that no agent is working on`}</title>
-							<rect x={r.x} y={r.y} width={r.w} height={r.h} rx={5} class="file rest-box" />
-							{r.w > 24 && r.h > 24 && <rect x={r.x + 4} y={r.y + (r.h >= 40 ? 20 : 4)} width={r.w - 8} height={r.h - (r.h >= 40 ? 24 : 8)} fill="url(#rest-files)" />}
-							{r.w > 90 && r.h >= 40 && (
-								<text x={r.x + 6} y={r.y + 13} class="file-label rest-label">
-									{r.count} more {r.count === 1 ? "file" : "files"}
-									<tspan class="file-lines"> no agent here</tspan>
-								</text>
-							)}
-						</g>
-					))}
-					{fileBoxes.map((f) => (
-						<g key={f.path} data-path={f.path}>
-							<rect x={f.x} y={f.y} width={f.w} height={f.h} rx={5} class="file" />
-							{f.w > 40 && f.h >= 18 && (
-								<text x={f.x + 6} y={f.y + 13} class="file-label">
-									{f.name}
-									<tspan class="file-lines"> {f.lines}</tspan>
-								</text>
-							)}
-							{f.bands.map((b) => (
-								<g key={b.target} class="band-g" data-target={b.target} onMouseEnter={() => setHover(b)} onMouseLeave={() => setHover(null)} onClick={() => onWhy(b.target)}>
-									<rect x={b.x} y={b.y} width={b.w} height={b.h} rx={2} class={`band band-${b.kind}`} />
-									{b.h >= 11 && b.w > 50 && !(b.kind === "class" && f.bands.some((m) => m.depth === 1 && m.target.startsWith(`${b.target}.`) && m.y - b.y < 12)) && (
-										<text x={b.x + 5} y={b.y + Math.min(b.h / 2 + 4, 12)} class="band-label">
-											{b.name.split(".").pop()}
-										</text>
-									)}
-								</g>
-							))}
-						</g>
-					))}
-					{claims.map(({ c, rect, flight }) => {
+					{codeLayer}
+					{outlines.map(({ c, rect, flight }) => {
 						const agent = agents[flight.agentId];
 						const color = agent?.color ?? "#94a3b8";
 						return (
@@ -346,30 +490,21 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 									style={{ fill: color, stroke: color }}
 									class={selected === flight.id ? "selected" : ""}
 								/>
-								{rect!.w > 70 && rect!.h >= 10 && c.status !== "holding" && (
-									<text x={rect!.x + rect!.w - 4} y={rect!.y + Math.min(rect!.h / 2 + 4, 12)} class="claim-tag" style={{ fill: color }}>
+								{rect!.w > 70 && rect!.h >= 10 && c.status !== "holding" && tagFits(rect!, flight.code) && (
+									<text x={rect!.x + rect!.w - 4} y={labelY(rect!)} class="claim-tag" style={{ fill: color }}>
 										{flight.code}
 									</text>
 								)}
 							</g>
 						);
 					})}
-					{[...holdCounts.entries()]
-						.filter(([, h]) => h.n > 1)
-						.map(([t, h]) => (
-							<g key={`hc-${t}`} class="holdcount">
-								<rect x={h.x - 64} y={h.y - 8} width={64} height={16} rx={8} />
-								<text x={h.x - 32} y={h.y + 4}>
-									{h.n} waiting
-								</text>
-							</g>
-						))}
 					{flashRects.map(({ t, fl, rect }) => (
 						<rect key={`${fl.id}-${t}`} x={rect!.x - 3} y={rect!.y - 3} width={rect!.w + 6} height={rect!.h + 6} rx={4} class={`flash flash-${fl.kind}`} />
 					))}
 				</g>
 			</svg>
 			{active.map((f) => {
+				if (hidden.has(f.id)) return null;
 				const p = positions.get(f.id)!;
 				const agent = agents[f.agentId];
 				const intent = intents[f.intentId];
@@ -401,8 +536,15 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 					</div>
 				);
 			})}
+			{[...holdCounts.entries()]
+				.filter(([, h]) => h.n > 1)
+				.map(([t, h]) => (
+					<div key={`hc-${t}`} class="holdcount" style={{ left: `${h.x - 64}px`, top: `${h.y + APRON - 8}px` }}>
+						{h.n} waiting
+					</div>
+				))}
 			{hover && (
-				<div class="hovercard" style={{ left: Math.min(hover.x + hover.w + 8, size.w - 230), top: hover.y + APRON }}>
+				<div class="hovercard" style={{ left: `${cardX}px`, top: `${Math.min(hover.y + APRON, size.h - 64)}px` }}>
 					<div class="mono">{hover.target}</div>
 					<div class="muted">{hover.kind} · click to see why it changed</div>
 				</div>

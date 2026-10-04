@@ -8,14 +8,17 @@
 	--surface-2: #fafaf7;
 	--ink: #17191d;
 	--ink-2: #3b3f47;
-	--muted: #6b6f78;
-	--faint: #9a9da4;
+	/* Text greys meet WCAG AA (4.5:1): --muted on paper and paper-2, --faint on white surfaces. */
+	--muted: #646871;
+	--faint: #6f727a;
 	--line: #e3e1db;
 	--line-2: #d2cfc7;
 	--brand: #e8590c;
+	/* The brand orange for text and under white text, dark enough for 4.5:1. */
+	--brand-ink: #c2410c;
 	--air: #2463c7;
 	--air-bg: #e9f0fb;
-	--hold: #a86400;
+	--hold: #965a00;
 	--hold-line: #d18a17;
 	--hold-bg: #fdf3df;
 	--ok: #1d7a35;
@@ -127,12 +130,12 @@ code {
 	background: var(--surface);
 }
 .btn.launch {
-	background: var(--brand);
-	border-color: var(--brand);
+	background: var(--brand-ink);
+	border-color: var(--brand-ink);
 	color: #fff;
 }
 .btn.launch:hover {
-	background: #cf4f0b;
+	background: #a8380a;
 }
 .btn.danger {
 	color: var(--bad);
@@ -272,6 +275,9 @@ code {
 .live.on::before {
 	background: var(--ok);
 }
+.live.replay::before {
+	background: var(--faint);
+}
 .main {
 	flex: 1;
 	display: grid;
@@ -279,6 +285,7 @@ code {
 	min-height: 0;
 }
 .sky {
+	position: relative;
 	display: flex;
 	flex-direction: column;
 	min-width: 0;
@@ -306,7 +313,7 @@ code {
 	top: 9px;
 	left: 14px;
 	font-size: 11.5px;
-	color: var(--faint);
+	color: var(--muted);
 }
 .legend {
 	position: absolute;
@@ -321,11 +328,15 @@ code {
 	color: var(--muted);
 	z-index: 1;
 }
-.legend span {
+.legend > span {
 	display: inline-flex;
 	align-items: center;
 	gap: 5px;
 	white-space: nowrap;
+}
+/* Phones get the short wording. */
+.legend .lg-short {
+	display: none;
 }
 .legend i {
 	display: inline-block;
@@ -388,6 +399,9 @@ code {
 }
 .rest-label {
 	fill: var(--ink-2);
+}
+.rest-label .file-lines {
+	fill: var(--muted);
 }
 .band {
 	fill: #efeee9;
@@ -458,16 +472,24 @@ code {
 .claim.holding .claim-tag {
 	fill: var(--hold) !important;
 }
-.holdcount rect {
-	fill: var(--hold-bg);
-	stroke: var(--hold-line);
-}
-.holdcount text {
-	fill: var(--hold);
-	font-family: var(--sans);
+/* Drawn over the planes: it stands for the ones not drawn around the spot. */
+.holdcount {
+	position: absolute;
+	z-index: 6;
+	min-width: 64px;
+	height: 16px;
+	padding: 0 6px;
+	border-radius: 8px;
+	background: var(--hold-bg);
+	border: 1px solid var(--hold-line);
+	box-shadow: var(--shadow-sm);
+	color: var(--hold);
 	font-size: 10.5px;
 	font-weight: 600;
-	text-anchor: middle;
+	line-height: 14px;
+	text-align: center;
+	white-space: nowrap;
+	pointer-events: none;
 }
 .flash {
 	fill: none;
@@ -706,6 +728,15 @@ code {
 	top: 50%;
 	border-top: 2px dashed var(--line-2);
 }
+.rw-strip .empty {
+	position: absolute;
+	left: 50%;
+	top: 50%;
+	transform: translate(-50%, -50%);
+	padding: 0 12px;
+	background: var(--surface);
+	white-space: nowrap;
+}
 .rw-commit {
 	position: relative;
 	flex: none;
@@ -755,6 +786,129 @@ code {
 	color: var(--plan);
 }
 
+/* ── replay ───────────────────────────────────── */
+.replaybar {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 6px 18px;
+	border-bottom: 1px solid var(--line);
+	background: var(--surface);
+	flex: none;
+}
+.rb-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: none;
+	width: 30px;
+	height: 28px;
+	border-radius: 7px;
+	border: 1px solid var(--line-2);
+	background: var(--surface);
+	color: var(--ink-2);
+	cursor: pointer;
+}
+.rb-btn:hover {
+	border-color: var(--ink-2);
+	color: var(--ink);
+}
+.rb-btn:first-child {
+	background: var(--ink);
+	border-color: var(--ink);
+	color: #fff;
+}
+.rb-time {
+	flex: none;
+	min-width: 34px;
+	font-family: var(--mono);
+	font-size: 11.5px;
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+	text-align: center;
+}
+.rb-track {
+	position: relative;
+	flex: 1;
+	min-width: 48px;
+	height: 24px;
+	cursor: pointer;
+	border-radius: 4px;
+}
+.rb-track::before,
+.rb-fill {
+	content: "";
+	position: absolute;
+	left: 0;
+	top: 50%;
+	height: 4px;
+	margin-top: -2px;
+	border-radius: 2px;
+}
+.rb-track::before {
+	right: 0;
+	background: var(--paper-2);
+}
+.rb-fill {
+	background: var(--ink-2);
+}
+.rb-knob {
+	position: absolute;
+	top: 50%;
+	width: 12px;
+	height: 12px;
+	margin: -6px 0 0 -6px;
+	border-radius: 50%;
+	background: var(--surface);
+	border: 2px solid var(--ink);
+	box-shadow: var(--shadow-sm);
+}
+.rb-track:focus-visible {
+	outline: 2px solid var(--air);
+	outline-offset: 2px;
+}
+.rb-speeds button {
+	padding: 4px 8px;
+}
+/* Over the map when the run is over: what it achieved and where to go next. */
+.endcard-wrap {
+	position: absolute;
+	inset: 0 0 108px;
+	z-index: 12;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 16px;
+	pointer-events: none;
+}
+.endcard {
+	position: relative;
+	max-width: 460px;
+	padding: 20px 24px 22px;
+	border: 1px solid var(--line-2);
+	border-radius: 12px;
+	background: var(--surface);
+	box-shadow: var(--shadow-lg);
+	pointer-events: auto;
+	animation: fade 0.3s;
+}
+.endcard h3 {
+	margin: 0 30px 6px 0;
+	font-size: 18px;
+	font-weight: 600;
+}
+.endcard p {
+	margin: 0 0 16px;
+	color: var(--ink-2);
+	font-size: 14.5px;
+	line-height: 1.5;
+}
+.endcard .row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
 /* ── side panel ───────────────────────────────── */
 .tabs {
 	display: flex;
@@ -800,22 +954,71 @@ code {
 	min-height: 0;
 }
 .feed {
-	padding: 2px 0;
+	padding: 0 0 2px;
+}
+.feed-filter {
+	position: sticky;
+	top: 0;
+	z-index: 1;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 9px 16px;
+	background: var(--surface);
+	border-bottom: 1px solid var(--line);
+}
+.feed-hidden {
+	min-width: 0;
+	font-size: 11.5px;
+	color: var(--muted);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+/* A row of toggle buttons: the feed filter, the replay speeds. */
+.seg {
+	display: inline-flex;
+	flex: none;
+	border: 1px solid var(--line-2);
+	border-radius: 7px;
+	overflow: hidden;
+}
+.seg button {
+	background: var(--surface);
+	border: none;
+	padding: 4px 10px;
+	font-size: 12px;
+	font-weight: 500;
+	color: var(--ink-2);
+	cursor: pointer;
+	font-variant-numeric: tabular-nums;
+}
+.seg button + button {
+	border-left: 1px solid var(--line-2);
+}
+.seg button:hover {
+	background: var(--paper);
+}
+.seg button.on {
+	background: var(--ink);
+	color: #fff;
 }
 .ev {
 	display: flex;
 	gap: 11px;
 	padding: 10px 16px;
 	border-bottom: 1px solid #efeee9;
-	cursor: pointer;
 	animation: slidein 0.35s ease-out;
+}
+.ev.go {
+	cursor: pointer;
 }
 @keyframes slidein {
 	from {
 		transform: translateY(-5px);
 	}
 }
-.ev:hover {
+.ev.go:hover {
 	background: var(--surface-2);
 }
 .ev-icon {
@@ -975,6 +1178,8 @@ code {
 	padding: 8px 4px;
 	border-bottom: 1px solid #efeee9;
 	font-size: 13px;
+}
+.irow.go {
 	cursor: pointer;
 }
 .irow .mono {
@@ -1337,7 +1542,7 @@ pre.theirs {
 .why-kicker {
 	font-size: 12.5px;
 	font-weight: 600;
-	color: var(--brand);
+	color: var(--brand-ink);
 }
 .why h3 {
 	margin: 4px 0 16px;
@@ -1375,12 +1580,37 @@ pre.theirs {
 .lbl {
 	font-size: 11px;
 	font-weight: 600;
-	color: var(--brand);
+	color: var(--brand-ink);
 	margin-right: 6px;
+}
+.why-error {
+	color: var(--bad);
+	font-size: 13px;
+	line-height: 1.5;
 }
 .connect p {
 	line-height: 1.55;
 	color: var(--ink-2);
+}
+.invite {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 10px 16px;
+	margin: 4px 0 18px;
+	padding: 12px 14px;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	background: var(--surface-2);
+}
+.invite p {
+	flex: 1 1 260px;
+	margin: 0;
+}
+.connect-sub {
+	margin: 0;
+	font-size: 13.5px;
+	font-weight: 600;
 }
 pre.code {
 	background: var(--surface-2);
@@ -1554,7 +1784,17 @@ details.diffs summary {
 	font-size: 12.5px;
 	padding: 7px 4px;
 	border-bottom: 1px solid var(--line);
+}
+.rdone.go {
 	cursor: pointer;
+}
+.rrecorded {
+	margin-top: 10px;
+	padding: 8px 10px;
+	border-radius: 6px;
+	background: var(--paper);
+	color: var(--ink-2);
+	font-size: 12.5px;
 }
 .rdone.approved b {
 	color: var(--ok);
@@ -1659,9 +1899,10 @@ details.diffs summary {
 .eyebrow {
 	font-size: 13.5px;
 	font-weight: 600;
-	color: var(--brand);
+	color: var(--brand-ink);
 }
 .hero h1 {
+	text-wrap: balance;
 	font-size: clamp(38px, 4.6vw, 60px);
 	line-height: 1.05;
 	letter-spacing: -0.025em;
@@ -1669,6 +1910,7 @@ details.diffs summary {
 	margin: 12px 0 18px;
 }
 .lede {
+	text-wrap: pretty;
 	font-size: 17.5px;
 	line-height: 1.6;
 	color: var(--ink-2);
@@ -1710,12 +1952,14 @@ details.diffs summary {
 	padding: 56px 0;
 }
 .section-h {
+	text-wrap: balance;
 	font-size: 26px;
 	font-weight: 600;
 	letter-spacing: -0.015em;
 	margin: 0 0 6px;
 }
 .section-sub {
+	text-wrap: pretty;
 	color: var(--muted);
 	font-size: 15px;
 	margin: 0 0 30px;
@@ -1736,13 +1980,19 @@ details.diffs summary {
 .step-n {
 	font-family: var(--mono);
 	font-size: 12px;
-	color: var(--brand);
+	color: var(--brand-ink);
 	font-weight: 600;
 }
 .step h3 {
 	font-size: 17px;
 	font-weight: 600;
 	margin: 6px 0 8px;
+}
+.step p,
+.step .was,
+.result p,
+.pcard p {
+	text-wrap: pretty;
 }
 .step p {
 	margin: 0;
@@ -1774,6 +2024,7 @@ details.diffs summary {
 	font-variant-numeric: tabular-nums;
 }
 .result-l {
+	text-wrap: balance;
 	font-size: 15px;
 	font-weight: 600;
 	margin: 4px 0 6px;
@@ -1861,6 +2112,26 @@ details.diffs summary {
 	font-size: 13px;
 	color: var(--muted);
 }
+.pcard-links {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px 16px;
+	font-size: 13px;
+}
+.pcard .watch {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-weight: 600;
+	color: var(--ink);
+}
+.pcard-name:hover,
+.pcard .watch:hover,
+.pcard .open:hover {
+	text-decoration: underline;
+	text-underline-offset: 3px;
+}
 .home-foot {
 	border-top: 1px solid var(--line);
 	color: var(--muted);
@@ -1872,11 +2143,25 @@ details.diffs summary {
 	flex-wrap: wrap;
 }
 
-@media (max-width: 1280px) {
-	.stats .stat:nth-child(n + 5) {
+@media (max-width: 1400px) {
+	/* The playground's Launch button needs the room. */
+	.topbar:has(.launch) .stat:nth-child(n + 5) {
 		display: none;
 	}
-	.legend span:nth-child(n + 3) {
+}
+@media (max-width: 1260px) {
+	.topbar:has(.launch) .stat:nth-child(n + 4) {
+		display: none;
+	}
+}
+@media (max-width: 1280px) {
+	/* The map shows what a file and a function are; the planes and dashed boxes need the legend. */
+	.legend > span:nth-child(-n + 2) {
+		display: none;
+	}
+}
+@media (max-width: 1200px) {
+	.stats .stat:nth-child(n + 5) {
 		display: none;
 	}
 }
@@ -1908,6 +2193,19 @@ details.diffs summary {
 @media (max-width: 700px) {
 	.topbar {
 		flex-wrap: wrap;
+	}
+	.replaybar {
+		gap: 6px;
+		padding: 6px 10px;
+	}
+	.rb-speeds button {
+		padding: 4px 6px;
+	}
+	.legend .lg-long {
+		display: none;
+	}
+	.legend .lg-short {
+		display: inline;
 	}
 	.stats,
 	.live {

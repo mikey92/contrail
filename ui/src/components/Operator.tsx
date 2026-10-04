@@ -1,4 +1,4 @@
-import { useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import { Command } from "./Detail";
 
 const MODELS = [
@@ -97,11 +97,13 @@ export function OperatorPanel({ slug, onClose }: { slug: string; onClose: () => 
 export function ClonePanel({ slug, onClose }: { slug: string; onClose: () => void }) {
 	const [cmds, setCmds] = useState<string[] | null>(null);
 	const [err, setErr] = useState<string | null>(null);
-	if (!cmds && !err)
+	// Once per opening: the radar re-renders with every update, and a render must not ask again.
+	useEffect(() => {
 		fetch(`/api/p/${slug}/clone`)
 			.then((r) => r.json())
 			.then((d) => (d.commands ? setCmds(d.commands) : setErr(d.error ?? "unavailable")))
 			.catch((e) => setErr(String(e)));
+	}, [slug]);
 	return (
 		<div class="why-backdrop" onClick={onClose}>
 			<div class="why connect" onClick={(e) => e.stopPropagation()}>
