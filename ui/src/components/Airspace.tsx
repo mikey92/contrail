@@ -99,6 +99,23 @@ function rectFor(target: string, files: FileBox[], groups: GroupBox[]): Rect | n
 
 const center = (r: Rect) => ({ x: r.x + r.w / 2, y: r.y + r.h / 2 });
 
+const KIND: Record<string, [string, string]> = {
+	"claude-code": ["CC", "Claude Code"],
+	codex: ["CX", "Codex"],
+	edge: ["⚡", "Edge agent on Workers AI"],
+	human: ["H", "Human"],
+};
+
+export function KindBadge({ kind }: { kind?: string }) {
+	const k = KIND[kind ?? ""];
+	if (!k) return null;
+	return (
+		<span class={`kind kind-${kind}`} title={k[1]}>
+			{k[0]}
+		</span>
+	);
+}
+
 interface Props {
 	files: TrunkFile[];
 	clearances: Clearance[];
@@ -298,6 +315,7 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 						</div>
 						{showTag.has(f.id) && (
 							<div class="tag">
+								<KindBadge kind={agent?.kind} />
 								<b>{agent?.callsign ?? "?"}</b> {f.code}
 								{f.status !== "airborne" && <span class={`st st-${f.status}`}>{f.status}</span>}
 							</div>

@@ -116,6 +116,29 @@ app.get("/api/p/:slug/file", async (c) => {
 	}
 });
 
+// A short-lived read-only clone URL for the trunk of a public project (inspect history and contrail notes).
+app.get("/api/p/:slug/clone", async (c) => {
+	const slug = c.req.param("slug");
+	const entry = await canView(c, slug);
+	if (!entry) return c.json({ error: "not found" }, 404);
+	const repo = await c.env.ARTIFACTS.get(entry.info.trunkRepo);
+	try {
+		const [info, token] = await Promise.all([repo.info(), repo.createToken("read", 3600)]);
+		const secret = token.plaintext.split("?expires=")[0];
+		const url = `https://x:${secret}@${info.remote.replace(/^https:\/\//, "")}`;
+		return c.json({
+			expiresAt: token.expiresAt,
+			commands: [
+				`git clone ${url} ${slug}`,
+				`git -C ${slug} fetch origin refs/notes/contrail:refs/notes/contrail`,
+				`git -C ${slug} log --notes=contrail --stat`,
+			],
+		});
+	} finally {
+		repo[Symbol.dispose]?.();
+	}
+});
+
 app.get("/api/p/:slug/commits", async (c) => {
 	const slug = c.req.param("slug");
 	const entry = await canView(c, slug);

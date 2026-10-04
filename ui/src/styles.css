@@ -1296,3 +1296,100 @@ code {
 		grid-template-columns: 1fr;
 	}
 }
+
+.kind {
+	display: inline-block;
+	font-family: var(--mono);
+	font-size: 9px;
+	font-weight: 700;
+	padding: 0 4px;
+	border-radius: 3px;
+	margin-right: 4px;
+	vertical-align: 1px;
+	background: #1e293b;
+	color: #cbd5e1;
+}
+.kind-claude-code {
+	background: rgba(217, 119, 87, 0.25);
+	color: #f4a586;
+}
+.kind-codex {
+	background: rgba(148, 163, 184, 0.2);
+	color: #e2e8f0;
+}
+.kind-edge {
+	background: rgba(249, 115, 22, 0.22);
+	color: #fdba74;
+}
+.btn.ghost {
+	background: transparent;
+	color: var(--teal);
+	border: 1px solid rgba(94, 234, 212, 0.45);
+}
+.btn:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+.icon-btn {
+	background: none;
+	border: 1px solid var(--line2);
+	color: var(--muted);
+	border-radius: 8px;
+	width: 34px;
+	height: 34px;
+	cursor: pointer;
+	font-size: 16px;
+}
+.operator .field {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	font-size: 12px;
+	color: var(--muted);
+	margin-bottom: 10px;
+}
+.operator input,
+.operator select,
+.operator textarea {
+	background: #060a13;
+	border: 1px solid var(--line2);
+	color: var(--text);
+	border-radius: 6px;
+	padding: 7px 9px;
+	font-family: var(--sans);
+	font-size: 13px;
+}
+.operator input[type="number"] {
+	width: 70px;
+}
+.operator textarea {
+	width: 100%;
+	min-height: 70px;
+	margin: 6px 0;
+}
+.operator .wide {
+	width: 100%;
+}
+.operator .row {
+	display: flex;
+	gap: 8px;
+	align-items: center;
+	flex-wrap: wrap;
+}
+.op {
+	border-top: 1px solid var(--line);
+	padding-top: 10px;
+	margin-top: 12px;
+}
+.op h4 {
+	margin: 0 0 4px;
+	font-size: 13px;
+}
+.op p {
+	margin: 0 0 8px;
+	font-size: 12px;
+}
+.op-msg {
+	margin-top: 12px;
+	color: var(--teal);
+}

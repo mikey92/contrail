@@ -2,6 +2,7 @@ import { useState } from "preact/hooks";
 import { ACTIVE_STATUSES, useRadar } from "../store";
 import { Airspace } from "./Airspace";
 import { ConnectModal, FlightDrawer, WhyPanel } from "./Detail";
+import { ClonePanel, OperatorPanel } from "./Operator";
 import { Feed, FlightList, IntentBoard, Runway } from "./Panels";
 
 export function Radar({ slug, fixture }: { slug: string; fixture: string | null }) {
@@ -10,6 +11,8 @@ export function Radar({ slug, fixture }: { slug: string; fixture: string | null 
 	const [selected, setSelected] = useState<string | null>(null);
 	const [why, setWhy] = useState<string | null>(null);
 	const [connect, setConnect] = useState(false);
+	const [operator, setOperator] = useState(false);
+	const [clone, setClone] = useState(false);
 
 	if (!s.ready) {
 		return (
@@ -53,8 +56,14 @@ export function Radar({ slug, fixture }: { slug: string; fixture: string | null 
 					<Stat label="Artifacts repos" value={s.stats.repos} accent="#f97316" />
 				</div>
 				<div class={`live ${s.connected ? "on" : ""}`}>{fixture ? "replay" : s.connected ? "live" : "reconnecting"}</div>
+				<button class="btn ghost" onClick={() => setClone(true)} title="Clone trunk with its contrail notes">
+					Clone trunk
+				</button>
 				<button class="btn" onClick={() => setConnect(true)}>
 					Connect an agent
+				</button>
+				<button class="icon-btn" onClick={() => setOperator(true)} title="Operator">
+					⚙
 				</button>
 			</header>
 
@@ -106,6 +115,8 @@ export function Radar({ slug, fixture }: { slug: string; fixture: string | null 
 			</main>
 			{why && <WhyPanel slug={slug} fixture={fixture} target={why} onClose={() => setWhy(null)} />}
 			{connect && <ConnectModal slug={slug} onClose={() => setConnect(false)} />}
+			{operator && <OperatorPanel slug={slug} onClose={() => setOperator(false)} />}
+			{clone && <ClonePanel slug={slug} onClose={() => setClone(false)} />}
 		</div>
 	);
 }

@@ -1,5 +1,6 @@
 import type { Agent, Flight, Intent, Landing, RadarEvent } from "../../../src/shared/types";
 import { ACTIVE_STATUSES, relTime } from "../store";
+import { KindBadge } from "./Airspace";
 
 const ICON: Record<string, string> = {
 	"agent.joined": "＋",
@@ -62,6 +63,7 @@ export function FlightList({ flights, agents, intents, onSelect }: { flights: Re
 			<div key={f.id} class={`fcard st-border-${f.status}`} onClick={() => onSelect(f.id)}>
 				<div class="fcard-top">
 					<span class="dot" style={{ background: a?.color }} />
+					<KindBadge kind={a?.kind} />
 					<b>{a?.callsign}</b>
 					<span class="mono muted">{f.code}</span>
 					<span class={`st st-${f.status}`}>{f.status}</span>
