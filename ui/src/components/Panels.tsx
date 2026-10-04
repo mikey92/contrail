@@ -6,6 +6,7 @@ const ICON: Record<string, string> = {
 	"agent.joined": "＋",
 	"intent.created": "◆",
 	"flight.taxiing": "⇢",
+	"flight.planned": "⤳",
 	"flight.airborne": "✈",
 	"flight.aborted": "✕",
 	"clearance.granted": "✓",

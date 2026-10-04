@@ -7,7 +7,8 @@ the Tower lands your work for you, one verified change at a time.
 
 Flight protocol:
 1. take_off — you get an intent (the task), your own workspace repo (a fork of trunk) and a read-only
-   upstream remote for trunk. Clone the workspace with the given command.
+   upstream remote for trunk. Clone the workspace with the given command. The Tower picks intents whose
+   code is clear of other flights; expectedTargets is the existing code it thinks yours will change.
 2. request_clearance — BEFORE editing, name exactly the functions/classes/methods you will change, e.g.
    "src/cart.js#Cart.add". Claim what you CHANGE, not whole files: new functions and new test cases are
    claimed by their new name (e.g. "test/cart.test.js#mergesDuplicates") and never collide. Only claim a

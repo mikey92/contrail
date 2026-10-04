@@ -30,6 +30,7 @@ import type {
 import { callsignFor, colorFor, errorMessage, json, now, randomId, randomToken, repoSafe, sha256, sleep } from "../util";
 import { PROTOCOL, workspaceInstructions } from "./briefing";
 import { findCollisions, normalizeTarget, parseTarget, targetsOverlap } from "./clearance";
+import { type AirTarget, firstCollision, predictTargets, type SymbolIndex, symbolIndex } from "./planner";
 import { SCHEMA } from "./schema";
 
 type Row = Record<string, SqlStorageValue>;
@@ -60,6 +61,8 @@ export interface TakeOffResult {
 	intent: Intent;
 	/** Contrail of earlier flights on this intent that did not land: context handed to the next agent. */
 	previousAttempts?: { flight: string; agent: string; status: string; contrail: { kind: string; text: string }[] }[];
+	/** The flight plan: existing code the Tower expects this intent to change, read from its text. */
+	expectedTargets: string[];
 	workspace: Workspace;
 	upstream: Workspace;
 	setup: string;
@@ -71,6 +74,13 @@ export interface RadioMessage {
 	kind: string;
 	text: string;
 	at: number;
+}
+
+interface Dispatch {
+	intent: Intent;
+	expected: string[];
+	/** Intents ahead in line that were passed over, and the code in the air each would have hit. */
+	deferred: { intent: Intent; target: string; flightId: string }[];
 }
 
 export interface HoldInfo {
@@ -510,21 +520,46 @@ export class Tower extends DurableObject<Env> {
 		return intent;
 	}
 
-	private nextIntent(intentRef?: string | number | null): Intent | null {
+	/**
+	 * The next intent to fly. An explicit pick is taken as is. Otherwise intents go by priority, but one
+	 * whose predicted code is already in the air is passed over for the next one that is clear of it;
+	 * when every open intent collides, the first in line takes off and holds at clearance as before.
+	 */
+	private nextIntent(intentRef?: string | number | null): Dispatch | null {
+		const index = symbolIndex(this.meta<TrunkState>("trunk", { head: null, files: [], landedCount: 0 }).files);
 		if (intentRef !== undefined && intentRef !== null && intentRef !== "") {
 			const ref = String(intentRef).replace(/^INT-/i, "");
 			const r = /^\d+$/.test(ref) ? this.row("SELECT * FROM intents WHERE seq = ?", Number(ref)) : this.row("SELECT * FROM intents WHERE id = ?", ref);
 			if (!r) throw new Error(`no intent ${intentRef}`);
 			const intent = this.toIntent(r);
 			if (intent.status !== "open") throw new Error(`INT-${intent.seq} is ${intent.status}`);
-			return intent;
+			return { intent, expected: predictTargets(intent, index), deferred: [] };
 		}
+		const air = this.airspace(index);
+		const deferred: Dispatch["deferred"] = [];
+		let first: Dispatch | null = null;
 		for (const r of this.rows("SELECT * FROM intents WHERE status = 'open' ORDER BY priority DESC, seq ASC")) {
 			const intent = this.toIntent(r);
 			const blocked = intent.dependsOn.some((id) => this.row<{ status: string }>("SELECT status FROM intents WHERE id = ?", id)?.status !== "landed");
-			if (!blocked) return intent;
+			if (blocked) continue;
+			const expected = predictTargets(intent, index);
+			const collision = firstCollision(expected, air);
+			if (!collision) return { intent, expected, deferred };
+			first ??= { intent, expected, deferred: [] };
+			deferred.push({ intent, target: collision.target, flightId: collision.with.flightId });
 		}
-		return null;
+		return first;
+	}
+
+	/** Code in the air: what active flights hold or wait for, and what their intents are expected to change. */
+	private airspace(index: SymbolIndex): AirTarget[] {
+		const air: AirTarget[] = this.activeClearances().map((c) => ({ target: c.target, flightId: c.flightId }));
+		const flights = this.rows<{ id: string; title: string; body: string }>(
+			`SELECT f.id, i.title, i.body FROM flights f JOIN intents i ON i.id = f.intent_id WHERE f.status IN (${ACTIVE.map(() => "?").join(",")})`,
+			...ACTIVE,
+		);
+		for (const f of flights) for (const target of predictTargets(f, index)) air.push({ target, flightId: f.id });
+		return air;
 	}
 
 	// ───────────────────────── flights ─────────────────────────
@@ -537,8 +572,8 @@ export class Tower extends DurableObject<Env> {
 			const f = this.toFlight(active);
 			throw new Error(`you are already flying ${f.code} (${f.status}); land it or call abort before taking off again`);
 		}
-		const intent = this.nextIntent(opts.intent);
-		if (!intent) {
+		const next = this.nextIntent(opts.intent);
+		if (!next) {
 			const waiting = this.row<{ c: number }>("SELECT COUNT(*) AS c FROM intents WHERE status = 'open'")?.c ?? 0;
 			return {
 				idle: true,
@@ -547,6 +582,7 @@ export class Tower extends DurableObject<Env> {
 			};
 		}
 
+		const { intent, expected, deferred } = next;
 		const project = this.project();
 		const seq = (this.row<{ s: number }>("SELECT COALESCE(MAX(seq), 0) + 1 AS s FROM flights")?.s ?? 1) as number;
 		const code = `FL-${String(seq).padStart(3, "0")}`;
@@ -569,7 +605,16 @@ export class Tower extends DurableObject<Env> {
 		this.sql.exec("UPDATE intents SET status = 'assigned', flight_id = ? WHERE id = ?", flightId, intent.id);
 		this.patch("flight", this.flightById(flightId));
 		this.patch("intent", this.intentById(intent.id));
-		this.emit("flight.taxiing", `${agent.callsign} taxiing as ${code} for INT-${intent.seq}`, { flightId, agentId });
+		this.emit("flight.taxiing", `${agent.callsign} taxiing as ${code} for INT-${intent.seq}`, { flightId, agentId, data: { expected } });
+		if (deferred.length) {
+			this.bump("planned");
+			const d = deferred[0];
+			this.emit(
+				"flight.planned",
+				`Planned ${code} around INT-${d.intent.seq} "${d.intent.title}"${deferred.length > 1 ? ` and ${deferred.length - 1} more` : ""}: ${d.target} is in the air with ${this.flightById(d.flightId).code}`,
+				{ flightId, agentId, data: { deferred: deferred.slice(0, 20).map((x) => ({ intent: x.intent.seq, target: x.target, flight: this.flightById(x.flightId).code })) } },
+			);
+		}
 
 		try {
 			// Artifacts runs one fork of a repo at a time; under a take-off burst, wait for our turn.
@@ -626,6 +671,7 @@ export class Tower extends DurableObject<Env> {
 				flight,
 				intent: this.intentById(intent.id),
 				...(previousAttempts.length ? { previousAttempts } : {}),
+				expectedTargets: expected,
 				workspace,
 				upstream,
 				setup: workspaceInstructions({ cloneUrl: workspace.cloneUrl, upstreamUrl: upstream.cloneUrl, dir, flightCode: code, callsign: agent.callsign, testCommand: this.meta<string | null>("testCommand", null) ?? undefined }),
@@ -1339,6 +1385,7 @@ export class Tower extends DurableObject<Env> {
 				conflictsPrevented: stats.conflictsPrevented ?? 0,
 				conflictsResolved: stats.conflictsResolved ?? 0,
 				unioned: stats.unioned ?? 0,
+				planned: stats.planned ?? 0,
 			},
 		};
 	}

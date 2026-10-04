@@ -54,6 +54,7 @@ export function Radar({ slug, fixture }: { slug: string; fixture: string | null 
 					<Stat label="landed" value={s.stats.landings} accent="#4ade80" />
 					<Stat label="intents done" value={`${landedIntents}/${intents.length}`} />
 					<Stat label="collisions avoided" value={s.stats.conflictsPrevented} accent="#fbbf24" />
+					<Stat label="planned around" value={s.stats.planned ?? 0} accent="#38bdf8" />
 					<Stat label="auto-merged" value={s.stats.unioned} accent="#a78bfa" />
 					<Stat label="Artifacts repos" value={s.stats.repos} accent="#f97316" />
 				</div>

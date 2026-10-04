@@ -27,7 +27,7 @@ export const TOOLS: ToolDef[] = [
 		summarize: (r) =>
 			r.idle
 				? `Nothing assigned: ${r.message}`
-				: `✈ ${r.flight.code} airborne for INT-${r.intent.seq} "${r.intent.title}". Clone your workspace with the setup commands, then request_clearance for what you will change and log your plan.`,
+				: `✈ ${r.flight.code} airborne for INT-${r.intent.seq} "${r.intent.title}". Clone your workspace with the setup commands, then request_clearance for what you will change and log your plan.${r.expectedTargets?.length ? ` The Tower expects this intent to change ${r.expectedTargets.join(", ")}.` : ""}`,
 	},
 	{
 		name: "request_clearance",
