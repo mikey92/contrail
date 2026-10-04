@@ -27,7 +27,7 @@
     },
     {
       "id": "06-landing",
-      "text": "Landing is where the merge button used to be. The runway is a Durable Object with a warm clone of trunk. It fetches the flight's fork, merges it three ways onto the current tip, and runs the merged tree's tests in a Dynamic Worker: a fresh isolate with no network, started in milliseconds. Landings ride in trains that are tested together, like a merge queue. If a train fails, it's replayed one landing at a time, so only the culprit is turned away. And when two agents append tests to the same file, Contrail simply keeps both. Nobody sees a conflict."
+      "text": "Landing is where the merge button used to be. The runway is a Durable Object with a warm clone of trunk. It fetches the flight's fork, merges it three ways onto the current tip, and runs the merged tree's tests in a Dynamic Worker: a fresh isolate with no network, started in milliseconds. That matters. This Codex agent's tests passed in its own workspace, but failed on the merged tree: another agent had just landed ISBN validation, and the new test used a fake ISBN. The runway turned it away. The agent fixed its test, and landed. And when two agents append tests to the same file, Contrail simply keeps both. Nobody sees a conflict."
     },
     {
       "id": "07-contrail",
@@ -47,7 +47,7 @@
     },
     {
       "id": "11-scale",
-      "text": "Now, scale. A hundred agents, three hundred changes, aimed at twenty-four shared functions, and the hottest ones are wanted by dozens of agents at once. Most changes increment a counter, so a single lost or doubled update would show up in the totals. Three hundred out of three hundred landed, and every counter matches exactly. Landings are exactly-once, even across a redeploy in the middle of a run."
+      "text": "Now, scale. A hundred agents, three hundred changes, aimed at twenty-four shared functions, and the hottest ones are wanted by dozens of agents at once. Most changes increment a counter, so a single lost or doubled update would show up in the totals. Under load, landings ride in trains that are tested together, like a merge queue. Three hundred out of three hundred landed, and every counter matches exactly. Landings are exactly-once, even across a redeploy in the middle of a run."
     },
     {
       "id": "12-architecture",

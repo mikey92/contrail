@@ -57,7 +57,7 @@ sequenceDiagram
 | Issue | **Intent** | A unit of work agents take off with. Agents can file follow-ups for other agents. |
 | Branch | **Flight + its own Artifacts repo** | Every flight forks trunk into a fresh repo. Agents never get write access to trunk. |
 | _(nothing)_ | **Clearance** | Before editing, an agent claims the *functions, classes or methods* it will change (`src/cart.js#Cart.add`), not whole files. Overlapping claims put the second agent in a **holding pattern** before any code is written. |
-| Pull request + merge button | **Landing** | The Runway, trunk's only writer, merges the workspace onto the current trunk tip. It runs the test suite in a Dynamic Worker and lands one squashed, attributed commit. Landings go in **trains**, one push for many changes. |
+| Pull request + merge button | **Landing** | The Runway, trunk's only writer, merges the workspace onto the current trunk tip and lands one squashed, attributed commit. Landings go in **trains**, like a merge queue: each train's merged tree is tested once in a Dynamic Worker and pushed once; a red train is replayed one landing at a time so only the culprit is turned away. |
 | Merge conflict | **Structured conflict** | Parallel inserts (two agents appending functions or tests) are merged automatically. Real overlaps come back as exact hunks with the function name, plus the flight, agent and intent that changed trunk. |
 | Commit message | **Contrail** | The intent, plan, decisions and test evidence of every landing, attached to its commit as a git note (`refs/notes/contrail`). Any agent can ask `why(path, line)`. |
 | Notifications | **Radio & turbulence** | Every tool response carries messages. Agents hear when a hold is released, when someone waits on them, or when trunk changed code they hold. |
@@ -80,14 +80,15 @@ HOLDING for src/pricing.js#subtotal (held by CLAUDE-3 FL-005: INT-16 Buy 2 get 1
 
 | Run | Agents | Result |
 | --- | --- | --- |
-| Real coding agents on the Bookshop demo | 4 Claude Code (Opus, Sonnet, Haiku) + 2 Codex | 16/16 intents landed in about 4½ minutes. Every landing passed on its first attempt. Parallel test additions were auto-merged. |
-| Edge agents on Workers AI | 2 × GLM-5.3 Flash | 4/4 intents landed, about 17k tokens per intent, about $0.003 each |
-| Load test: hot shared functions | 40 scripted agents, 120 intents on 24 Zipf-skewed counters | 120/120 landed, **no lost updates** (each counter equals its landed increments), 21 parallel inserts auto-merged |
+| Real coding agents on the Bookshop demo ([replay](https://contrail.mikey9220.workers.dev/p/bookshop?replay=/replays/bookshop.jsonl.gz&speed=2)) | 4 Claude Code (Opus, Sonnet ×2, Haiku), 2 Codex, 2 edge agents on Workers AI | 16/16 intents landed in a little over 2 minutes. A Codex agent was held off `subtotal` before writing any code. Later its tests passed in its own workspace but failed on the merged tree: another agent had just landed ISBN-13 validation, and its new test used a fake ISBN. The runway turned it away; it fixed the test and landed. 3 parallel test additions were auto-merged. The edge agents landed 5 of the 16. |
+| Edge agents on Workers AI | GLM-5.3 Flash | About 17k tokens per intent, about $0.003 each |
+| Load test: hot shared functions ([replay](https://contrail.mikey9220.workers.dev/p/stress?replay=/replays/stress.jsonl.gz&speed=6)) | 100 scripted agents, 300 intents on 24 Zipf-skewed counters | 300/300 landed in about 6½ minutes, **no lost updates** (each counter equals its landed increments). 174 holds before any code was written, 61 parallel inserts auto-merged, and 105 test runs for 300 landings thanks to trains. |
 | Load test + redeploy mid-flight | 60 scripted agents, 180 intents | Exactly-once landings across the restart: no lost or doubled updates |
-| End-to-end protocol test ([`scripts/smoke.mjs`](scripts/smoke.mjs)) | 5 scripted git agents | Covers sibling methods merged in parallel, a hold, a real conflict with its cause, a semantic conflict caught by tests, resolution, `why()`, and review by exception |
+| End-to-end protocol test ([`scripts/smoke.mjs`](scripts/smoke.mjs)) | 9 scripted git agents | Covers sibling methods merged in parallel, a hold, a real conflict with its cause, a semantic conflict caught by tests, resolution, `why()`, review by exception, and a train with a culprit |
 
 A landing costs about a second: fetch the fork (~0.3s), merge (ms), tests in a Dynamic Worker (~15ms),
-then push. Workspace forks take about 2.5s and run in parallel, one per flight.
+then push. Workspace forks take about 2.5s and run in parallel, one per flight. Under load, landings
+batch into trains of up to 12 that share one test run and one push.
 
 ## Built on Cloudflare
 
@@ -129,6 +130,11 @@ Open https://contrail.mikey9220.workers.dev and pick an airspace.
 - Click a function to read its contrail (`why()`).
 - Click a plane to see its flight: intent, plan, decisions, clearances, diffs, tests.
 - **Clone trunk** gives you a read-only clone URL. `git log --notes=contrail` shows the context behind every commit.
+
+Recorded runs replay in the radar at any speed (`&speed=`, `&from=` seconds):
+[the real swarm](https://contrail.mikey9220.workers.dev/p/bookshop?replay=/replays/bookshop.jsonl.gz&speed=2),
+[100 agents](https://contrail.mikey9220.workers.dev/p/stress?replay=/replays/stress.jsonl.gz&speed=6) and
+[the incident](https://contrail.mikey9220.workers.dev/p/incident?replay=/replays/incident.jsonl.gz) from the video.
 
 ### Launch agents from the browser
 
@@ -186,7 +192,8 @@ ui/                   the Radar (Preact + Vite)
 demo/bookshop/        demo codebase + 16 intents
 demo/stress/          load-test codebase (24 shared counters)
 demo/swarm/           launcher for real Claude Code / Codex agents
-scripts/              project creation, smoke test, stress intents and verifier
+scripts/              project creation, smoke test, stress intents and verifier, radar stream recorder
+video/                the demo video: narration (Workers AI text-to-speech), slides, filmed scenes, compositing
 ```
 
 ## Limits and next steps

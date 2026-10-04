@@ -299,8 +299,9 @@ const scenes = {
 		url: (s) =>
 			replay("bookshop", "bookshop.jsonl", 73, {
 				pins: [
-					[108.1, cue(s, "only the culprit is turned away")],
-					[141.2, cue(s, "simply keeps both")],
+					[107.0, cue(s, "That matters") + 0.4],
+					[108.1, cue(s, "but failed on the merged tree")],
+					[141.2, cue(s, "and landed.")],
 				],
 			}),
 		prepare: replayReady,
@@ -313,15 +314,23 @@ const scenes = {
 			await page.waitForTimeout(500);
 			await click(page, page.locator(".flights .fcard", { hasText: "FL-006" }).first());
 			await t.at(cue(s, "runs the merged tree's tests"));
-			await spotlight(page, ".drawer .tests", { ms: 3600, pad: 6 });
-			await t.at(cue(s, "Landings ride in trains") - 0.6);
+			await spotlight(page, ".drawer .tests", { ms: 3400, pad: 6 });
+			await t.at(cue(s, "This Codex agent") - 1.0);
+			await click(page, ".drawer .close");
+			await page.waitForTimeout(400);
+			await click(page, page.locator(".flights .fcard", { hasText: "FL-007" }).first());
+			await t.at(cue(s, "but failed on the merged tree") + 0.6);
+			await page.locator(".drawer section.landing.failed").first().scrollIntoViewIfNeeded().catch(() => {});
+			await spotlight(page, ".drawer section.landing.failed .tests", { ms: 4200, pad: 6, color: "#f87171" });
+			await t.at(cue(s, "and landed.") + 0.3);
+			await page.locator(".drawer section.landing.landed").first().scrollIntoViewIfNeeded().catch(() => {});
+			await spotlight(page, ".drawer section.landing.landed", { ms: 2200, pad: 4, color: "#4ade80" });
+			await t.at(cue(s, "And when two agents append") - 0.6);
 			await click(page, ".drawer .close");
 			await page.waitForTimeout(300);
 			await click(page, '.tabs button:has-text("Live")');
-			await t.at(cue(s, "only the culprit is turned away") + 0.3);
-			await spotlight(page, ".feed .ev-landing-failed", { ms: 2400, pad: 4, color: "#f87171" });
-			await t.at(cue(s, "simply keeps both") + 0.4);
-			await spotlight(page, ".feed .ev-landing-landed", { ms: 2600, pad: 4, color: "#a78bfa" });
+			await t.at(cue(s, "simply keeps both") - 0.2);
+			await spotlight(page, ".feed .ev-landing-landed", { ms: 3000, pad: 4, color: "#a78bfa" });
 		},
 	},
 
