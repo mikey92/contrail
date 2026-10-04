@@ -3,7 +3,11 @@
   "segments": [
     {
       "id": "01-hook",
-      "text": "A hundred coding agents. One codebase. Three hundred changes landing at the same time, with no pull requests, and not a single lost update. This is Contrail: air traffic control for coding agents, built entirely on Cloudflare."
+      "text": "A hundred coding agents. One codebase. Three hundred changes landing at the same time, with no pull requests, and not a single lost update."
+    },
+    {
+      "id": "01b-title",
+      "text": "This is Contrail: air traffic control for coding agents, built entirely on Cloudflare."
     },
     {
       "id": "02-problem",
