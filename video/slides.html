@@ -5,65 +5,59 @@
 <title>Contrail slides</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet" />
 <style>
+  /* The video's slides in the radar's light "chart paper" style. */
   :root {
-    --bg: #070b14; --bg2: #0b1120; --panel: #0f172a; --line: #1e293b; --line2: #26344d;
-    --text: #e2e8f0; --muted: #8193ad; --teal: #5eead4; --green: #4ade80; --amber: #fbbf24;
-    --red: #f87171; --violet: #a78bfa; --orange: #f97316; --blue: #60a5fa;
-    --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
-    --sans: Inter, ui-sans-serif, system-ui, sans-serif;
+    --paper: #f3f2ee; --surface: #ffffff; --ink: #17191d; --ink-2: #3b3f47; --muted: #6b6f78; --faint: #9a9da4;
+    --line: #e3e1db; --line-2: #d2cfc7; --brand: #e8590c;
+    --air: #2463c7; --hold: #a86400; --ok: #1d7a35; --bad: #c4302b; --plan: #6d3fc8; --land: #0f7a6e;
+    --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    --sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
   }
   * { box-sizing: border-box; }
-  html, body { margin: 0; width: 1920px; height: 1080px; overflow: hidden; background: var(--bg); color: var(--text); font-family: var(--sans); -webkit-font-smoothing: antialiased; }
-  body::before { content: ""; position: absolute; inset: 0; background:
-      radial-gradient(1200px 700px at 78% 18%, rgba(94, 234, 212, 0.07), transparent 60%),
-      radial-gradient(900px 600px at 10% 90%, rgba(167, 139, 250, 0.06), transparent 60%),
-      linear-gradient(rgba(148, 163, 184, 0.045) 1px, transparent 1px) 0 0 / 64px 64px,
-      linear-gradient(90deg, rgba(148, 163, 184, 0.045) 1px, transparent 1px) 0 0 / 64px 64px; }
-  section { position: absolute; inset: 0; display: none; padding: 90px 130px; }
+  html, body { margin: 0; width: 1920px; height: 1080px; overflow: hidden; background: var(--paper); color: var(--ink); font-family: var(--sans); -webkit-font-smoothing: antialiased; }
+  section { position: absolute; inset: 0; display: none; padding: 90px 140px; }
   section.on { display: flex; flex-direction: column; justify-content: center; }
-  .rv { opacity: 0; transform: translateY(16px); transition: opacity 0.7s ease, transform 0.7s cubic-bezier(0.2, 0.7, 0.2, 1); }
+  .rv { opacity: 0; transform: translateY(14px); transition: opacity 0.6s ease, transform 0.6s cubic-bezier(0.2, 0.7, 0.2, 1); }
   .rv.on { opacity: 1; transform: none; }
-  .kicker { font-family: var(--mono); font-size: 26px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--teal); margin-bottom: 24px; }
-  h1 { font-size: 76px; line-height: 1.05; margin: 0 0 22px; font-weight: 800; letter-spacing: -0.02em; }
-  h2 { font-size: 72px; line-height: 1.08; margin: 0 0 50px; font-weight: 800; letter-spacing: -0.025em; }
+  .kicker { font-size: 28px; font-weight: 600; color: var(--brand); margin-bottom: 18px; }
+  h1 { font-size: 76px; line-height: 1.05; margin: 0 0 22px; font-weight: 600; letter-spacing: -0.02em; }
+  h2 { font-size: 68px; line-height: 1.08; margin: 0 0 48px; font-weight: 600; letter-spacing: -0.02em; }
   .sub { font-size: 30px; color: var(--muted); line-height: 1.45; }
   .mono { font-family: var(--mono); }
 
   /* title */
-  #title { padding: 0; }
-  #title.on { align-items: center; text-align: center; }
-  .logo-big { width: 170px; height: 170px; margin-bottom: 26px; }
-  .wordmark { font-size: 132px; font-weight: 800; letter-spacing: -0.035em; margin: 0; }
-  .tagline { font-size: 42px; color: var(--teal); margin-top: 12px; font-weight: 600; }
-  .stack { margin-top: 70px; display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; }
-  .chip { font-family: var(--mono); font-size: 27px; padding: 12px 22px; border: 1px solid var(--line2); border-radius: 999px; color: var(--text); background: rgba(15, 23, 42, 0.7); }
-  .radar { position: absolute; left: 50%; top: 50%; width: 1500px; height: 1500px; margin: -750px 0 0 -750px; border-radius: 50%; pointer-events: none;
-    background: repeating-radial-gradient(circle, rgba(94, 234, 212, 0.06) 0 1px, transparent 1px 150px); }
-  .radar::after { content: ""; position: absolute; inset: 0; border-radius: 50%; animation: sweep 6s linear infinite;
-    background: conic-gradient(from 0deg, rgba(94, 234, 212, 0.11), rgba(94, 234, 212, 0) 55deg, transparent 360deg); }
-  @keyframes sweep { to { transform: rotate(360deg); } }
-  #title > *:not(.radar), #close > *:not(.radar) { position: relative; }
-  .chip b { color: var(--orange); font-weight: 600; }
+  #title { padding: 0 180px; }
+  #title.on { align-items: flex-start; }
+  .logo-big { width: 120px; height: 120px; margin-bottom: 34px; }
+  .wordmark { font-size: 150px; font-weight: 600; letter-spacing: -0.035em; margin: 0; line-height: 1; }
+  .tagline { font-size: 52px; color: var(--ink-2); margin-top: 22px; font-weight: 500; letter-spacing: -0.01em; }
+  .rule { width: 1560px; height: 2px; background: var(--ink); margin-top: 90px; }
+  .stack { margin-top: 26px; display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+  .stack .on-cf { font-size: 26px; color: var(--muted); margin-right: 10px; }
+  .chip { font-size: 26px; font-weight: 500; padding: 10px 20px; border: 1.5px solid var(--line-2); border-radius: 999px; color: var(--ink); background: var(--surface); }
+  .chip b { font-weight: 500; }
 
   /* problem */
-  .problems { display: grid; grid-template-columns: 1fr 1fr; gap: 36px 44px; }
-  .problem { border: 1px solid var(--line2); border-radius: 20px; padding: 42px 46px; background: rgba(15, 23, 42, 0.72); min-height: 210px; }
-  .problem .t { font-size: 46px; font-weight: 750; margin-bottom: 18px; display: flex; align-items: center; gap: 20px; letter-spacing: -0.01em; }
-  .problem .t i { font-style: normal; width: 58px; height: 58px; border-radius: 14px; display: grid; place-items: center; font-size: 32px; flex: none; }
-  .problem .d { font-size: 31px; color: #9fb0c8; line-height: 1.42; }
-  .flow { display: flex; align-items: center; gap: 20px; font-family: var(--mono); font-size: 29px; color: var(--muted); margin: -20px 0 52px; }
-  .flow span { padding: 10px 20px; border: 1px solid var(--line2); border-radius: 12px; color: var(--text); }
+  .problems { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border-top: 2px solid var(--ink); }
+  .problem { padding: 34px 44px 34px 0; min-height: 190px; border-bottom: 1px solid var(--line-2); }
+  .problem:nth-child(even) { padding-left: 44px; border-left: 1px solid var(--line-2); }
+  .problem .t { font-size: 44px; font-weight: 600; margin-bottom: 14px; display: flex; align-items: baseline; gap: 18px; letter-spacing: -0.01em; }
+  .problem .t i { font-style: normal; font-family: var(--mono); font-size: 26px; font-weight: 600; color: var(--brand); flex: none; }
+  .problem .d { font-size: 31px; color: var(--ink-2); line-height: 1.42; }
+  .problem em { font-style: italic; }
+  .flow { display: flex; align-items: center; gap: 18px; font-size: 29px; color: var(--muted); margin: -16px 0 44px; }
+  .flow span { padding: 9px 20px; border: 1.5px solid var(--line-2); border-radius: 10px; color: var(--ink); background: var(--surface); }
 
   /* protocol */
-  table.map { width: 100%; border-collapse: separate; border-spacing: 0 12px; margin-top: -30px; }
-  table.map td { font-size: 32px; padding: 20px 30px; background: rgba(15, 23, 42, 0.78); border-top: 1px solid var(--line2); border-bottom: 1px solid var(--line2); vertical-align: middle; }
-  table.map td:first-child { border-left: 1px solid var(--line2); border-radius: 14px 0 0 14px; color: var(--muted); width: 330px; font-family: var(--mono); font-size: 29px; }
-  table.map td:nth-child(2) { width: 70px; text-align: center; color: var(--teal); font-size: 32px; padding: 0; }
-  table.map td:nth-child(3) { font-weight: 750; width: 420px; font-size: 38px; }
-  table.map td:last-child { border-right: 1px solid var(--line2); border-radius: 0 14px 14px 0; color: #b6c3d6; font-size: 30px; line-height: 1.3; }
-  table.map tr.rv { transform: translateX(-20px); }
+  table.map { width: 100%; border-collapse: collapse; margin-top: -24px; border-top: 2px solid var(--ink); }
+  table.map td { font-size: 32px; padding: 19px 26px; border-bottom: 1px solid var(--line-2); vertical-align: middle; }
+  table.map td:first-child { color: var(--muted); width: 330px; font-family: var(--mono); font-size: 28px; padding-left: 0; }
+  table.map td:nth-child(2) { width: 70px; text-align: center; color: var(--brand); font-size: 32px; padding: 0; }
+  table.map td:nth-child(3) { font-weight: 600; width: 430px; font-size: 38px; }
+  table.map td:last-child { color: var(--ink-2); font-size: 30px; line-height: 1.3; }
+  table.map tr.rv { transform: translateX(-16px); }
   table.map tr.rv.on { transform: none; }
 
   /* architecture */
@@ -71,51 +65,53 @@
   #architecture.on { display: block; }
   #architecture h2 { margin-bottom: 30px; }
   .arch { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; }
-  .cloud { position: absolute; left: 520px; top: 262px; width: 1370px; height: 790px; border: 2px dashed rgba(249, 115, 22, 0.55); border-radius: 30px; background: rgba(249, 115, 22, 0.035); }
-  .cloud-label { position: absolute; left: 1700px; top: 1037px; padding: 2px 14px; background: var(--bg); color: var(--orange); font-family: var(--mono); font-size: 22px; letter-spacing: 0.14em; }
+  .cloud { position: absolute; left: 520px; top: 262px; width: 1370px; height: 790px; border: 2px dashed rgba(232, 89, 12, 0.6); border-radius: 26px; background: rgba(232, 89, 12, 0.035); }
+  .cloud-label { position: absolute; left: 1690px; top: 1037px; padding: 2px 14px; background: var(--paper); color: var(--brand); font-size: 24px; font-weight: 600; }
   #architecture h2 { font-size: 64px; margin-bottom: 0; }
-  .box { position: absolute; border: 1.5px solid var(--line2); border-radius: 16px; background: rgba(15, 23, 42, 0.94); padding: 18px 22px; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35); }
-  .box .n { font-size: 29px; font-weight: 800; margin-bottom: 6px; display: flex; align-items: center; gap: 12px; }
-  .box .n .tag { font-family: var(--mono); font-size: 16px; font-weight: 500; color: var(--muted); border: 1px solid var(--line2); border-radius: 6px; padding: 2px 8px; }
-  .box .d { font-size: 21px; color: var(--muted); line-height: 1.38; }
-  .box.cf .n { color: var(--text); }
-  .box.accent-teal { border-color: rgba(94, 234, 212, 0.55); }
-  .box.accent-amber { border-color: rgba(251, 191, 36, 0.55); }
-  .box.accent-orange { border-color: rgba(249, 115, 22, 0.6); }
-  .box.accent-violet { border-color: rgba(167, 139, 250, 0.6); }
-  .box.accent-green { border-color: rgba(74, 222, 128, 0.55); }
-  .box.accent-blue { border-color: rgba(96, 165, 250, 0.55); }
+  .box { position: absolute; border: 1.5px solid var(--line-2); border-top-width: 5px; border-radius: 10px; background: var(--surface); padding: 18px 22px; box-shadow: 0 1px 2px rgba(23,25,29,.06), 0 10px 28px rgba(23,25,29,.08); }
+  .box .n { font-size: 29px; font-weight: 600; margin-bottom: 6px; display: flex; align-items: center; gap: 12px; }
+  .box .n .tag { font-family: var(--mono); font-size: 16px; font-weight: 500; color: var(--muted); border: 1px solid var(--line-2); border-radius: 6px; padding: 2px 8px; }
+  .box .d { font-size: 21px; color: var(--ink-2); line-height: 1.38; }
+  .box.accent-teal { border-top-color: var(--land); }
+  .box.accent-amber { border-top-color: var(--hold); }
+  .box.accent-orange { border-top-color: var(--brand); }
+  .box.accent-violet { border-top-color: var(--plan); }
+  .box.accent-green { border-top-color: var(--ok); }
+  .box.accent-blue { border-top-color: var(--air); }
   svg.wires { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; overflow: visible; }
   svg.wires path { fill: none; stroke-width: 2.5; }
-  svg.wires .lbl { font-family: var(--mono); font-size: 17px; fill: #a9b8cc; paint-order: stroke; stroke: var(--bg); stroke-width: 6px; }
+  svg.wires .lbl { font-family: var(--mono); font-size: 17px; fill: var(--ink-2); paint-order: stroke; stroke: var(--paper); stroke-width: 7px; }
   svg.wires g.rv { transform: none; }
 
   /* close */
-  .quote { font-size: 84px; font-weight: 800; letter-spacing: -0.025em; line-height: 1.08; }
-  .quote .hl { color: var(--teal); }
-  .links { margin-top: 70px; display: grid; grid-template-columns: auto 1fr; gap: 18px 30px; font-size: 32px; align-items: baseline; }
-  .links .k { font-family: var(--mono); font-size: 22px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.14em; }
+  #close { padding: 0 180px; }
+  .quote { font-size: 88px; font-weight: 600; letter-spacing: -0.025em; line-height: 1.08; }
+  .quote .hl { color: var(--brand); }
+  .links { margin-top: 80px; padding-top: 34px; border-top: 2px solid var(--ink); display: grid; grid-template-columns: auto 1fr; gap: 18px 34px; font-size: 34px; align-items: baseline; width: 1560px; }
+  .links .k { font-size: 26px; font-weight: 600; color: var(--muted); }
   .links .v { font-family: var(--mono); }
-  .team { margin-top: 64px; font-size: 30px; color: var(--muted); }
+  .team { margin-top: 60px; font-size: 30px; color: var(--muted); }
 </style>
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute">
   <defs>
     <symbol id="logo" viewBox="0 0 32 32">
-      <path d="M3 23 C 11 21, 15 15, 21 10" stroke="#5eead4" stroke-width="2.4" fill="none" stroke-linecap="round" opacity=".6" />
-      <path d="M6 27 C 13 25, 18 19, 23 14" stroke="#5eead4" stroke-width="2.4" fill="none" stroke-linecap="round" opacity=".3" />
-      <path d="M27 5 l-4 8 -5 -2 z" fill="#e2e8f0" />
+      <g transform="rotate(45 16 16)">
+        <path d="M12.6 19.5v10M19.4 19.5v10" stroke="#e8590c" stroke-width="2.2" stroke-linecap="round" />
+        <path d="M16 2.2c.9 0 1.6.8 1.6 1.8v6.9l8.4 5.1v2.3l-8.4-2.6v5.2l2.3 1.8V25L16 23.9 12.1 25v-2.1l2.3-1.8v-5.2L6 18.4v-2.3l8.4-5.1V4c0-1 .7-1.8 1.6-1.8z" fill="#17191d" />
+      </g>
     </symbol>
   </defs>
 </svg>
 
 <section id="title">
-  <div class="radar"></div>
   <svg class="logo-big rv" data-at="0"><use href="#logo" /></svg>
   <h1 class="wordmark rv" data-at="0.3">Contrail</h1>
   <div class="tagline rv" data-at="0.8">Air traffic control for coding agents</div>
+  <div class="rule rv" data-at="1.3"></div>
   <div class="stack rv" data-at="1.4">
+    <span class="on-cf">Built on Cloudflare</span>
     <span class="chip"><b>Workers</b></span><span class="chip"><b>Durable Objects</b></span><span class="chip"><b>Artifacts</b></span>
     <span class="chip"><b>Dynamic Workers</b></span><span class="chip"><b>Workers AI</b></span>
   </div>
@@ -127,19 +123,19 @@
   <div class="flow rv" data-say="a branch per person"><span>branch per person</span>→<span>pull request per change</span>→<span>human review</span>→<span>merge</span></div>
   <div class="problems">
     <div class="problem rv" data-say="Agents collide late">
-      <div class="t"><i style="background: rgba(248,113,113,.14); color: var(--red)">✕</i>Agents collide late</div>
+      <div class="t"><i>01</i>Agents collide late</div>
       <div class="d">Two agents rewrite the same function in separate branches. Nobody finds out until merge time.</div>
     </div>
     <div class="problem rv" data-say="Agents are blind">
-      <div class="t"><i style="background: rgba(251,191,36,.14); color: var(--amber)">◌</i>Agents are blind to each other</div>
+      <div class="t"><i>02</i>Agents are blind to each other</div>
       <div class="d">No agent knows what the others are about to change.</div>
     </div>
     <div class="problem rv" data-say="Review doesn't scale">
-      <div class="t"><i style="background: rgba(167,139,250,.14); color: var(--violet)">≋</i>Review doesn't scale</div>
+      <div class="t"><i>03</i>Review doesn't scale</div>
       <div class="d">Nobody reads 300 pull requests a day.</div>
     </div>
     <div class="problem rv" data-say="And the why is lost">
-      <div class="t"><i style="background: rgba(94,234,212,.14); color: var(--teal)">?</i>The <em>why</em> is lost</div>
+      <div class="t"><i>04</i>The <em>why</em> is lost</div>
       <div class="d">A merged diff forgets the intent, the plan and the trade-offs behind it.</div>
     </div>
   </div>
@@ -211,7 +207,6 @@
 
 
 <section id="close">
-  <div class="radar" style="left: 78%"></div>
   <div class="quote rv" data-at="0">Agents don't need pull requests.</div>
   <div class="quote rv" data-say="They need air traffic control"><span class="hl">They need air traffic control.</span></div>
   <div class="links rv" data-say="open source">
@@ -224,16 +219,16 @@
 <script>
   // Wires of the architecture diagram: [from, fromSide, to, toSide, label, color, revealPhrase]
   const WIRES = [
-    ["b-agents", "r", "b-worker", "l@0.35", "MCP over HTTP", "#5eead4", "a Worker serves", [452, 336, "start"]],
-    ["b-radar", "r", "b-worker", "l@0.75", "WebSocket", "#5eead4", "and the radar", [456, 706, "start"]],
-    ["b-worker", "r@0.4", "b-tower", "l@0.45", "", "#fbbf24", "Each project has a Tower"],
-    ["b-tower", "b", "b-runway", "t", "trains", "#4ade80", "And a Runway"],
-    ["b-tower", "r@0.35", "b-artifacts", "l@0.3", "fork per flight", "#f97316", "All code lives in Artifacts"],
-    ["b-runway", "r@0.3", "b-artifacts", "l@0.8", "fetch · land", "#f97316", "All code lives in Artifacts", [1468, 606, "start"]],
-    ["b-agents", "t", "b-artifacts", "t", "git push to own fork", "#5eead4", "a fork for every flight"],
-    ["b-runway", "r@0.75", "b-dw", "l@0.5", "tests", "#a78bfa", "Tests run in Dynamic Workers", [1436, 728, "start"]],
-    ["b-edge", "r@0.3", "b-tower", "l@0.85", "RPC", "#60a5fa", "Edge agents think", [970, 650, "start"]],
-    ["b-edge", "r@0.75", "b-ai", "l@0.55", "reason", "#60a5fa", "Edge agents think"],
+    ["b-agents", "r", "b-worker", "l@0.35", "MCP over HTTP", "#0f7a6e", "a Worker serves", [452, 336, "start"]],
+    ["b-radar", "r", "b-worker", "l@0.75", "WebSocket", "#0f7a6e", "and the radar", [456, 706, "start"]],
+    ["b-worker", "r@0.4", "b-tower", "l@0.45", "", "#a86400", "Each project has a Tower"],
+    ["b-tower", "b", "b-runway", "t", "trains", "#1d7a35", "And a Runway"],
+    ["b-tower", "r@0.35", "b-artifacts", "l@0.3", "fork per flight", "#e8590c", "All code lives in Artifacts"],
+    ["b-runway", "r@0.3", "b-artifacts", "l@0.8", "fetch · land", "#e8590c", "All code lives in Artifacts", [1468, 606, "start"]],
+    ["b-agents", "t", "b-artifacts", "t", "git push to own fork", "#0f7a6e", "a fork for every flight"],
+    ["b-runway", "r@0.75", "b-dw", "l@0.5", "tests", "#6d3fc8", "Tests run in Dynamic Workers", [1436, 728, "start"]],
+    ["b-edge", "r@0.3", "b-tower", "l@0.85", "RPC", "#2463c7", "Edge agents think", [970, 650, "start"]],
+    ["b-edge", "r@0.75", "b-ai", "l@0.55", "reason", "#2463c7", "Edge agents think"],
   ];
   function anchor(el, spec) {
     const [side, f] = spec.split("@");

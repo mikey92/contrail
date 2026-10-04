@@ -71,7 +71,7 @@ async function boxOf(page, selector, pad = 0) {
 }
 
 /** Dims everything but `selector` for `ms`. */
-async function spotlight(page, selector, { ms = 2600, pad = 8, color = "#5eead4" } = {}) {
+async function spotlight(page, selector, { ms = 2600, pad = 8, color = "#e8590c" } = {}) {
 	const ok = await page.evaluate(
 		({ selector, ms, pad, color }) => {
 			const el = document.querySelector(selector);
@@ -86,7 +86,7 @@ async function spotlight(page, selector, { ms = 2600, pad = 8, color = "#5eead4"
 				height: `${r.height + 2 * pad}px`,
 				border: `3px solid ${color}`,
 				borderRadius: "12px",
-				boxShadow: `0 0 0 9999px rgba(2, 5, 12, 0.5), 0 0 34px ${color}88`,
+				boxShadow: "0 0 0 9999px rgba(23, 25, 29, 0.34)",
 				pointerEvents: "none",
 				zIndex: 99990,
 				opacity: "0",
@@ -110,7 +110,7 @@ async function installCursor(page) {
 		const c = document.createElement("div");
 		c.id = "__cursor";
 		c.innerHTML =
-			'<svg width="30" height="30" viewBox="0 0 24 24"><path d="M4 2 L4 19 L8.5 14.8 L11.6 21.5 L14.4 20.3 L11.4 13.8 L17.6 13.6 Z" fill="#f8fafc" stroke="#0b1120" stroke-width="1.3" stroke-linejoin="round"/></svg>';
+			'<svg width="30" height="30" viewBox="0 0 24 24"><path d="M4 2 L4 19 L8.5 14.8 L11.6 21.5 L14.4 20.3 L11.4 13.8 L17.6 13.6 Z" fill="#17191d" stroke="#ffffff" stroke-width="1.4" stroke-linejoin="round"/></svg>';
 		Object.assign(c.style, {
 			position: "fixed",
 			left: "0",
@@ -120,7 +120,7 @@ async function installCursor(page) {
 			transform: "translate(1500px, 700px)",
 			opacity: "0",
 			transition: "transform 0.8s cubic-bezier(.3,.7,.2,1), opacity 0.3s ease",
-			filter: "drop-shadow(0 3px 8px rgba(0,0,0,.6))",
+			filter: "drop-shadow(0 2px 4px rgba(23,25,29,.35))",
 		});
 		document.body.appendChild(c);
 	});
@@ -161,7 +161,7 @@ async function click(page, target) {
 				width: "40px",
 				height: "40px",
 				borderRadius: "50%",
-				border: "3px solid #5eead4",
+				border: "3px solid #e8590c",
 				zIndex: "99999",
 				pointerEvents: "none",
 				transition: "transform .55s ease-out, opacity .55s ease-out",
@@ -189,12 +189,12 @@ async function overlay(page, html, style = {}) {
 			Object.assign(d.style, {
 				position: "fixed",
 				zIndex: "99995",
-				background: "rgba(8, 13, 25, 0.96)",
-				border: "1px solid #2c3b57",
+				background: "#ffffff",
+				border: "1px solid #d2cfc7",
 				borderRadius: "16px",
-				boxShadow: "0 30px 80px rgba(0,0,0,.55)",
-				color: "#e2e8f0",
-				fontFamily: "Inter, system-ui, sans-serif",
+				boxShadow: "0 2px 6px rgba(23,25,29,.06), 0 22px 56px rgba(23,25,29,.16)",
+				color: "#17191d",
+				fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
 				opacity: "0",
 				transform: "translateY(14px)",
 				transition: "opacity .5s ease, transform .5s cubic-bezier(.2,.7,.2,1)",
@@ -249,10 +249,10 @@ const STRESS_END = 406;
 const RAMDA = { from: 3, planned: 23.2, landed: 156, flight: "FL-012", end: 220 };
 // The same 300-intent load test with flight planning off and on, measured on the deployment.
 const AB = [
-	["5.8 h → 18 min", "agent time holding", "#fbbf24"],
-	["8:10 → 6:01", "to land all 300", "#4ade80"],
-	["291 s → 43 s", "slowest 10% of flights", "#38bdf8"],
-	["0", "lost updates", "#5eead4"],
+	["5.8 h → 18 min", "Agent time spent holding", "#a86400"],
+	["8:10 → 6:01", "To land all 300", "#1d7a35"],
+	["291 s → 43 s", "Slowest 10% of flights", "#2463c7"],
+	["0", "Lost updates", "#17191d"],
 ];
 const scenes = {
 	"01-hook": {
@@ -342,16 +342,16 @@ const scenes = {
 			await click(page, page.locator(".flights .fcard", { hasText: "FL-007" }).first());
 			await t.at(cue(s, "but failed on the merged tree") + 0.6);
 			await page.locator(".drawer section.landing.failed").first().scrollIntoViewIfNeeded().catch(() => {});
-			await spotlight(page, ".drawer section.landing.failed .tests", { ms: 4200, pad: 6, color: "#f87171" });
+			await spotlight(page, ".drawer section.landing.failed .tests", { ms: 4200, pad: 6, color: "#c4302b" });
 			await t.at(cue(s, "and landed.") + 0.3);
 			await page.locator(".drawer section.landing.landed").first().scrollIntoViewIfNeeded().catch(() => {});
-			await spotlight(page, ".drawer section.landing.landed", { ms: 2200, pad: 4, color: "#4ade80" });
+			await spotlight(page, ".drawer section.landing.landed", { ms: 2200, pad: 4, color: "#1d7a35" });
 			await t.at(cue(s, "And when two agents append") - 0.6);
 			await click(page, ".drawer .close");
 			await page.waitForTimeout(300);
 			await click(page, '.tabs button:has-text("Live")');
 			await t.at(cue(s, "simply keeps both") - 0.2);
-			await spotlight(page, ".feed .ev-landing-landed", { ms: 3000, pad: 4, color: "#a78bfa" });
+			await spotlight(page, ".feed .ev-landing-landed", { ms: 3000, pad: 4, color: "#6d3fc8" });
 		},
 	},
 
@@ -382,11 +382,12 @@ const scenes = {
 				["n", '    "tests": { "passed": 48, "failed": 0 }'],
 			];
 			const colors = { cmd: "#5eead4", b: "#f8fafc", n: "#fbbf24", "": "#cbd5e1" };
-			const html = `<div style="font-family:'JetBrains Mono',monospace;font-size:19px;line-height:1.55;white-space:pre;padding:28px 34px">${log
+			const html = `<div style="font-family:'IBM Plex Mono',monospace;font-size:19px;line-height:1.55;white-space:pre;padding:28px 34px">${log
 				.map(([k, l]) => `<div style="color:${colors[k]}">${escapeHtml(l) || "&nbsp;"}</div>`)
 				.join("")}</div>`;
 			await t.at(LEAD);
-			const hide = await overlay(page, html, { left: "50%", top: "50%", marginLeft: "-590px", marginTop: "-310px", width: "1180px" });
+			// A terminal, so it stays dark on the light radar.
+			const hide = await overlay(page, html, { left: "50%", top: "50%", marginLeft: "-590px", marginTop: "-310px", width: "1180px", background: "#17191d", border: "none", color: "#e6e6e6" });
 			await t.at(cue(s, "Click any function") - 1.6);
 			await hide();
 			await page.waitForTimeout(400);
@@ -423,25 +424,26 @@ const scenes = {
 			await click(page, page.locator(".flights .fcard", { hasText: "FL-002" }).first());
 			await t.at(cue(s, "Flight one, BULK seven") - 0.3);
 			await page.locator(".drawer section.landing.conflict").first().scrollIntoViewIfNeeded().catch(() => {});
-			await spotlight(page, ".drawer .conflict", { ms: 3800, pad: 4, color: "#fbbf24" });
+			await spotlight(page, ".drawer .conflict", { ms: 3800, pad: 4, color: "#d18a17" });
 			await t.at(cue(s, "catches a semantic conflict") + 0.4);
 			await page.locator(".drawer section.landing.failed").first().scrollIntoViewIfNeeded().catch(() => {});
-			await spotlight(page, ".drawer section.landing.failed", { ms: 3600, pad: 4, color: "#f87171" });
+			await spotlight(page, ".drawer section.landing.failed", { ms: 3600, pad: 4, color: "#c4302b" });
 			await t.at(cue(s, "and lands.") + 0.3);
 			await page.locator(".drawer section.landing.landed").first().scrollIntoViewIfNeeded().catch(() => {});
-			await spotlight(page, ".drawer section.landing.landed", { ms: 3000, pad: 4, color: "#4ade80" });
+			await spotlight(page, ".drawer section.landing.landed", { ms: 3000, pad: 4, color: "#1d7a35" });
 		},
 	},
 
 	"09-review": {
-		url: () => `${LIVE}/p/incident`,
+		// A project where video/incident.mjs has just parked a review (REVIEW_SLUG, default incident).
+		url: () => `${LIVE}/p/${process.env.REVIEW_SLUG ?? "incident"}`,
 		admin: true,
 		prepare: liveReady,
 		run: async (page, s, t) => {
 			await t.at(LEAD);
 			await click(page, '.tabs button:has-text("Review")');
 			await t.at(cue(s, "waits in the review inbox"));
-			await spotlight(page, ".rcard", { ms: 3200, pad: 4, color: "#fbbf24" });
+			await spotlight(page, ".rcard", { ms: 3200, pad: 4, color: "#d18a17" });
 			await t.at(cue(s, "Approve it") - 0.9);
 			await click(page, 'button:has-text("Approve & land")');
 			await t.at(cue(s, "Everything else") - 0.3);
@@ -500,19 +502,19 @@ const scenes = {
 			await t.at(cue(s, "Most changes increment") + 0.6);
 			await camera(page, null, { ms: 1000 });
 			await t.at(cue(s, "landings ride in trains"));
-			await spotlight(page, ".runway", { ms: 3200, pad: 2, color: "#f97316" });
+			await spotlight(page, ".runway", { ms: 3200, pad: 2, color: "#e8590c" });
 			await t.at(cue(s, "Three hundred out of") + 0.1);
 			const stat = (n, label, color) =>
-				`<div style="padding:8px 0"><div style="font-size:54px;font-weight:800;color:${color};letter-spacing:-.02em">${n}</div><div style="font-size:19px;color:#8193ad;text-transform:uppercase;letter-spacing:.12em;font-family:'JetBrains Mono',monospace">${label}</div></div>`;
+				`<div style="padding:8px 0"><div style="font-size:54px;font-weight:600;color:${color};letter-spacing:-.02em">${n}</div><div style="font-size:21px;color:#6b6f78">${label}</div></div>`;
 			await overlay(
 				page,
 				`<div style="padding:30px 38px;display:grid;grid-template-columns:1fr 1fr;gap:6px 46px">${[
-					stat("300/300", "changes landed", "#4ade80"),
-					stat("0", "lost updates", "#5eead4"),
-					stat("24", "shared functions", "#fbbf24"),
-					stat("61", "parallel inserts merged", "#a78bfa"),
-					stat("100", "agents", "#e2e8f0"),
-					stat("105", "test runs (trains)", "#f97316"),
+					stat("300/300", "Changes landed", "#1d7a35"),
+					stat("0", "Lost updates", "#17191d"),
+					stat("24", "Shared functions", "#a86400"),
+					stat("61", "Parallel inserts merged", "#6d3fc8"),
+					stat("100", "Agents", "#17191d"),
+					stat("105", "Test runs (trains)", "#e8590c"),
 				].join("")}</div>`,
 				{ right: "430px", top: "200px" },
 			);
@@ -545,21 +547,21 @@ const scenes = {
 			await t.at(cue(s, "so the second one stays") - 0.6);
 			await camera(page, null, { ms: 900 });
 			await page.waitForTimeout(950);
-			await spotlight(page, ".feed .ev-flight-planned", { ms: 1800, pad: 4, color: "#38bdf8" });
+			await spotlight(page, ".feed .ev-flight-planned", { ms: 1800, pad: 4, color: "#6d3fc8" });
 			await t.at(cue(s, "Then every landing") - 1.9);
 			await click(page, '.tabs button:has-text("Flights")');
 			await page.waitForTimeout(250);
 			await click(page, page.locator(".flights .fcard", { hasText: RAMDA.flight }).first());
 			await t.at(cue(s, "Ramda's entire test suite"));
 			await page.locator(".drawer section.landing.landed").first().scrollIntoViewIfNeeded().catch(() => {});
-			await spotlight(page, ".drawer section.landing.landed .tests", { ms: 3600, pad: 6, color: "#4ade80" });
+			await spotlight(page, ".drawer section.landing.landed .tests", { ms: 3600, pad: 6, color: "#1d7a35" });
 			await t.at(cue(s, "in the hundred-agent load test") - 0.6);
 			await click(page, ".drawer .close");
 			const stat = (n, label, color) =>
-				`<div style="padding:6px 0"><div style="font-size:50px;font-weight:800;color:${color};letter-spacing:-.02em">${n}</div><div style="font-size:18px;color:#8193ad;text-transform:uppercase;letter-spacing:.12em;font-family:'JetBrains Mono',monospace">${label}</div></div>`;
+				`<div style="padding:6px 0"><div style="font-size:50px;font-weight:600;color:${color};letter-spacing:-.02em">${n}</div><div style="font-size:20px;color:#6b6f78">${label}</div></div>`;
 			await overlay(
 				page,
-				`<div style="padding:26px 36px"><div style="font-size:20px;color:#cbd5e1;margin-bottom:10px">100 agents · 300 changes · flight planning off → on</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 46px">${AB.map(([n, label, color]) => stat(n, label, color)).join("")}</div></div>`,
+				`<div style="padding:26px 36px"><div style="font-size:21px;color:#3b3f47;margin-bottom:10px">100 agents · 300 changes · flight planning off → on</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 46px">${AB.map(([n, label, color]) => stat(n, label, color)).join("")}</div></div>`,
 				{ right: "430px", top: "220px" },
 			);
 		},

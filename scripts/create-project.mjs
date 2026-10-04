@@ -7,6 +7,8 @@ import { join, relative } from "node:path";
 
 const positional = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 const playground = process.argv.includes("--playground");
+// --private keeps the project off the home page (e.g. a take for the video).
+const isPublic = !process.argv.includes("--private");
 const [slug, dir, name] = positional;
 const base = process.env.CONTRAIL_URL;
 const admin = process.env.CONTRAIL_ADMIN_KEY;
@@ -36,7 +38,7 @@ const res = await fetch(`${base}/api/projects`, {
     slug,
     name: name ?? slug,
     description: process.env.CONTRAIL_DESCRIPTION ?? `Demo project ${slug}`,
-    public: true,
+    public: isPublic,
     playground,
     source: { kind: "files", files },
   }),
