@@ -814,7 +814,17 @@ export class Tower extends DurableObject<Env> {
 	// ───────────────────────── landing ─────────────────────────
 
 	async requestLanding(agentId: string, input: { summary: string; flight?: string; wait?: boolean }): Promise<LandingView> {
-		const flight = this.ownFlight(agentId, input.flight);
+		let flight: Flight;
+		try {
+			flight = this.ownFlight(agentId, input.flight);
+		} catch (err) {
+			// Idempotent retries: an agent that lost the response of a successful landing gets it again.
+			const last = this.row("SELECT * FROM flights WHERE agent_id = ? AND status = 'landed' AND landed_at > ? ORDER BY landed_at DESC LIMIT 1", agentId, now() - 10 * 60_000);
+			const landing = last ? this.row("SELECT * FROM landings WHERE flight_id = ? AND status = 'landed' ORDER BY seq DESC LIMIT 1", last.id as string) : null;
+			if (!landing) throw err;
+			const l = this.toLanding(landing);
+			return { landing: l, radio: this.drainRadio(last!.id as string), next: this.nextStep(l) };
+		}
 		const agent = this.agentById(agentId);
 		this.touchAgent(agentId);
 		const pending = this.row("SELECT * FROM landings WHERE flight_id = ? AND status IN ('queued', 'merging', 'verifying')", flight.id);
