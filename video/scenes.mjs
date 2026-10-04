@@ -117,8 +117,9 @@ async function installCursor(page) {
 			top: "0",
 			zIndex: "100000",
 			pointerEvents: "none",
-			transform: "translate(1700px, 980px)",
-			transition: "transform 0.8s cubic-bezier(.3,.7,.2,1)",
+			transform: "translate(1500px, 700px)",
+			opacity: "0",
+			transition: "transform 0.8s cubic-bezier(.3,.7,.2,1), opacity 0.3s ease",
 			filter: "drop-shadow(0 3px 8px rgba(0,0,0,.6))",
 		});
 		document.body.appendChild(c);
@@ -132,7 +133,11 @@ async function click(page, target) {
 	if (!b) throw new Error(`cannot click ${target}`);
 	const x = b.x + b.width / 2;
 	const y = b.y + b.height / 2;
-	await page.evaluate(({ x, y }) => (document.getElementById("__cursor").style.transform = `translate(${x - 5}px, ${y - 3}px)`), { x, y });
+	await page.evaluate(({ x, y }) => {
+		const c = document.getElementById("__cursor");
+		c.style.opacity = "1";
+		c.style.transform = `translate(${x - 5}px, ${y - 3}px)`;
+	}, { x, y });
 	await page.waitForTimeout(850);
 	await page.evaluate(
 		({ x, y }) => {
@@ -246,6 +251,12 @@ const scenes = {
 		prepare: replayReady,
 		run: async (page, s, t) => {
 			await startReplay(page);
+			await t.at(cue(s, "Each block is a file") - 1.4);
+			const a = await boxOf(page, '[data-path="src/cart.js"]');
+			const b = await boxOf(page, '[data-path="src/pricing.js"]');
+			const x = Math.min(a.x, b.x) - 60;
+			const y = Math.min(a.y, b.y) - 110;
+			await camera(page, { x, y, width: Math.max(a.x + a.width, b.x + b.width) + 60 - x, height: Math.max(a.y + a.height, b.y + b.height) + 60 - y });
 			await t.at(cue(s, "Each block is a file"));
 			await spotlight(page, '[data-path="src/cart.js"]', { ms: 2000 });
 			await t.at(cue(s, "each band inside it"));
@@ -253,6 +264,8 @@ const scenes = {
 			await t.at(cue(s, "A plane is a flight"));
 			const plane = (await page.locator('[data-flight="FL-005"]').count()) ? '[data-flight="FL-005"]' : ".plane";
 			await spotlight(page, plane, { ms: 2600, pad: 16 });
+			await t.at(cue(s, "Up top, the traffic") - 1.1);
+			await camera(page, null, { ms: 1000 });
 			await t.at(cue(s, "Up top, the traffic"));
 			await spotlight(page, ".topbar .stats", { ms: 3000 });
 			await t.at(cue(s, "On the right"));
