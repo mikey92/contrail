@@ -3,21 +3,33 @@ import type { ProjectInfo } from "../../../src/shared/types";
 import { Logo } from "./Icons";
 
 // Airspaces in the order a first-time visitor should see them, with what makes each one worth opening.
-const ORDER = ["ramda", "bookshop", "playground", "stress-b", "stress-a", "stress", "incident"];
+const ORDER = ["ramda", "bookshop", "incident", "playground", "stress"];
 const BADGE: Record<string, [string, string]> = {
 	ramda: ["real", "Real codebase"],
 	bookshop: ["real", "Real agents"],
+	incident: ["", "Staged incident"],
 	playground: ["try", "Try it"],
-	"stress-b": ["load", "Load test"],
-	"stress-a": ["load", "Load test"],
 	stress: ["load", "Load test"],
-	incident: ["", "Conflict and review"],
 };
 const REPLAY = {
 	ramda: "/p/ramda?replay=/replays/ramda.jsonl.gz&speed=2",
+	bookshop: "/p/bookshop?replay=/replays/bookshop.jsonl.gz&speed=2",
+	incident: "/p/incident?replay=/replays/incident.jsonl.gz",
 	stress: "/p/stress?replay=/replays/stress.jsonl.gz&speed=6",
 	planned: "/p/stress-b?replay=/replays/stress-planned.jsonl.gz&speed=4",
 };
+// Recorded runs to watch on each card: an idle live airspace shows the end state, a replay shows the run.
+const WATCH: Record<string, [string, string][]> = {
+	ramda: [["Watch the replay", REPLAY.ramda]],
+	bookshop: [["Watch the replay", REPLAY.bookshop]],
+	incident: [["Watch the replay", REPLAY.incident]],
+	stress: [
+		["Watch the replay", REPLAY.stress],
+		["With flight planning", REPLAY.planned],
+	],
+};
+// The planning A/B runs live on as their own airspaces (their snapshots back the README); the load test card links them.
+const FOLDED = new Set(["stress-a", "stress-b"]);
 
 function Play() {
 	return (
@@ -36,7 +48,7 @@ export function Home() {
 			.catch(() => setProjects([]));
 	}, []);
 	const rank = (slug: string) => (ORDER.includes(slug) ? ORDER.indexOf(slug) : ORDER.length);
-	const sorted = [...(projects ?? [])].sort((a, b) => rank(a.slug) - rank(b.slug) || a.createdAt - b.createdAt);
+	const sorted = [...(projects ?? [])].filter((p) => !FOLDED.has(p.slug)).sort((a, b) => rank(a.slug) - rank(b.slug) || a.createdAt - b.createdAt);
 
 	return (
 		<div class="home">
@@ -58,7 +70,7 @@ export function Home() {
 					<div class="eyebrow">The next GitHub, built on Cloudflare</div>
 					<h1>Air traffic control for coding agents.</h1>
 					<p class="lede">
-						GitHub was built for people taking turns. Contrail lets hundreds of AI agents change one codebase at the same time. Each agent gets its own
+						GitHub was built for people taking turns. Contrail lets many AI agents change one codebase at the same time. Each agent gets its own
 						repository, claims the exact functions it will change before writing any code, and lands through a runway that merges, tests and records
 						why.
 					</p>
@@ -91,7 +103,7 @@ export function Home() {
 						<div class="step">
 							<div class="step-n">02</div>
 							<h3>Clearance</h3>
-							<p>Before editing, the agent claims the functions it will change. If another agent holds one, it waits before writing any code, and is told who holds it and why.</p>
+							<p>Before editing, the agent claims the functions it will change. If another agent holds one, it waits before writing any code, and is told who holds it and why. The runway checks the claims again at landing.</p>
 							<span class="was">Instead of finding out at merge time</span>
 						</div>
 						<div class="step">
@@ -114,19 +126,19 @@ export function Home() {
 				<div class="result">
 					<div class="result-n">16 / 16</div>
 					<div class="result-l">Changes to Ramda by 8 real agents</div>
-					<p>Claude Code, Codex and edge agents landed every intent in under four minutes. Each landing ran Ramda's own test suite on the merged tree: up to 1,238 tests in at most 102 ms.</p>
+					<p>Claude Code, Codex and edge agents landed every intent in 3:36. Each landing ran Ramda's own test suite on the merged tree: up to 1,238 tests in at most 102 ms.</p>
 					<a href={REPLAY.ramda}>Watch the replay →</a>
 				</div>
 				<div class="result">
 					<div class="result-n">300 / 300</div>
-					<div class="result-l">Changes by 100 agents, none lost</div>
-					<p>Three hundred changes aimed at 24 shared functions. Every counter on trunk equals its landed increments, and landings stay exactly-once even across a redeploy in the middle of a run.</p>
+					<div class="result-l">Changes by 100 scripted agents, none lost</div>
+					<p>LLM-free agents aimed 300 changes at 24 shared functions. Every counter on trunk equals its landed increments, and landings stay exactly-once even across a redeploy in the middle of a run.</p>
 					<a href={REPLAY.stress}>Watch the replay →</a>
 				</div>
 				<div class="result">
 					<div class="result-n">5.8 h → 18 min</div>
-					<div class="result-l">Time agents spent waiting</div>
-					<p>With flight planning, the same load test finished in 6:01 instead of 8:10. The tower routes work around busy functions instead of letting agents queue for them.</p>
+					<div class="result-l">Time agents spent holding a claim</div>
+					<p>With flight planning, the tower routes work around busy functions: agents wait on the ground for clear work instead, all waiting halves, and the paired load test finished in 6:01 instead of 8:10.</p>
 					<a href={REPLAY.planned}>Watch the replay →</a>
 				</div>
 			</section>
@@ -140,14 +152,25 @@ export function Home() {
 					{sorted.map((p) => {
 						const badge = BADGE[p.slug];
 						return (
-							<a key={p.slug} class="pcard" href={`/p/${p.slug}`}>
+							<div key={p.slug} class="pcard">
 								<div class="pcard-top">
-									<span class="pcard-name">{p.name}</span>
+									<a class="pcard-name" href={`/p/${p.slug}`}>
+										{p.name}
+									</a>
 									{badge && <span class={`badge ${badge[0]}`}>{badge[1]}</span>}
 								</div>
 								<p>{p.description}</p>
-								<span class="open">Open the radar →</span>
-							</a>
+								<div class="pcard-links">
+									{(WATCH[p.slug] ?? []).map(([label, href]) => (
+										<a key={href} class="watch" href={href}>
+											<Play /> {label}
+										</a>
+									))}
+									<a class="open" href={`/p/${p.slug}`}>
+										{p.playground ? "Launch agents →" : "Open the live radar →"}
+									</a>
+								</div>
+							</div>
 						);
 					})}
 				</div>

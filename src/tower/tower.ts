@@ -1557,9 +1557,10 @@ export class Tower extends DurableObject<Env> {
 		if (!project.playground) return { error: "launching agents here needs the admin key" };
 		const last = this.meta<number>("lastPublicLaunch", 0);
 		if (now() - last < 90_000) return { error: `the tower is busy: try again in ${Math.ceil((90_000 - (now() - last)) / 1000)}s` };
+		// Taken before any await, so a double click can't launch twice while a restart is in progress.
+		this.setMeta("lastPublicLaunch", now());
 		if (!this.row("SELECT id FROM intents WHERE status = 'open' LIMIT 1") && !(await this.restartPlayground()))
 			return { error: "the agents in this airspace are still finishing; try again in a minute" };
-		this.setMeta("lastPublicLaunch", now());
 		return this.launchEdge({ count: Math.min(4, Math.max(1, input.count)), maxFlights: 3, limit: 6 });
 	}
 
@@ -1583,12 +1584,13 @@ export class Tower extends DurableObject<Env> {
 				"Playground: back to the starting code\n\nEvery intent had landed, so the playground starts over for the next visitor.",
 				{ name: "Contrail Tower", email: "tower@contrail.dev" },
 			);
+			this.setMeta("stats", { repos: 1 });
+			await this.refreshTrunk();
+			// No awaits from here on: no take-off can see the intents reopen before trunk and the tables are reset.
 			this.sql.exec("DELETE FROM intents WHERE created_by != 'operator'");
 			this.sql.exec("UPDATE intents SET status = 'open', flight_id = NULL, landed_commit = NULL");
 			for (const table of ["flights", "clearances", "landings", "contrail", "inbox", "symbol_history", "events"]) this.sql.exec(`DELETE FROM ${table}`);
-			this.setMeta("stats", { repos: 1 });
 			this.setMeta("edgeFleet", []);
-			await this.refreshTrunk();
 			const open = this.row<{ c: number }>("SELECT COUNT(*) AS c FROM intents")?.c ?? 0;
 			this.emit("project.reset", `Every intent had landed, so the playground started over: trunk is back to its starting code and ${open} intents are open again`);
 			this.broadcast({ kind: "snapshot", snapshot: await this.snapshot() });

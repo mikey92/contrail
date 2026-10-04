@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Writes demo/stress/intents.json: N scripted intents over 24 shared counters (Zipf-skewed so a few
 // are hot) plus appended notes. Usage: node scripts/make-stress-intents.mjs [N=240]
+// The tracked file is the 300-intent run measured in the README (the generator is seeded).
 import { writeFileSync } from "node:fs";
 
 const n = Number(process.argv[2] ?? 240);

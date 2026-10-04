@@ -1,10 +1,14 @@
 # Contrail
 
-**Air traffic control for coding agents.** Contrail is a Git platform built for hundreds of agents
-changing one codebase *at the same time*. It runs entirely on Cloudflare: Workers, Durable Objects,
-Artifacts, Dynamic Workers and Workers AI.
+**Air traffic control for coding agents.** Contrail is a Git platform built for many agents changing one
+codebase *at the same time*. It runs entirely on Cloudflare: Workers, Durable Objects, Artifacts, Dynamic
+Workers and Workers AI.
 
-**Live:** https://contrail.mikey9220.workers.dev · **Demo video (7 min):** https://contrail.mikey9220.workers.dev/demo.mp4
+**Live:** https://contrail.mikey9220.workers.dev · **Demo video (7 min):** https://contrail.mikey9220.workers.dev/demo.mp4 ·
+**Replays:** [Ramda](https://contrail.mikey9220.workers.dev/p/ramda?replay=/replays/ramda.jsonl.gz&speed=2),
+[Bookshop](https://contrail.mikey9220.workers.dev/p/bookshop?replay=/replays/bookshop.jsonl.gz&speed=2),
+[incident](https://contrail.mikey9220.workers.dev/p/incident?replay=/replays/incident.jsonl.gz),
+[100 agents](https://contrail.mikey9220.workers.dev/p/stress?replay=/replays/stress.jsonl.gz&speed=6)
 
 ![The Contrail radar: each block is a file and each row a function; planes are agents on the code they are cleared to change, with the activity feed on the right and the runway below](docs/radar.png)
 
@@ -12,7 +16,7 @@ Artifacts, Dynamic Workers and Workers AI.
 
 ## Why GitHub's model breaks with agents
 
-GitHub assumes a few people taking turns. A branch per person, a pull request per change, and a human
+GitHub assumes a few people taking turns: a branch per person, a pull request per change, and a human
 review in between. With a hundred agents working at once, that model fails in predictable ways:
 
 - **Agents collide late.** Two agents edit the same function in separate branches. Nobody finds out
@@ -41,12 +45,12 @@ sequenceDiagram
     T-->>A: intent + workspace + upstream remotes
     A->>T: request_clearance src/pricing.js#subtotal
     T-->>A: granted (or HOLDING: who holds it, and why)
-    A->>T: log plan / decisions
+    A->>T: why / log plan and decisions
     A->>F: git push
     A->>T: request_landing
-    T->>R: train of landings
+    T->>R: train of landings + who holds what
     R->>F: fetch
-    R->>R: 3-way merge onto trunk tip, run tests in a Dynamic Worker
+    R->>R: 3-way merge onto trunk tip, check clearances, run tests in a Dynamic Worker
     R->>K: push squashed commit + git note (the contrail)
     T-->>A: landed (or conflict/test details, with who caused them)
     T-->>A: turbulence alert: radio to any flight whose code just changed
@@ -57,43 +61,92 @@ sequenceDiagram
 | Issue | **Intent** | A unit of work agents take off with. Agents can file follow-ups for other agents. |
 | Branch | **Flight + its own Artifacts repo** | Every flight forks trunk into a fresh repo. Agents never get write access to trunk. |
 | _(nothing)_ | **Flight plan** | Before take-off, the Tower predicts the existing code an intent will change from the names it mentions (`R.clamp`, `subtotal()`, `Cart.add`) and dispatches the intents that are clear of code already in the air. Two intents that need the same function don't fly at the same time; the next agent gets other work instead of a hold. |
-| _(nothing)_ | **Clearance** | Before editing, an agent claims the *functions, classes or methods* it will change (`src/cart.js#Cart.add`), not whole files. Overlapping claims put the second agent in a **holding pattern** before any code is written. |
+| _(nothing)_ | **Clearance** | Before editing, an agent claims the *functions, classes or methods* it will change (`src/cart.js#Cart.add`), not whole files. Overlapping claims put the second agent in a **holding pattern** before any code is written. The runway checks again at landing: a change to code another flight is cleared for is turned away as an airspace violation. |
 | Pull request + merge button | **Landing** | The Runway, trunk's only writer, merges the workspace onto the current trunk tip and lands one squashed, attributed commit. Landings go in **trains**, like a merge queue: each train's merged tree is tested once in a Dynamic Worker and pushed once; a red train is replayed one landing at a time so only the culprit is turned away. |
 | Merge conflict | **Structured conflict** | Parallel inserts (two agents appending functions or tests) are merged automatically. Real overlaps come back as exact hunks with the function name, plus the flight, agent and intent that changed trunk. |
-| Commit message | **Contrail** | The intent, plan, decisions and test evidence of every landing, attached to its commit as a git note (`refs/notes/contrail`). Any agent can ask `why(path, line)`. |
+| Commit message | **Contrail** | The intent, plan, decisions and test evidence of every landing, attached to its commit as a git note (`refs/notes/contrail`). Agents ask `why(path#symbol)` before they change code someone else wrote. A flight that takes over an aborted intent inherits the earlier flight's plan, decisions and notes. |
 | Notifications | **Radio & turbulence** | Every tool response carries messages. Agents hear when a hold is released, when someone waits on them, or when trunk changed code they hold. |
-| Required reviews | **Review by exception** | A policy reserves sensitive code for a human (`src/money.js#formatMoney`). Only landings that touch it wait in the review inbox; everything else lands once it is green. |
+| Required reviews | **Review by exception** | A policy reserves sensitive code for a human (`src/money.js#formatMoney`). Only landings that touch it wait in the review inbox; everything else lands once it is green. A change to the test gate's own configuration always waits for a human. |
 
-### What an agent sees
+## What is new here
+
+Merge queues, file locks and code owners each solve part of this for people. Contrail combines the
+parts and moves them to where agents need them: before the code is written, at the level of functions,
+with the reasons attached.
+
+| | Branches and pull requests | Merge queue | File locking | Contrail |
+| --- | --- | --- | --- | --- |
+| Collision found | At merge time | When the queue tests the merged result | Before editing | Before editing, and checked again at landing |
+| Unit | Whole change | Whole change | Whole file | Function, class or method; new code never collides |
+| Who picks the next task | People | People | People | The tower, routing work around code that is in the air |
+| What a waiting agent learns | That its branch conflicts | That its change failed | Who holds the file | Who holds the function, for which intent, and a radio call when it is free |
+| Context kept with the code | PR description | PR description | Nothing | Intent, plan, decisions and test results as a git note, read with `why()` and inherited by the next flight |
+| Human review | Every change | Every change | n/a | Only code a policy reserves for people |
+
+## What an agent sees
 
 Agents connect over MCP (or plain HTTP) and get 12 tools: `take_off`, `request_clearance`,
 `release_clearance`, `log`, `radio`, `request_landing`, `landing_status`, `radar`, `why`,
 `file_intent`, `abort`, `refresh_workspace`. The protocol is in [`src/tower/briefing.ts`](src/tower/briefing.ts).
 
+This is what CODEX-7 was told during the [Bookshop run](https://contrail.mikey9220.workers.dev/p/bookshop?replay=/replays/bookshop.jsonl.gz&speed=2),
+while CLAUDE-5 was already changing `subtotal` for another intent:
+
 ```text
-✈ FL-012 airborne for INT-6 "R.clamp: reject NaN bounds". The Tower expects this intent to change
-  source/clamp.js#clamp, test/clamp.js#clamp.
-✈ FL-007 airborne for INT-5 "Bulk discount: 10% off 3+ copies of the same book".
-HOLDING for src/pricing.js#subtotal (held by CLAUDE-3 FL-005: INT-16 Buy 2 get 1 free on paperbacks)
-⚠ Conflict — src/pricing.js#subtotal, trunk changed by CODEX-5 for INT-16 Buy 2 get 1 free …
-🛬 Landed as 4f2a91c0 — 34 tests green.
+take_off           ✈ FL-007 airborne for INT-16 "Buy 2 get 1 free on paperbacks". Clone your workspace with the
+                   setup commands, then request_clearance for what you will change and log your plan.
+request_clearance  Cleared: test/pricing.test.js#paperbackEveryThirdCopyIsFree, … HOLDING for src/pricing.js#subtotal
+                   (held by CLAUDE-5 FL-005: INT-5 Bulk discount: 10% off 3+ copies of the same book).
+radio              Cleared for src/pricing.js#subtotal. Pull trunk first (git pull --no-rebase upstream main): it may
+                   have changed while you held.
+radio              Trunk moved under you: CLAUDE-5 (FL-005) landed INT-5 "Bulk discount: 10% off 3+ copies of the same
+                   book" touching src/pricing.js#subtotal. Run `git pull --no-rebase upstream main` before you continue;
+                   use why() if you need their reasoning.
+request_landing    ✖ Not landed: 1 test(s) failed. Tests failed on the merged tree. Pull upstream, reproduce, fix, push,
+                   then request_landing again.
+request_landing    🛬 Landed as 37725a51 — 48 tests green.
 ```
+
+Its tests had passed in its own workspace. They failed on the merged tree because another agent had just
+landed ISBN-13 validation, and CODEX-7's new test used a made-up ISBN.
 
 ## Measured on the live deployment
 
 | Run | Agents | Result |
 | --- | --- | --- |
-| Real coding agents on the Bookshop demo ([replay](https://contrail.mikey9220.workers.dev/p/bookshop?replay=/replays/bookshop.jsonl.gz&speed=2)) | 4 Claude Code (Opus, Sonnet ×2, Haiku), 2 Codex, 2 edge agents on Workers AI | 16/16 intents landed in a little over 2 minutes. A Codex agent was held off `subtotal` before writing any code. Later its tests passed in its own workspace but failed on the merged tree: another agent had just landed ISBN-13 validation, and its new test used a fake ISBN. The runway turned it away; it fixed the test and landed. 3 parallel test additions were auto-merged. The edge agents landed 5 of the 16. |
-| A real codebase: Ramda 0.32 ([replay](https://contrail.mikey9220.workers.dev/p/ramda?replay=/replays/ramda.jsonl.gz&speed=2)) | 4 Claude Code (Opus, Sonnet ×2, Haiku), 2 Codex, 2 edge agents on Workers AI | 16/16 intents landed in under 4 minutes on Ramda's 370 source files. Every landing ran Ramda's own mocha suite on the merged tree in a Dynamic Worker: 1,175 to 1,238 tests in 49–102 ms. The final trunk passes 1,238 tests, 66 more than it started with. The Tower planned 6 take-offs around `clamp` while another flight was changing it, so the two `clamp` fixes never flew at the same time. The only 3 holds came from agents that claimed all of `source/index.js`. |
-| Edge agents on Workers AI | GLM-5.3 Flash | About 17k tokens per intent, about $0.003 each |
-| Load test: hot shared functions ([replay](https://contrail.mikey9220.workers.dev/p/stress?replay=/replays/stress.jsonl.gz&speed=6)) | 100 scripted agents, 300 intents on 24 Zipf-skewed counters | 300/300 landed in about 6½ minutes, **no lost updates** (each counter equals its landed increments). 174 holds before any code was written, 61 parallel inserts auto-merged, and 105 test runs for 300 landings thanks to trains. |
-| Flight planning, off vs on ([replay with planning](https://contrail.mikey9220.workers.dev/p/stress-b?replay=/replays/stress-planned.jsonl.gz&speed=4)) | The same 100 scripted agents and 300 intents, one run each way on the same deployment | Agent time spent holding fell from 5.8 hours to 18 minutes. All 300 landed in 6:01 instead of 8:10, and the slowest 10% of flights took 43 s instead of 291 s. With planning, one flight lines up behind each busy function and the rest take other work or wait on the ground. Both runs: no lost updates. |
+| Real coding agents on the Bookshop demo ([replay](https://contrail.mikey9220.workers.dev/p/bookshop?replay=/replays/bookshop.jsonl.gz&speed=2)) | 4 Claude Code (Opus, Sonnet ×2, Haiku), 2 Codex, 2 edge agents on Workers AI | 16/16 intents landed in 2:10. One Codex agent was held off `subtotal` before writing any code, and later turned away by the test gate as shown above. 3 parallel test additions were merged automatically. The edge agents landed 5 of the 16. |
+| A real codebase: Ramda 0.32 ([replay](https://contrail.mikey9220.workers.dev/p/ramda?replay=/replays/ramda.jsonl.gz&speed=2)) | 4 Claude Code (Opus, Sonnet ×2, Haiku), 2 Codex, 2 edge agents on Workers AI | 16/16 intents landed in 3:36 on Ramda's 369 source files. Every landing ran Ramda's mocha suite on the merged tree in a Dynamic Worker: 1,175 to 1,238 tests in 49–102 ms. The final trunk passes 1,238 tests, 66 more than it started with. The Tower planned 6 take-offs around `clamp` while another flight was changing it, so the two `clamp` fixes never flew at the same time. All 3 holds trace back to one agent that claimed all of `source/index.js`. |
+| Edge agents on Workers AI | GLM-5.3 Flash | About 17k tokens per intent on the Bookshop |
+| Load test: hot shared functions ([replay](https://contrail.mikey9220.workers.dev/p/stress?replay=/replays/stress.jsonl.gz&speed=6)) | 100 scripted agents (no LLM), 300 intents: 236 increments of 24 Zipf-skewed shared counters and 64 new functions | 300/300 landed in 6:37 with **no lost or doubled updates**: rebuilt from the landed diffs, every counter equals its increments. 174 holds before any code was written, 61 parallel inserts merged automatically, and 105 test runs for 300 landings thanks to trains. |
+| Flight planning, off vs on (snapshots: [off](https://contrail.mikey9220.workers.dev/api/p/stress-a/snapshot), [on](https://contrail.mikey9220.workers.dev/api/p/stress-b/snapshot); [replay with planning](https://contrail.mikey9220.workers.dev/p/stress-b?replay=/replays/stress-planned.jsonl.gz&speed=4)) | The same 100 scripted agents and 300 intents, one run each way on the same deployment | Time agents spent holding a claim fell from 5.8 h to 18 min. They waited on the ground instead, without a workspace (2.7 h in total), so all waiting fell by half (5.9 h → 3.0 h). It took 308 flights instead of 351 to land the 300 intents, and the slowest 10% of flights took 43 s instead of about 4.8 min. The run finished in 6:01 instead of 8:10; the earlier load test above, also without planning, took 6:37. Both runs: no lost updates. |
 | Load test + redeploy mid-flight | 60 scripted agents, 180 intents | Exactly-once landings across the restart: no lost or doubled updates |
-| End-to-end protocol test ([`scripts/smoke.mjs`](scripts/smoke.mjs)) | 9 scripted git agents | Covers sibling methods merged in parallel, a hold, a real conflict with its cause, a semantic conflict caught by tests, resolution, `why()`, review by exception, and a train with a culprit |
+| End-to-end protocol test ([`scripts/smoke.mjs`](scripts/smoke.mjs)) | Scripted git agents | Sibling methods merged in parallel, a hold, a landing turned away for touching code another flight holds, a real conflict with its cause, a semantic conflict caught by tests, resolution, `why()`, review by exception, a train with a culprit, and a playground starting over |
 
-A landing costs about a second: fetch the fork (~0.3s), merge (ms), tests in a Dynamic Worker (~15ms
-for the Bookshop, 50–100 ms for Ramda's 1,200 tests), then push. Workspace forks take about 2.5s and run in parallel, one per flight. Under load, landings
-batch into trains of up to 12 that share one test run and one push.
+From request to trunk, a landing takes about 1 s on the Bookshop and 2–3 s on Ramda: fetch the fork,
+merge, run the suite, push. Workspace forks take about 2.5 s and run in parallel, one per flight. Under
+load, landings batch into trains of up to 12 that share one test run and one push.
+
+The numbers come from the recorded radar streams in [`ui/public/replays`](ui/public/replays) and from the
+projects' live snapshots (`/api/p/<project>/snapshot`).
+
+## Scaling to 100,000 agents
+
+Today each trunk has one Tower and one Runway. The Runway is trunk's only writer, which is what makes
+landings exactly-once and conflicts explainable, and it is also the ceiling. A train takes one to two
+seconds and carries up to 12 landings, so one runway can land several changes per second. The 100-agent
+load test, where most changes hit the same 24 functions, averaged a landing every 1.3 seconds.
+
+What already scales out: every flight is its own Artifacts repository, created in parallel; tests run in
+Dynamic Workers, one isolate per candidate tree, cached by tree id; edge agents are Durable Objects, one
+per agent; and clearances are per function, so agents working on different code never wait for each other.
+
+The next step is **sectors**, which is designed but not built yet. A large monorepo is split along
+directory boundaries (for example `services/payments/` and `web/`), each sector with its own Tower and
+Runway landing into its own ref. Claims inside a sector stay local. A change that spans sectors holds
+clearances in each and lands through both runways. Sector heads merge into trunk continuously, and
+because sectors own disjoint paths those merges cannot conflict. 100,000 agents each landing a change
+every half hour is about 55 landings per second, which at a few landings per second per runway is on
+the order of 10–20 sectors.
 
 ## Built on Cloudflare
 
@@ -123,7 +176,8 @@ flowchart LR
   - The **Runway** keeps a warm in-memory clone of trunk and is its only writer, so landings are serialized.
   - **Edge agents** are agents that live entirely on Cloudflare.
 - **Dynamic Workers** run the test suite of every candidate tree (one run per landing train) in a fresh,
-  network-isolated isolate, cached by git tree id.
+  network-isolated isolate with a CPU limit, cached by git tree id. The gate's configuration comes from
+  trunk, never from the change being judged, and a tree that drops every test fails.
 - **Workers AI** is the brain of the edge agents. They use any tool-calling model; GLM-5.3 Flash is the default.
   It also narrated the demo video (Deepgram Aura 2, [`video/tts.mjs`](video/tts.mjs)).
 - **Workers static assets** serve the Radar, a Preact app (about 24 KB of JavaScript, gzipped), and the recorded replays.
@@ -137,16 +191,18 @@ Open https://contrail.mikey9220.workers.dev and pick an airspace.
 - Click a plane to see its flight: intent, plan, decisions, clearances, diffs, tests.
 - **Clone trunk** gives you a read-only clone URL. `git log --notes=contrail` shows the context behind every commit.
 
-Recorded runs replay in the radar at any speed (`&speed=`, `&from=` seconds):
-[the real swarm](https://contrail.mikey9220.workers.dev/p/bookshop?replay=/replays/bookshop.jsonl.gz&speed=2),
+Recorded runs replay in the radar with play, pause, speed and restart (`&speed=`, `&from=` seconds):
 [Ramda](https://contrail.mikey9220.workers.dev/p/ramda?replay=/replays/ramda.jsonl.gz&speed=2),
+[the real swarm on the Bookshop](https://contrail.mikey9220.workers.dev/p/bookshop?replay=/replays/bookshop.jsonl.gz&speed=2),
+[the incident](https://contrail.mikey9220.workers.dev/p/incident?replay=/replays/incident.jsonl.gz) (staged with scripted agents),
 [100 agents](https://contrail.mikey9220.workers.dev/p/stress?replay=/replays/stress.jsonl.gz&speed=6) and
-[the incident](https://contrail.mikey9220.workers.dev/p/incident?replay=/replays/incident.jsonl.gz) from the video.
+[100 agents with flight planning](https://contrail.mikey9220.workers.dev/p/stress-b?replay=/replays/stress-planned.jsonl.gz&speed=4).
 
 ### Launch agents from the browser
 
 The **playground** airspace has a ⚡ **Launch edge agents** button. It spawns Durable Object agents that
-reason on Workers AI. Watch them claim, hold, land and leave contrails. No laptop needed.
+reason on Workers AI. Watch them claim, hold, land and leave contrails. No laptop needed. When every intent
+has landed, the playground starts over by itself: trunk gets its starting code back as a new commit.
 
 ### Connect your own agent
 
@@ -158,26 +214,77 @@ claude mcp add --transport http contrail https://contrail.mikey9220.workers.dev/
 ```
 
 Then tell Claude Code: *"Use the contrail tools. Take off, follow the flight protocol, and keep taking
-off until no intents are left."* Codex works the same way (`codex mcp add contrail --url … --bearer-token-env-var …`).
+off until no intents are left."* Codex works the same way: `export CONTRAIL_KEY=<agent key>`, then
+`codex mcp add contrail --url https://contrail.mikey9220.workers.dev/mcp/playground --bearer-token-env-var CONTRAIL_KEY`.
+
+## Run it yourself
+
+### Prerequisites
+
+- Node.js 22.12 or later
+- A Cloudflare account on the Workers Paid plan with Artifacts (beta) and Dynamic Workers enabled, and
+  `npx wrangler login`
+- For the real-agent swarm: the Claude Code and/or Codex CLI, logged in
+
+### Deploy
+
+```bash
+git clone https://github.com/mikey92/contrail && cd contrail
+npm install
+npm run deploy                                            # builds the Radar and deploys the Worker
+export CONTRAIL_ADMIN_KEY=$(openssl rand -hex 24)         # keep it: the scripts below need it
+echo "$CONTRAIL_ADMIN_KEY" | npx wrangler secret put CONTRAIL_ADMIN_KEY
+export CONTRAIL_URL=https://contrail.<your-subdomain>.workers.dev
+```
+
+The Artifacts namespace (`contrail`) is created with the first project. Artifacts and Dynamic Workers have
+no local simulator, so development runs against a deployed Worker: `CONTRAIL_URL=… npm run dev:ui` serves
+the Radar locally with hot reload and proxies the API to that deployment.
+
+### Create projects
+
+```bash
+node scripts/create-project.mjs bookshop demo/bookshop "Bookshop"           # trunk + 16 intents
+node scripts/create-project.mjs ramda demo/ramda "Ramda"                    # a real codebase + 16 intents
+node scripts/create-project.mjs playground demo/bookshop "Playground" --playground   # anyone can launch or connect
+```
+
+The script prints the project's join code. A playground publishes it, so visitors can connect their own agents.
 
 ### Run a swarm
 
 ```bash
-export CONTRAIL_URL=https://<your deployment> CONTRAIL_ADMIN_KEY=<admin key>
-node scripts/create-project.mjs bookshop demo/bookshop "Bookshop"           # trunk + 16 intents
-node demo/swarm/swarm.mjs bookshop --claude 4 --model sonnet,opus --codex 2 # real agents, headless
-node scripts/create-project.mjs ramda demo/ramda "Ramda"                    # a real codebase + 16 intents
-node demo/swarm/swarm.mjs ramda --claude 4 --model opus,sonnet,sonnet,haiku --codex 2
-node scripts/make-stress-intents.mjs 300 && node scripts/create-project.mjs stress demo/stress
+node demo/swarm/swarm.mjs ramda --claude 4 --model opus,sonnet,sonnet,haiku --codex 2   # real agents, headless
+curl -X POST $CONTRAIL_URL/api/p/ramda/edge/launch -H "authorization: Bearer $CONTRAIL_ADMIN_KEY" \
+  -d '{"count":2}'                                                          # plus 2 edge agents
+```
+
+The swarm launcher gives each agent its own key and keeps the admin key to itself.
+
+### Load test and the flight-planning A/B
+
+```bash
+node scripts/create-project.mjs stress demo/stress "Stress"   # demo/stress/intents.json is the 300-intent run
+curl -X POST $CONTRAIL_URL/api/p/stress/policy -H "authorization: Bearer $CONTRAIL_ADMIN_KEY" \
+  -d '{"planning":false}'                                      # planning is on by default
 curl -X POST $CONTRAIL_URL/api/p/stress/edge/launch -H "authorization: Bearer $CONTRAIL_ADMIN_KEY" \
-  -d '{"count":100,"mode":"scripted"}'                                        # 100 load-test agents
-node scripts/verify-stress.mjs stress                                         # check for lost updates
+  -d '{"count":100,"mode":"scripted"}'                         # 100 load-test agents, no LLM
+node scripts/verify-stress.mjs stress                          # checks for lost or doubled updates
+```
+
+### Test
+
+```bash
+npm test                     # unit tests: clearances, planning, merge, symbols, the test gate
+node scripts/smoke.mjs       # end to end against $CONTRAIL_URL; creates and deletes two private projects
 ```
 
 ### Bring your own codebase
 
-`create-project.mjs` loads any directory as trunk (or import a GitHub repo). By default the runway runs
-exported test functions in `**/*.test.js`. A `contrail.json` at the root configures the gate:
+`create-project.mjs` loads any directory as trunk, or imports a public GitHub repository
+(`node scripts/create-project.mjs myproject https://github.com/owner/repo "My project" --intents intents.json`).
+By default the runway runs exported test functions in `**/*.test.js`. A `contrail.json` at the root
+configures the gate:
 
 ```json
 {
@@ -195,18 +302,6 @@ exported test functions in `**/*.test.js`. A `contrail.json` at the root configu
 reachable from the test files are loaded; `modules` maps bare package names to vendored files.
 `command` is handed to every agent at take-off, so agents run the same suite locally that the runway runs.
 
-### Deploy your own
-
-Requires a Cloudflare account on the Workers Paid plan (Artifacts and Dynamic Workers).
-
-```bash
-npm install
-npm run deploy                                            # builds the Radar and deploys the Worker
-openssl rand -hex 24 | npx wrangler secret put CONTRAIL_ADMIN_KEY
-```
-
-The Artifacts namespace (`contrail`) is created implicitly with the first project.
-
 ## Repository layout
 
 ```
@@ -214,20 +309,20 @@ src/
   index.ts            Worker: REST API, MCP endpoint, WebSocket, static UI
   mcp.ts              stateless MCP server (Streamable HTTP)
   agent-api.ts        the 12 agent tools, shared by MCP and REST
-  tower/              Tower DO: flights, clearances, landing queue, contrail, radar events, review policy
-  runway/             Runway DO: warm trunk clone, 3-way tree merge, Dynamic Worker test gate, notes
+  tower/              Tower DO: flights, clearances, flight planning, landing queue, contrail, radar events, review policy
+  runway/             Runway DO: warm trunk clone, 3-way tree merge, clearance check, Dynamic Worker test gate, notes
   edge/               edge agents: Durable Object + in-memory git workspace + Workers AI loop
   git/                symbol extraction, diff3 merge with insert/insert union, in-memory fs
 ui/                   the Radar (Preact + Vite)
 demo/bookshop/        demo codebase + 16 intents
 demo/ramda/           a real codebase: Ramda 0.32 (MIT) with its mocha suite + 16 intents
-demo/stress/          load-test codebase (24 shared counters)
+demo/stress/          load-test codebase (24 shared counters) + the 300 scripted intents
 demo/swarm/           launcher for real Claude Code / Codex agents
 scripts/              project creation, smoke test, stress intents and verifier, radar stream recorder
 video/                the demo video: narration (Workers AI text-to-speech), slides, filmed scenes, compositing
 ```
 
-## Limits and next steps
+## Limits
 
 - Symbol extraction is heuristic: brace and indent matching for JavaScript/TypeScript, Python, Go,
   Rust, Java, Kotlin, C#, Swift, C/C++ and Ruby. A tree-sitter build in WebAssembly would be exact.
@@ -235,9 +330,9 @@ video/                the demo video: narration (Workers AI text-to-speech), sli
   queue; clearances still decide who may edit what.
 - The test gate runs JavaScript test suites (exported test functions, or mocha-style `describe`/`it`)
   in Dynamic Workers. Other stacks would use the Sandbox SDK (containers) with the same Artifacts remotes.
-- One Runway per trunk serializes landings, about one per second, batched in trains. Sharding a
-  monorepo into independently landing *sectors* is the path to millions of agents.
+- One Runway per trunk serializes landings (see [Scaling](#scaling-to-100000-agents)).
 - Workspace forks are kept for inspection; a retention policy would delete them after landing.
+- Agent keys don't expire yet; the admin key can delete a project, which revokes them.
 
 ## License
 

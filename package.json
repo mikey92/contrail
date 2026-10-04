@@ -2,8 +2,16 @@
   "name": "contrail",
   "version": "0.1.0",
   "private": true,
-  "description": "Air traffic control for coding agents \u2014 the next GitHub, built on Cloudflare Workers + Artifacts",
+  "description": "Air traffic control for coding agents: the next GitHub, built on Cloudflare Workers and Artifacts",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mikey92/contrail.git"
+  },
+  "homepage": "https://contrail.mikey9220.workers.dev",
+  "engines": {
+    "node": ">=22.12"
+  },
   "type": "module",
   "scripts": {
     "build": "vite build",

@@ -1,11 +1,18 @@
 #!/usr/bin/env node
-// Creates a Contrail project from a local directory and loads its intents.
-//   CONTRAIL_URL=https://… CONTRAIL_ADMIN_KEY=… node scripts/create-project.mjs <slug> <dir> [name]
-// Files in <dir> (except intents.json) become the initial trunk; <dir>/intents.json is loaded as intents.
+// Creates a Contrail project from a local directory (or a public GitHub repository) and loads its intents.
+//   CONTRAIL_URL=https://… CONTRAIL_ADMIN_KEY=… node scripts/create-project.mjs <slug> <dir | https://github.com/owner/repo> [name]
+//     [--playground] [--private] [--intents file.json] [--branch main]
+// Files in <dir> (except intents.json) become the initial trunk; <dir>/intents.json (or --intents) is loaded as
+// intents. A GitHub URL is imported by Artifacts itself; pass its intents with --intents.
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { join, relative } from "node:path";
 
-const positional = process.argv.slice(2).filter((a) => !a.startsWith("--"));
+const args = process.argv.slice(2);
+const option = (name) => {
+  const i = args.indexOf(name);
+  return i === -1 ? undefined : args[i + 1];
+};
+const positional = args.filter((a, i) => !a.startsWith("--") && !["--intents", "--branch"].includes(args[i - 1]));
 const playground = process.argv.includes("--playground");
 // --private keeps the project off the home page (e.g. a take for the video).
 const isPublic = !process.argv.includes("--private");
@@ -13,9 +20,10 @@ const [slug, dir, name] = positional;
 const base = process.env.CONTRAIL_URL;
 const admin = process.env.CONTRAIL_ADMIN_KEY;
 if (!slug || !dir || !base || !admin) {
-  console.error("usage: CONTRAIL_URL=… CONTRAIL_ADMIN_KEY=… node scripts/create-project.mjs <slug> <dir> [name]");
+  console.error("usage: CONTRAIL_URL=… CONTRAIL_ADMIN_KEY=… node scripts/create-project.mjs <slug> <dir | https://github.com/owner/repo> [name] [--playground] [--private] [--intents file.json]");
   process.exit(2);
 }
+const github = /^https:\/\/github\.com\/[^/]+\/[^/]+/.test(dir);
 
 function walk(root, out = {}) {
   for (const entry of readdirSync(root)) {
@@ -27,8 +35,8 @@ function walk(root, out = {}) {
   return out;
 }
 
-const files = walk(dir);
-delete files["intents.json"];
+const files = github ? null : walk(dir);
+if (files) delete files["intents.json"];
 const headers = { "content-type": "application/json", authorization: `Bearer ${admin}` };
 
 const res = await fetch(`${base}/api/projects`, {
@@ -40,7 +48,7 @@ const res = await fetch(`${base}/api/projects`, {
     description: process.env.CONTRAIL_DESCRIPTION ?? `Demo project ${slug}`,
     public: isPublic,
     playground,
-    source: { kind: "files", files },
+    source: github ? { kind: "github", url: dir.replace(/\.git$/, ""), branch: option("--branch") ?? "main" } : { kind: "files", files },
   }),
 });
 const created = await res.json();
@@ -51,8 +59,8 @@ if (!res.ok) {
 console.log(`project ${slug} created; trunk repo ${created.project.trunkRepo}`);
 console.log(`join code: ${created.joinCode}`);
 
-const intentsPath = join(dir, "intents.json");
-if (existsSync(intentsPath)) {
+const intentsPath = option("--intents") ?? (github ? "" : join(dir, "intents.json"));
+if (intentsPath && existsSync(intentsPath)) {
   const intents = JSON.parse(readFileSync(intentsPath, "utf8"));
   const r = await fetch(`${base}/api/p/${slug}/intents`, { method: "POST", headers, body: JSON.stringify({ intents }) });
   const body = await r.json();
