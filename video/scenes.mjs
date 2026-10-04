@@ -504,7 +504,7 @@ const scenes = {
 				`<div style="padding:30px 38px;display:grid;grid-template-columns:1fr 1fr;gap:6px 46px">${[
 					stat("300/300", "changes landed", "#4ade80"),
 					stat("0", "lost updates", "#5eead4"),
-					stat("174", "holds before code", "#fbbf24"),
+					stat("24", "shared functions", "#fbbf24"),
 					stat("61", "parallel inserts merged", "#a78bfa"),
 					stat("100", "agents", "#e2e8f0"),
 					stat("105", "test runs (trains)", "#f97316"),

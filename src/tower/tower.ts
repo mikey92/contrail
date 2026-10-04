@@ -598,7 +598,8 @@ export class Tower extends DurableObject<Env> {
 		const seq = (this.row<{ s: number }>("SELECT COALESCE(MAX(seq), 0) + 1 AS s FROM flights")?.s ?? 1) as number;
 		const code = `FL-${String(seq).padStart(3, "0")}`;
 		const flightId = randomId();
-		const repo = repoSafe(`${project.slug}--${code.toLowerCase()}-${randomId(4)}`);
+		const repoName = () => repoSafe(`${project.slug}--${code.toLowerCase()}-${randomId(4)}`);
+		let repo = repoName();
 		const trunk = this.meta<TrunkState>("trunk", { head: null, files: [], landedCount: 0 });
 		const t = now();
 		this.sql.exec(
@@ -636,9 +637,15 @@ export class Tower extends DurableObject<Env> {
 					break;
 				} catch (err) {
 					const code = (err as { code?: string }).code ?? "";
-					// A fork that failed with a transient error may still have been created: the retry then
-					// finds the (uniquely named) repo already there, which is our fork.
-					if (attempt > 0 && /already exists/i.test(errorMessage(err))) break;
+					// A fork that failed with a transient error can leave its repo behind, and that repo may
+					// never become ready: start over under a fresh name and delete the leftover.
+					if (attempt > 0 && /already exists/i.test(errorMessage(err))) {
+						const stale = repo;
+						repo = repoName();
+						this.sql.exec("UPDATE flights SET repo = ? WHERE id = ?", repo, flightId);
+						this.ctx.waitUntil(this.env.ARTIFACTS.delete(stale).catch(() => false));
+						continue;
+					}
 					const transient = code === "FORK_IN_PROGRESS" || code === "INTERNAL_ERROR" || code === "UPSTREAM_UNAVAILABLE" || /internal error/i.test(errorMessage(err));
 					if (!transient || attempt >= 40) throw err;
 					await sleep(300 + Math.random() * 700 + attempt * 100);
