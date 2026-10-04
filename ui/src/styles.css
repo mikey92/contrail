@@ -1518,3 +1518,8 @@ details.diffs summary {
 .lst-rejected {
 	color: var(--red);
 }
+
+.btn.launch {
+	background: linear-gradient(135deg, #f97316, #fb923c);
+	color: #1c0a00;
+}

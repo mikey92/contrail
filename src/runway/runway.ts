@@ -312,6 +312,14 @@ export class Runway extends DurableObject<Env> {
 		return files.sort((a, b) => a.path.localeCompare(b.path));
 	}
 
+	async reset() {
+		this.repo = null;
+		this.trunkName = null;
+		this.remote = null;
+		this.token = null;
+		await this.ctx.storage.deleteAll();
+	}
+
 	/** Contrail note attached to a trunk commit, if any. */
 	async note(trunk: string, oid: string): Promise<string | null> {
 		return this.exclusive(async () => {

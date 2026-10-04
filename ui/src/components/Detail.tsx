@@ -262,6 +262,21 @@ export function WhyPanel({ slug, fixture, target, onClose }: { slug: string; fix
 
 export function ConnectModal({ slug, onClose }: { slug: string; onClose: () => void }) {
 	const origin = location.origin;
+	const [joinCode, setJoinCode] = useState<string | null>(null);
+	const [key, setKey] = useState<{ key: string; callsign: string } | null>(null);
+	const [err, setErr] = useState<string | null>(null);
+	useEffect(() => {
+		fetch(`/api/p/${slug}/join-info`)
+			.then((r) => r.json())
+			.then((d) => setJoinCode(d.joinCode ?? null))
+			.catch(() => {});
+	}, [slug]);
+	const mint = async () => {
+		const res = await fetch(`/api/p/${slug}/join`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ joinCode, kind: "claude-code", model: "claude" }) });
+		const d = await res.json();
+		if (!res.ok) return setErr(d.error ?? "could not join");
+		setKey({ key: d.key, callsign: d.agent.callsign });
+	};
 	return (
 		<div class="why-backdrop" onClick={onClose}>
 			<div class="why connect" onClick={(e) => e.stopPropagation()}>
@@ -270,13 +285,34 @@ export function ConnectModal({ slug, onClose }: { slug: string; onClose: () => v
 				</button>
 				<div class="why-kicker">Join the airspace</div>
 				<h3>Connect a coding agent</h3>
-				<p>Any MCP-capable agent can fly in this project. Get an agent key with the project's join code, then add the MCP server:</p>
-				<pre class="code">{`curl -s ${origin}/api/p/${slug}/join \\
-  -H 'content-type: application/json' \\
-  -d '{"joinCode":"<join code>","kind":"claude-code","model":"claude"}'`}</pre>
-				<pre class="code">{`claude mcp add --transport http contrail ${origin}/mcp/${slug} \\
+				<p>Any MCP-capable agent can fly here. It gets its own Artifacts workspace, claims functions before editing, and lands through the runway.</p>
+				{joinCode ? (
+					key ? (
+						<>
+							<p>
+								Your agent is <b>{key.callsign}</b>. Add the server to Claude Code:
+							</p>
+							<pre class="code">{`claude mcp add --transport http contrail ${origin}/mcp/${slug} \\
+  --header "Authorization: Bearer ${key.key}"`}</pre>
+							<p>or to Codex:</p>
+							<pre class="code">{`CONTRAIL_KEY=${key.key} codex mcp add contrail --url ${origin}/mcp/${slug} --bearer-token-env-var CONTRAIL_KEY`}</pre>
+							<p class="muted">Then tell it: “Use the contrail tools. Take off, follow the flight protocol, and keep taking off until no intents are left.”</p>
+						</>
+					) : (
+						<button class="btn" onClick={mint}>
+							Get an agent key
+						</button>
+					)
+				) : (
+					<>
+						<p>This airspace is invite-only. With its join code:</p>
+						<pre class="code">{`curl -s ${origin}/api/p/${slug}/join -H 'content-type: application/json' \\
+  -d '{"joinCode":"<join code>","kind":"claude-code"}'`}</pre>
+						<pre class="code">{`claude mcp add --transport http contrail ${origin}/mcp/${slug} \\
   --header "Authorization: Bearer <agent key>"`}</pre>
-				<p class="muted">Then tell the agent: “Use the contrail tools: take_off, follow the flight protocol, and keep taking off until there are no open intents.”</p>
+					</>
+				)}
+				{err && <div class="fail mono">{err}</div>}
 			</div>
 		</div>
 	);

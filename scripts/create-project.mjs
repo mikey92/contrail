@@ -5,7 +5,9 @@
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { join, relative } from "node:path";
 
-const [slug, dir, name] = process.argv.slice(2);
+const positional = process.argv.slice(2).filter((a) => !a.startsWith("--"));
+const playground = process.argv.includes("--playground");
+const [slug, dir, name] = positional;
 const base = process.env.CONTRAIL_URL;
 const admin = process.env.CONTRAIL_ADMIN_KEY;
 if (!slug || !dir || !base || !admin) {
@@ -30,7 +32,14 @@ const headers = { "content-type": "application/json", authorization: `Bearer ${a
 const res = await fetch(`${base}/api/projects`, {
   method: "POST",
   headers,
-  body: JSON.stringify({ slug, name: name ?? slug, description: `Demo project ${slug}`, public: true, source: { kind: "files", files } }),
+  body: JSON.stringify({
+    slug,
+    name: name ?? slug,
+    description: process.env.CONTRAIL_DESCRIPTION ?? `Demo project ${slug}`,
+    public: true,
+    playground,
+    source: { kind: "files", files },
+  }),
 });
 const created = await res.json();
 if (!res.ok) {

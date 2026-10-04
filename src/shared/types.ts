@@ -176,6 +176,8 @@ export interface ProjectInfo {
 	trunkRepo: string;
 	createdAt: number;
 	public: boolean;
+	/** Anyone may launch a few edge agents and join with the published join code. */
+	playground?: boolean;
 }
 
 /** Everything the Radar UI needs to render a project. */

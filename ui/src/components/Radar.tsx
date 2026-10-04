@@ -58,6 +58,7 @@ export function Radar({ slug, fixture }: { slug: string; fixture: string | null 
 					<Stat label="Artifacts repos" value={s.stats.repos} accent="#f97316" />
 				</div>
 				<div class={`live ${s.connected ? "on" : ""}`}>{fixture ? "replay" : s.connected ? "live" : "reconnecting"}</div>
+				{s.project?.playground && <LaunchButton slug={slug} />}
 				<button class="btn ghost" onClick={() => setClone(true)} title="Clone trunk with its contrail notes">
 					Clone trunk
 				</button>
@@ -124,6 +125,22 @@ export function Radar({ slug, fixture }: { slug: string; fixture: string | null 
 			{operator && <OperatorPanel slug={slug} onClose={() => setOperator(false)} />}
 			{clone && <ClonePanel slug={slug} onClose={() => setClone(false)} />}
 		</div>
+	);
+}
+
+function LaunchButton({ slug }: { slug: string }) {
+	const [msg, setMsg] = useState<string | null>(null);
+	const launch = async () => {
+		setMsg("launching…");
+		const res = await fetch(`/api/p/${slug}/edge/launch`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ count: 3 }) });
+		const d = await res.json().catch(() => ({}));
+		setMsg(res.ok ? `${d.launched?.length ?? 0} agents airborne` : (d.error ?? "busy"));
+		setTimeout(() => setMsg(null), 6000);
+	};
+	return (
+		<button class="btn launch" onClick={launch} title="Spawn edge agents (Durable Objects reasoning on Workers AI)">
+			{msg ?? "⚡ Launch edge agents"}
+		</button>
 	);
 }
 

@@ -345,11 +345,19 @@ export class Tower extends DurableObject<Env> {
 
 	// ───────────────────────── project setup ─────────────────────────
 
-	async setup(input: { slug: string; name: string; description: string; public: boolean; source: ProjectSource }): Promise<ProjectInfo> {
+	async setup(input: { slug: string; name: string; description: string; public: boolean; playground?: boolean; source: ProjectSource }): Promise<ProjectInfo> {
 		const existing = this.meta<ProjectInfo | null>("project", null);
 		if (existing && this.meta<boolean>("ready", false)) return existing;
 		const trunkRepo = repoSafe(`${input.slug}--trunk`);
-		const info: ProjectInfo = existing ?? { slug: input.slug, name: input.name, description: input.description, trunkRepo, createdAt: now(), public: input.public };
+		const info: ProjectInfo = existing ?? {
+			slug: input.slug,
+			name: input.name,
+			description: input.description,
+			trunkRepo,
+			createdAt: now(),
+			public: input.public,
+			playground: input.playground ?? false,
+		};
 		this.setMeta("project", info);
 		const A = this.env.ARTIFACTS;
 		// Idempotent: a setup interrupted half-way (deploy, eviction) can simply be called again.
@@ -402,6 +410,7 @@ export class Tower extends DurableObject<Env> {
 
 	async join(input: { callsign?: string; kind?: AgentKind; model?: string }): Promise<{ agent: Agent; key: string }> {
 		const n = (this.row<{ n: number }>("SELECT COALESCE(MAX(n), 0) + 1 AS n FROM agents")?.n ?? 1) as number;
+		if (n > 2000) throw new Error("this airspace is full (2000 agents)");
 		const kind: AgentKind = input.kind ?? "other";
 		let callsign = (input.callsign ?? "").trim().toUpperCase().replace(/[^A-Z0-9-]/g, "").slice(0, 20) || callsignFor(kind, n);
 		if (this.row("SELECT id FROM agents WHERE callsign = ?", callsign)) callsign = `${callsign}-${n}`;
@@ -475,6 +484,8 @@ export class Tower extends DurableObject<Env> {
 	/** Agents can file follow-up work for other agents. */
 	async fileIntent(agentId: string, input: { title: string; body?: string; priority?: number }): Promise<Intent> {
 		const agent = this.agentById(agentId);
+		const recent = this.row<{ c: number }>("SELECT COUNT(*) AS c FROM intents WHERE created_by != 'operator' AND created_at > ?", now() - 3600_000)?.c ?? 0;
+		if (recent >= 30) throw new Error("agents have filed 30 intents in the last hour; ask the operator to file more");
 		const [intent] = await this.addIntents([input], agent.callsign);
 		return intent;
 	}
@@ -1420,6 +1431,34 @@ export class Tower extends DurableObject<Env> {
 					: `Launched ${launched.length} edge agent${launched.length > 1 ? "s" : ""} on Workers AI: ${launched.map((a) => a.callsign).join(", ")}`,
 			);
 		return { launched };
+	}
+
+	/** Playground rules for launches by anonymous visitors: a few LLM agents at a time, rate limited. */
+	async launchEdgePublic(input: { count: number }): Promise<{ launched: Agent[] } | { error: string }> {
+		const project = this.project();
+		if (!project.playground) return { error: "launching agents here needs the admin key" };
+		const last = this.meta<number>("lastPublicLaunch", 0);
+		if (now() - last < 90_000) return { error: `the tower is busy: try again in ${Math.ceil((90_000 - (now() - last)) / 1000)}s` };
+		if (!this.row("SELECT id FROM intents WHERE status = 'open' LIMIT 1")) return { error: "no open intents left in this airspace" };
+		this.setMeta("lastPublicLaunch", now());
+		return this.launchEdge({ count: Math.min(4, Math.max(1, input.count)), maxFlights: 3, limit: 6 });
+	}
+
+	/** Deletes the project: stops its agents and removes its trunk and every workspace repo from Artifacts. */
+	async destroy(): Promise<{ repos: number }> {
+		const project = this.meta<ProjectInfo | null>("project", null);
+		await this.stopEdge().catch(() => {});
+		let repos = 0;
+		if (project) {
+			const names = [project.trunkRepo, ...this.rows<{ repo: string }>("SELECT repo FROM flights").map((r) => r.repo)];
+			for (const name of names) {
+				if (await this.env.ARTIFACTS.delete(name).catch(() => false)) repos++;
+			}
+		}
+		for (const ws of this.ctx.getWebSockets()) ws.close(1001, "project deleted");
+		await this.ctx.storage.deleteAlarm();
+		await this.ctx.storage.deleteAll();
+		return { repos };
 	}
 
 	async stopEdge(): Promise<{ stopped: number }> {

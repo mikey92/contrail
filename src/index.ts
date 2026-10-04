@@ -43,16 +43,23 @@ app.get("/api/projects", async (c) => {
 
 app.post("/api/projects", async (c) => {
 	if (!isAdmin(c)) return c.json({ error: "admin key required" }, 401);
-	const body = await c.req.json<{ slug: string; name: string; description?: string; public?: boolean; source?: ProjectSource; joinCode?: string }>();
+	const body = await c.req.json<{ slug: string; name: string; description?: string; public?: boolean; playground?: boolean; source?: ProjectSource; joinCode?: string }>();
 	const slug = String(body.slug ?? "").toLowerCase();
 	if (!/^[a-z0-9][a-z0-9-]{1,30}$/.test(slug)) return c.json({ error: "slug: 2-31 chars, a-z 0-9 -" }, 400);
 	const joinCode = body.joinCode ?? randomToken("join");
-	const info = { slug, name: body.name || slug, description: body.description ?? "", trunkRepo: "", createdAt: Date.now(), public: body.public ?? true };
+	const info = { slug, name: body.name || slug, description: body.description ?? "", trunkRepo: "", createdAt: Date.now(), public: body.public ?? true, playground: body.playground ?? false };
 	if (!(await registry(c.env).register(info, joinCode))) return c.json({ error: "project exists" }, 409);
 	let lastError: unknown;
 	for (let attempt = 0; attempt < 3; attempt++) {
 		try {
-			const created = await tower(c.env, slug).setup({ slug, name: info.name, description: info.description, public: info.public, source: body.source ?? { kind: "files" } });
+			const created = await tower(c.env, slug).setup({
+				slug,
+				name: info.name,
+				description: info.description,
+				public: info.public,
+				playground: info.playground,
+				source: body.source ?? { kind: "files" },
+			});
 			await registry(c.env).update(created);
 			await tower(c.env, slug).ensureAlarm();
 			return c.json({ project: created, joinCode });
@@ -70,6 +77,22 @@ async function canView(c: { req: { raw: Request }; env: Env }, slug: string) {
 	if (!entry.info.public && !isAdmin(c)) return null;
 	return entry;
 }
+
+app.delete("/api/projects/:slug", async (c) => {
+	if (!isAdmin(c)) return c.json({ error: "admin key required" }, 401);
+	const slug = c.req.param("slug");
+	const result = await tower(c.env, slug).destroy();
+	await c.env.RUNWAY.get(c.env.RUNWAY.idFromName(slug)).reset();
+	await registry(c.env).remove(slug);
+	return c.json({ deleted: slug, ...result });
+});
+
+// Playgrounds publish their join code so anyone can connect their own agent.
+app.get("/api/p/:slug/join-info", async (c) => {
+	const entry = await registry(c.env).get(c.req.param("slug"));
+	if (!entry || !entry.info.public) return c.json({ error: "not found" }, 404);
+	return c.json(entry.info.playground ? { joinCode: entry.joinCode } : { joinCode: null });
+});
 
 app.get("/api/p/:slug/snapshot", async (c) => {
 	const slug = c.req.param("slug");
@@ -182,7 +205,11 @@ app.post("/api/p/:slug/resync", async (c) => {
 // ── edge agents (run on Workers AI inside Durable Objects) ──
 
 app.post("/api/p/:slug/edge/launch", async (c) => {
-	if (!isAdmin(c)) return c.json({ error: "admin key required" }, 401);
+	if (!isAdmin(c)) {
+		const body = await c.req.json<{ count?: number }>().catch(() => ({}) as { count?: number });
+		const res = await tower(c.env, c.req.param("slug")).launchEdgePublic({ count: Number(body.count ?? 3) });
+		return "error" in res ? c.json(res, 429) : c.json(res);
+	}
 	const body = await c.req.json<{ count?: number; model?: string; maxFlights?: number; mode?: "llm" | "scripted" }>().catch(() => ({}) as any);
 	return c.json(
 		await tower(c.env, c.req.param("slug")).launchEdge({ count: Number(body.count ?? 4), model: body.model, maxFlights: body.maxFlights, mode: body.mode, limit: 500 }),
