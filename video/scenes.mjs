@@ -5,27 +5,19 @@
 //   CONTRAIL_ADMIN_KEY=… node video/scenes.mjs <out dir> [segment ids…]
 //
 // Every clip is LEAD seconds of picture, the narration (video/tts.mjs output in AUDIO_DIR), then
-// TAIL seconds. Actions are timed to phrases of the narration. Clips 09 and 10 act on the live site:
+// TAIL seconds (video/timing.mjs). Actions are timed to phrases of the narration. Clips 09 and 10 act on the live site:
 // 09 approves the review parked by video/incident.mjs, 10 mints a playground key (masked on screen)
 // and launches edge agents.
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { record, withBrowser } from "./recorder.mjs";
+import { LEAD, loadSegments } from "./timing.mjs";
 
 const OUT = resolve(process.argv[2] ?? join(homedir(), "contrail-video/scenes"));
 const ONLY = process.argv.slice(3);
-const AUDIO = process.env.AUDIO_DIR ?? join(homedir(), "contrail-video/audio");
 const LIVE = process.env.CONTRAIL_URL ?? "https://contrail.mikey9220.workers.dev";
 const SLIDES = `file://${resolve("video/slides.html")}`;
-export const LEAD = 0.5;
-export const TAIL = 0.8;
-
-const segments = JSON.parse(readFileSync("video/narration.json", "utf8")).segments.map((s) => {
-	const duration = Number(execFileSync("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", join(AUDIO, `${s.id}.mp3`)]).toString());
-	return { ...s, duration, total: LEAD + duration + TAIL };
-});
+const segments = loadSegments();
 
 /** Seconds into the clip at which the narration reaches `phrase`. */
 function cue(s, phrase) {
