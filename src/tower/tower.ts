@@ -339,13 +339,17 @@ export class Tower extends DurableObject<Env> {
 
 	async setup(input: { slug: string; name: string; description: string; public: boolean; source: ProjectSource }): Promise<ProjectInfo> {
 		const existing = this.meta<ProjectInfo | null>("project", null);
-		if (existing) return existing;
+		if (existing && this.meta<boolean>("ready", false)) return existing;
 		const trunkRepo = repoSafe(`${input.slug}--trunk`);
-		const info: ProjectInfo = { slug: input.slug, name: input.name, description: input.description, trunkRepo, createdAt: now(), public: input.public };
+		const info: ProjectInfo = existing ?? { slug: input.slug, name: input.name, description: input.description, trunkRepo, createdAt: now(), public: input.public };
 		this.setMeta("project", info);
 		const A = this.env.ARTIFACTS;
+		// Idempotent: a setup interrupted half-way (deploy, eviction) can simply be called again.
+		const exists = await A.get(trunkRepo)
+			.then((r) => (r[Symbol.dispose]?.(), true))
+			.catch(() => false);
 		if (input.source.kind === "github") {
-			await A.import({ source: { url: input.source.url!, branch: input.source.branch }, target: { name: trunkRepo, opts: { description: `${input.name} trunk` } } });
+			if (!exists) await A.import({ source: { url: input.source.url!, branch: input.source.branch }, target: { name: trunkRepo, opts: { description: `${input.name} trunk` } } });
 			for (let i = 0; i < 120; i++) {
 				try {
 					const r = await A.get(trunkRepo);
@@ -357,12 +361,20 @@ export class Tower extends DurableObject<Env> {
 				}
 			}
 		} else {
-			await A.create(trunkRepo, { setDefaultBranch: "main", description: `${input.name} trunk` });
-			await this.runway().seedTrunk(trunkRepo, input.source.files ?? { "README.md": `# ${input.name}\n` }, `Create ${input.name}`);
+			if (!exists) await A.create(trunkRepo, { setDefaultBranch: "main", description: `${input.name} trunk` });
+			const log = await A.get(trunkRepo).then(async (r) => {
+				try {
+					return await r.log({ ref: "main", limit: 1 });
+				} finally {
+					r[Symbol.dispose]?.();
+				}
+			});
+			if (log.length === 0) await this.runway().seedTrunk(trunkRepo, input.source.files ?? { "README.md": `# ${input.name}\n` }, `Create ${input.name}`);
 		}
-		this.bump("repos");
+		if (!existing) this.bump("repos");
 		this.emit("project.created", `Trunk repo ${trunkRepo} is ready`, { data: { trunkRepo } });
 		await this.refreshTrunk();
+		this.setMeta("ready", true);
 		return info;
 	}
 

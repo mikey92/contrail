@@ -49,15 +49,19 @@ app.post("/api/projects", async (c) => {
 	const joinCode = body.joinCode ?? randomToken("join");
 	const info = { slug, name: body.name || slug, description: body.description ?? "", trunkRepo: "", createdAt: Date.now(), public: body.public ?? true };
 	if (!(await registry(c.env).register(info, joinCode))) return c.json({ error: "project exists" }, 409);
-	try {
-		const created = await tower(c.env, slug).setup({ slug, name: info.name, description: info.description, public: info.public, source: body.source ?? { kind: "files" } });
-		await registry(c.env).update(created);
-		await tower(c.env, slug).ensureAlarm();
-		return c.json({ project: created, joinCode });
-	} catch (err) {
-		await registry(c.env).remove(slug);
-		throw err;
+	let lastError: unknown;
+	for (let attempt = 0; attempt < 3; attempt++) {
+		try {
+			const created = await tower(c.env, slug).setup({ slug, name: info.name, description: info.description, public: info.public, source: body.source ?? { kind: "files" } });
+			await registry(c.env).update(created);
+			await tower(c.env, slug).ensureAlarm();
+			return c.json({ project: created, joinCode });
+		} catch (err) {
+			lastError = err; // e.g. the Durable Object was reset by a deploy; setup is idempotent
+		}
 	}
+	await registry(c.env).remove(slug);
+	throw lastError;
 });
 
 async function canView(c: { req: { raw: Request }; env: Env }, slug: string) {
