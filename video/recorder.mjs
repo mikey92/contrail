@@ -44,13 +44,15 @@ export async function record(context, { url, out, scene, prepare, width = 1920, 
 	if (frames.length === 0) throw new Error(`no frames recorded for ${out}`);
 	// Screencast timestamps come from Chrome's clock, which can be seconds off Node's: shift them by
 	// the smallest observed delivery delay so they line up with `started`/`stopped`.
+	// The first frame can be the last one painted before filming began (static pages repaint rarely),
+	// with an old timestamp: frames before `started` show the page as it was at `started`.
 	const shift = Math.min(...frames.map((f) => f.received - f.t));
-	for (const f of frames) f.t += shift;
+	for (const f of frames) f.t = Math.max(started, f.t + shift);
 	while (frames.length > 1 && frames[frames.length - 1].t > stopped) frames.pop();
 	// ffmpeg concat list: each frame lasts until the next one (last one until the scene ended).
 	const lines = [];
 	for (let i = 0; i < frames.length; i++) {
-		const from = i === 0 ? Math.min(started, frames[0].t) : frames[i].t;
+		const from = i === 0 ? started : frames[i].t;
 		const next = i + 1 < frames.length ? frames[i + 1].t : Math.max(stopped, frames[i].t + 1 / fps);
 		lines.push(`file '${frames[i].file}'`, `duration ${Math.max(0.001, next - from).toFixed(4)}`);
 	}
