@@ -358,6 +358,11 @@ a {
 	stroke: var(--amber);
 	filter: drop-shadow(0 0 6px rgba(251, 191, 36, 0.8));
 }
+.flash-planned {
+	stroke: #38bdf8;
+	stroke-dasharray: 6 4;
+	filter: drop-shadow(0 0 6px rgba(56, 189, 248, 0.8));
+}
 @keyframes flash {
 	0% {
 		opacity: 0;

@@ -6,7 +6,7 @@ export type Stats = RadarSnapshot["stats"];
 export interface Flash {
 	id: number;
 	targets: string[];
-	kind: "landed" | "conflict" | "failed" | "holding";
+	kind: "landed" | "conflict" | "failed" | "holding" | "planned";
 	at: number;
 }
 
@@ -64,6 +64,9 @@ function flashesFor(event: RadarEvent): Flash[] {
 			return syms.length ? syms.map((s) => `${c.path}#${s}`) : [c.path];
 		});
 		return [{ id: ++flashSeq, targets, kind: "conflict", at: Date.now() }];
+	}
+	if (event.type === "flight.planned" && Array.isArray(data.deferred)) {
+		return [{ id: ++flashSeq, targets: [...new Set<string>(data.deferred.map((d: any) => d.target))].slice(0, 6), kind: "planned", at: Date.now() }];
 	}
 	if (event.type === "clearance.holding" && Array.isArray(data.holding)) {
 		return [{ id: ++flashSeq, targets: data.holding.map((h: any) => h.target), kind: "holding", at: Date.now() }];
