@@ -528,8 +528,10 @@ export class Tower extends DurableObject<Env> {
 					await trunkRepo.fork(repo, { defaultBranchOnly: true, description: `${code} · ${agent.callsign} · INT-${intent.seq} ${intent.title}`.slice(0, 200) });
 					break;
 				} catch (err) {
-					if ((err as { code?: string }).code !== "FORK_IN_PROGRESS" || attempt >= 40) throw err;
-					await sleep(300 + Math.random() * 700);
+					const code = (err as { code?: string }).code ?? "";
+					const transient = code === "FORK_IN_PROGRESS" || code === "INTERNAL_ERROR" || code === "UPSTREAM_UNAVAILABLE" || /internal error/i.test(errorMessage(err));
+					if (!transient || attempt >= 40) throw err;
+					await sleep(300 + Math.random() * 700 + attempt * 100);
 				} finally {
 					trunkRepo[Symbol.dispose]?.();
 				}
@@ -540,7 +542,7 @@ export class Tower extends DurableObject<Env> {
 					workspace = await this.mintWorkspace(repo, "write");
 				} catch (err) {
 					const code = (err as { code?: string }).code;
-					if (code !== "FORK_IN_PROGRESS" && code !== "CREATE_IN_PROGRESS") throw err;
+					if (code !== "FORK_IN_PROGRESS" && code !== "CREATE_IN_PROGRESS" && code !== "NOT_FOUND" && code !== "INTERNAL_ERROR") throw err;
 					await sleep(250);
 				}
 			}
