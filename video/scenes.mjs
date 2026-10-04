@@ -129,6 +129,8 @@ async function installCursor(page) {
 /** Moves the visible cursor to the element and clicks it. */
 async function click(page, target) {
 	const loc = typeof target === "string" ? page.locator(target).first() : target;
+	await loc.scrollIntoViewIfNeeded();
+	await page.waitForTimeout(250);
 	const b = await loc.boundingBox();
 	if (!b) throw new Error(`cannot click ${target}`);
 	const x = b.x + b.width / 2;
