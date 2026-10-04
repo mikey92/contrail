@@ -631,6 +631,9 @@ export class Tower extends DurableObject<Env> {
 					break;
 				} catch (err) {
 					const code = (err as { code?: string }).code ?? "";
+					// A fork that failed with a transient error may still have been created: the retry then
+					// finds the (uniquely named) repo already there, which is our fork.
+					if (attempt > 0 && /already exists/i.test(errorMessage(err))) break;
 					const transient = code === "FORK_IN_PROGRESS" || code === "INTERNAL_ERROR" || code === "UPSTREAM_UNAVAILABLE" || /internal error/i.test(errorMessage(err));
 					if (!transient || attempt >= 40) throw err;
 					await sleep(300 + Math.random() * 700 + attempt * 100);
@@ -865,6 +868,7 @@ export class Tower extends DurableObject<Env> {
 			if (blocked) continue;
 			this.sql.exec("UPDATE clearances SET status = 'granted', expires_at = ? WHERE id = ?", now() + CLEARANCE_TTL_MS, hold.id);
 			granted.push({ ...hold, status: "granted" });
+			this.bump("holdMs", now() - hold.createdAt);
 			const flight = this.flightById(hold.flightId);
 			this.sendRadio(hold.flightId, "clearance", `Cleared for ${hold.target}. Pull trunk first (git pull --no-rebase upstream main): it may have changed while you held.`);
 			this.addContrail(hold.flightId, null, "clearance", `Cleared after holding: ${hold.target}`, [hold.target]);
@@ -1392,6 +1396,7 @@ export class Tower extends DurableObject<Env> {
 				conflictsResolved: stats.conflictsResolved ?? 0,
 				unioned: stats.unioned ?? 0,
 				planned: stats.planned ?? 0,
+				holdMs: stats.holdMs ?? 0,
 			},
 		};
 	}

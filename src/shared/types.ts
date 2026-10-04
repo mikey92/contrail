@@ -195,8 +195,8 @@ export interface RadarSnapshot {
 	landings: Landing[];
 	trunk: TrunkState;
 	events: RadarEvent[];
-	/** planned: take-offs routed around an intent whose code was already in the air. */
-	stats: { repos: number; landings: number; conflictsPrevented: number; conflictsResolved: number; unioned: number; planned: number };
+	/** planned: take-offs routed around an intent whose code was already in the air. holdMs: time flights spent holding. */
+	stats: { repos: number; landings: number; conflictsPrevented: number; conflictsResolved: number; unioned: number; planned: number; holdMs: number };
 }
 
 export interface RadarEvent {

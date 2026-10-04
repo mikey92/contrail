@@ -44,7 +44,7 @@ const empty: RadarState = {
 	landings: {},
 	trunk: { head: null, files: [], landedCount: 0 },
 	events: [],
-	stats: { repos: 0, landings: 0, conflictsPrevented: 0, conflictsResolved: 0, unioned: 0, planned: 0 },
+	stats: { repos: 0, landings: 0, conflictsPrevented: 0, conflictsResolved: 0, unioned: 0, planned: 0, holdMs: 0 },
 	flashes: [],
 	contrail: [],
 };
