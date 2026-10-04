@@ -91,6 +91,15 @@ export class Workspace {
 		await this.repo.fs.promises.unlink(full);
 	}
 
+	/** A file as it is on trunk, as of the last sync(). */
+	async readTrunk(p: string): Promise<string> {
+		const { clean } = this.path(p);
+		const { fs, dir, cache } = this.repo;
+		const oid = await git.resolveRef({ fs, dir, ref: "refs/remotes/upstream/main" });
+		const { blob } = await git.readBlob({ fs, dir, oid, filepath: clean, cache });
+		return new TextDecoder().decode(blob);
+	}
+
 	/** Text files of the working tree, for running tests. */
 	async snapshot(): Promise<Map<string, string>> {
 		const files = new Map<string, string>();

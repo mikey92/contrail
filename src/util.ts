@@ -64,6 +64,18 @@ export function sleep(ms: number) {
 	return new Promise((r) => setTimeout(r, ms));
 }
 
+/** Runs `fn` again after errors that look transient (HTTP 5xx, dropped connections), backing off 0.3 s, then 0.9 s. */
+export async function retryTransient<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
+	for (let i = 1; ; i++) {
+		try {
+			return await fn();
+		} catch (err) {
+			if (i >= attempts || !/HTTP Error: 5\d\d|internal error|network connection|connection (reset|lost)/i.test(errorMessage(err))) throw err;
+			await sleep(300 * 3 ** (i - 1));
+		}
+	}
+}
+
 /**
  * The landing id in a trunk commit's trailer block. The Tower writes that block last, so only the last
  * Contrail-Landing line counts: look-alikes in an agent's summary above it cannot stand in for it.

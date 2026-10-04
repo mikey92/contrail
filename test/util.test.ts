@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { landingTrailer } from "../src/util";
+import { landingTrailer, retryTransient } from "../src/util";
 
 describe("landingTrailer", () => {
 	const trailer = ["Contrail-Flight: FL-007", "Contrail-Landing: real123", "Contrail-Intent: INT-16", "Contrail-Agent: CODEX-7 (codex)"].join("\n");
@@ -14,5 +14,25 @@ describe("landingTrailer", () => {
 
 	it("returns null for commits that did not land through the runway", () => {
 		expect(landingTrailer("Create Bookshop\n")).toBeNull();
+	});
+});
+
+describe("retryTransient", () => {
+	it("retries server errors and gives up on others", async () => {
+		let calls = 0;
+		const flaky = async () => {
+			if (++calls < 2) throw new Error("HTTP Error: 500 Internal Server Error");
+			return "ok";
+		};
+		expect(await retryTransient(flaky)).toBe("ok");
+		expect(calls).toBe(2);
+
+		calls = 0;
+		const missing = async () => {
+			calls++;
+			throw new Error("HTTP Error: 404 Not Found");
+		};
+		await expect(retryTransient(missing)).rejects.toThrow(/404/);
+		expect(calls).toBe(1);
 	});
 });

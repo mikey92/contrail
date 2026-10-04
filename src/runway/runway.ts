@@ -11,7 +11,7 @@ import type { Env } from "../env";
 import { extractSymbols } from "../git/symbols";
 import { airspaceViolations, type HeldByOther, targetsOverlap } from "../tower/clearance";
 import type { ConflictReport, FileChange, TestReport, TrunkFile } from "../shared/types";
-import { errorMessage, landingTrailer } from "../util";
+import { errorMessage, landingTrailer, retryTransient } from "../util";
 import {
 	addNote,
 	cloneMain,
@@ -240,8 +240,11 @@ export class Runway extends DurableObject<Env> {
 			try {
 				let head = opts.heads.get(job.landingId);
 				if (!head) {
-					const fork = await this.forkReadToken(job.repo);
-					head = await fetchFork(r, job.repo, fork.remote, fork.token);
+					// An Artifacts hiccup should not turn a landing away.
+					head = await retryTransient(async () => {
+						const fork = await this.forkReadToken(job.repo);
+						return fetchFork(r, job.repo, fork.remote, fork.token);
+					});
 					opts.heads.set(job.landingId, head);
 				}
 				outcome.forkHead = head;

@@ -308,8 +308,11 @@ export class EdgeAgent extends DurableObject<Env> {
 		}
 		const ws = await this.workspace(state, config);
 		if (state.step === "apply") {
+			// Apply the script to trunk's copy of the file, not the workspace's: after a landing that was
+			// turned away, the workspace still holds the earlier attempt, and applying on top of it would
+			// count an increment twice.
 			await ws.sync();
-			const src = await ws.read(script.path).catch(() => "");
+			const src = await ws.readTrunk(script.path).catch(() => "");
 			let next = src;
 			if (script.op === "increment") {
 				const re = new RegExp(`(export function ${script.symbol}\\(\\) \\{\\n  return )(\\d+)(;)`);
