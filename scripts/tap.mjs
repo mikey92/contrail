@@ -11,10 +11,12 @@ const t0 = Date.now();
 let count = 0;
 let stopping = false;
 let ws;
+let retry = 500;
 
 function connect() {
   ws = new WebSocket(`${base.replace(/^http/, "ws")}/api/p/${slug}/live`);
   ws.onmessage = (m) => {
+    retry = 500;
     if (m.data === "pong") return;
     file.write(`${JSON.stringify({ t: Date.now() - t0, m: JSON.parse(m.data) })}\n`);
     if (++count % 100 === 0) console.log(`${count} messages, ${Math.round((Date.now() - t0) / 1000)}s`);
@@ -22,7 +24,8 @@ function connect() {
   ws.onclose = (e) => {
     if (stopping) return;
     console.log(`stream closed (${e.code}${e.reason ? ` ${e.reason}` : ""}) after ${Math.round((Date.now() - t0) / 1000)}s, reconnecting`);
-    setTimeout(connect, 500);
+    setTimeout(connect, retry);
+    retry = Math.min(retry * 2, 8000);
   };
 }
 connect();

@@ -99,18 +99,22 @@ export class Tower extends DurableObject<Env> {
 		super(ctx, env);
 		this.sql = ctx.storage.sql;
 		ctx.blockConcurrencyWhile(async () => {
-			for (const stmt of SCHEMA) {
-				try {
-					this.sql.exec(stmt);
-				} catch (err) {
-					// ALTER TABLE … ADD COLUMN is not idempotent in SQLite; an existing column is fine.
-					if (!/duplicate column/i.test(errorMessage(err))) throw err;
-				}
-			}
+			this.migrate();
 			// A restart (deploy, eviction) can interrupt a train: put its landings back in the queue.
 			const stale = this.sql.exec("UPDATE landings SET status = 'queued' WHERE status IN ('merging', 'verifying') RETURNING id").toArray();
 			if (stale.length) await ctx.storage.setAlarm(Date.now() + 500);
 		});
+	}
+
+	private migrate() {
+		for (const stmt of SCHEMA) {
+			try {
+				this.sql.exec(stmt);
+			} catch (err) {
+				// ALTER TABLE … ADD COLUMN is not idempotent in SQLite; an existing column is fine.
+				if (!/duplicate column/i.test(errorMessage(err))) throw err;
+			}
+		}
 	}
 
 	// ───────────────────────── helpers ─────────────────────────
@@ -1459,6 +1463,8 @@ export class Tower extends DurableObject<Env> {
 		for (const ws of this.ctx.getWebSockets()) ws.close(1001, "project deleted");
 		await this.ctx.storage.deleteAlarm();
 		await this.ctx.storage.deleteAll();
+		// This instance may live on: a project created again under the same slug starts from empty tables.
+		this.migrate();
 		return { repos };
 	}
 
