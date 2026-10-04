@@ -49,6 +49,28 @@ export async function fetchFork(repo: Repo, name: string, url: string, token: st
 	}
 }
 
+/**
+ * Fetches `main` of several unrelated Artifacts repos (sector trunks) at once, each into refs/remotes/<name>/main.
+ * Their histories share nothing with this repo's, so each fetch offers the head it fetched last time;
+ * offering this repo's own main instead would make the server send the whole history again every time.
+ */
+export async function fetchUnrelated(repo: Repo, sources: { name: string; url: string; token: string }[]): Promise<string[]> {
+	// The remotes stay configured (fetches write refs through their refspecs), and config writes happen one at a time.
+	for (const s of sources) {
+		if ((await git.getConfig({ fs: repo.fs, dir: repo.dir, path: `remote.${s.name}.url` })) !== s.url) {
+			await git.addRemote({ fs: repo.fs, dir: repo.dir, remote: s.name, url: s.url, force: true });
+		}
+	}
+	return Promise.all(
+		sources.map(async (s) => {
+			const ref = `refs/remotes/${s.name}/main`;
+			const res = await git.fetch({ fs: repo.fs, http, dir: repo.dir, remote: s.name, ref, remoteRef: "refs/heads/main", singleBranch: true, headers: headers(s.token), cache: repo.cache });
+			if (!res.fetchHead) throw new Error(`${s.name} has no main branch`);
+			return res.fetchHead;
+		}),
+	);
+}
+
 export async function setMain(repo: Repo, oid: string) {
 	await git.writeRef({ fs: repo.fs, dir: repo.dir, ref: "refs/heads/main", value: oid, force: true });
 }

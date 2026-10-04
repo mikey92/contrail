@@ -6,7 +6,7 @@
 // composed tree. Prefixes are disjoint, so composing never conflicts and never needs tests of its own.
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../env";
-import { cloneMain, commit, commitTreeOid, type FlatTree, fetchFork, fetchMain, listTree, newRepo, type Repo, pushMain, seed, setMain, writeFlatTree } from "../runway/gitops";
+import { cloneMain, commit, commitTreeOid, type FlatTree, fetchMain, fetchUnrelated, listTree, newRepo, type Repo, pushMain, seed, setMain, writeFlatTree } from "../runway/gitops";
 import type { CenterInfo, CenterSnapshot, SectorInfo } from "../shared/types";
 import { errorMessage, repoSafe } from "../util";
 import { checkPrefixes, composeTree } from "./compose";
@@ -14,11 +14,14 @@ import { checkPrefixes, composeTree } from "./compose";
 /** How long the Center waits after a sector moves, so a burst of landings becomes one composition. */
 const COALESCE_MS = 1000;
 const MAX_REPO_BYTES = 64 * 1024 * 1024;
+const TOKEN_SECONDS = 600;
 const AUTHOR = { name: "Contrail Center", email: "center@contrail.dev" };
 
 export class Center extends DurableObject<Env> {
 	private repo: Repo | null = null;
 	private queue: Promise<unknown> = Promise.resolve();
+	/** Remote URLs and tokens per repo and scope, reused for most of each token's life. */
+	private access = new Map<string, { remote: string; token: string; until: number }>();
 
 	/** Serializes all git work on the in-memory clone. */
 	private exclusive<T>(fn: () => Promise<T>): Promise<T> {
@@ -96,13 +99,14 @@ export class Center extends DurableObject<Env> {
 			try {
 				const { head, token } = await this.sync(info.trunkRepo);
 				const r = this.repo!;
+				const due = info.sectors.filter((s) => dirty.includes(s.slug));
+				const sources = await Promise.all(due.map(async (s) => ({ name: `sector-${s.slug}`, ...(await this.repoAccess(s.trunkRepo, "read")) })));
+				const sectorHeads = await fetchUnrelated(r, sources.map((s) => ({ name: s.name, url: s.remote, token: s.token })));
 				const moved: { prefix: string; tree: FlatTree }[] = [];
-				for (const sector of info.sectors.filter((s) => dirty.includes(s.slug))) {
-					const { remote, token: readToken } = await this.readAccess(sector.trunkRepo);
-					const sectorHead = await fetchFork(r, `sector-${sector.slug}`, remote, readToken);
-					if (heads[sector.slug] === sectorHead) continue;
-					moved.push({ prefix: sector.prefix, tree: await listTree(r, sectorHead) });
-					heads[sector.slug] = sectorHead;
+				for (const [i, sector] of due.entries()) {
+					if (heads[sector.slug] === sectorHeads[i]) continue;
+					moved.push({ prefix: sector.prefix, tree: await listTree(r, sectorHeads[i]) });
+					heads[sector.slug] = sectorHeads[i];
 				}
 				if (!moved.length) return head;
 				const tree = await writeFlatTree(r, composeTree(await listTree(r, head), moved));
@@ -124,6 +128,7 @@ export class Center extends DurableObject<Env> {
 				await this.ctx.storage.put({ heads, head: composed, composedAt: Date.now(), compositions: ((await this.ctx.storage.get<number>("compositions")) ?? 0) + 1, lastError: null });
 				return composed;
 			} catch (err) {
+				this.access.clear(); // a token may have been revoked
 				// Put the sectors back so the next attempt picks them up.
 				const now = new Set([...((await this.ctx.storage.get<string[]>("dirty")) ?? []), ...dirty]);
 				await this.ctx.storage.put("dirty", [...now]);
@@ -132,11 +137,16 @@ export class Center extends DurableObject<Env> {
 		});
 	}
 
-	private async readAccess(name: string): Promise<{ remote: string; token: string }> {
+	private async repoAccess(name: string, scope: "read" | "write"): Promise<{ remote: string; token: string }> {
+		const key = `${scope} ${name}`;
+		const known = this.access.get(key);
+		if (known && known.until > Date.now()) return known;
 		const repo = await this.env.ARTIFACTS.get(name);
 		try {
-			const [info, t] = await Promise.all([repo.info(), repo.createToken("read", 600)]);
-			return { remote: info.remote, token: t.plaintext };
+			const [info, t] = await Promise.all([repo.info(), repo.createToken(scope, TOKEN_SECONDS)]);
+			const access = { remote: info.remote, token: t.plaintext, until: Date.now() + (TOKEN_SECONDS - 60) * 1000 };
+			this.access.set(key, access);
+			return access;
 		} finally {
 			repo[Symbol.dispose]?.();
 		}
@@ -144,16 +154,7 @@ export class Center extends DurableObject<Env> {
 
 	/** A warm clone of the monorepo trunk and a write token for it. */
 	private async sync(trunkRepo: string): Promise<{ head: string; token: string }> {
-		const repo = await this.env.ARTIFACTS.get(trunkRepo);
-		let remote: string;
-		let token: string;
-		try {
-			const [info, t] = await Promise.all([repo.info(), repo.createToken("write", 600)]);
-			remote = info.remote;
-			token = t.plaintext;
-		} finally {
-			repo[Symbol.dispose]?.();
-		}
+		const { remote, token } = await this.repoAccess(trunkRepo, "write");
 		if (this.repo && this.repo.fs.byteSize < MAX_REPO_BYTES) {
 			const head = await fetchMain(this.repo, token);
 			await setMain(this.repo, head);
@@ -185,6 +186,7 @@ export class Center extends DurableObject<Env> {
 		await this.ctx.storage.deleteAlarm();
 		await this.ctx.storage.deleteAll();
 		this.repo = null;
+		this.access.clear();
 		return { deleted: info?.trunkRepo ?? null };
 	}
 }

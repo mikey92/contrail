@@ -173,7 +173,15 @@ export class EdgeAgent extends DurableObject<Env> {
 			state.phase = "done";
 			return 0;
 		}
-		const res = await this.tower(config.slug).takeOff(config.agentId, {});
+		const res = await this.tower(config.slug)
+			.takeOff(config.agentId, {})
+			.catch(async (err) => {
+				// The tower still has a flight for us that this agent lost track of: give its intent back and start over.
+				if (!/already flying/.test(errorMessage(err))) throw err;
+				await this.tower(config.slug).abort(config.agentId, undefined, "edge agent lost track of this flight");
+				return null;
+			});
+		if (!res) return 1000;
 		if ("idle" in res) {
 			if (/lined up/.test(res.message)) return 2500 + Math.floor(Math.random() * 2500);
 			if (/blocked/.test(res.message)) return 15_000;
@@ -181,10 +189,16 @@ export class EdgeAgent extends DurableObject<Env> {
 			return 0;
 		}
 		const t = res as TakeOffResult;
-		this.ws = await Workspace.open(t.workspace.cloneUrl, t.upstream.cloneUrl, {
-			name: config.callsign,
-			email: `${config.callsign.toLowerCase()}@agents.contrail.dev`,
-		});
+		try {
+			this.ws = await Workspace.open(t.workspace.cloneUrl, t.upstream.cloneUrl, {
+				name: config.callsign,
+				email: `${config.callsign.toLowerCase()}@agents.contrail.dev`,
+			});
+		} catch (err) {
+			// Don't leave the flight in the air without an agent: give the intent back, then retry.
+			await this.tower(config.slug).abort(config.agentId, undefined, `workspace did not open: ${errorMessage(err)}`).catch(() => {});
+			throw err;
+		}
 		const files = await this.ws.listFiles();
 		state.flight = { code: t.flight.code, intent: `INT-${t.intent.seq} ${t.intent.title}`, cloneUrl: t.workspace.cloneUrl, upstreamUrl: t.upstream.cloneUrl };
 		state.flights++;
