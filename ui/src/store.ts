@@ -146,7 +146,13 @@ export function useRadar(slug: string, fixture: string | null) {
 			let cancelled = false;
 			const timers: number[] = [];
 			fetch(replayUrl)
-				.then((r) => r.text())
+				// Replays may be stored gzipped (.jsonl.gz) to keep the repository small.
+				.then((r) => r.arrayBuffer())
+				.then((buf) => {
+					const bytes = new Uint8Array(buf);
+					if (bytes[0] !== 0x1f || bytes[1] !== 0x8b) return new TextDecoder().decode(bytes);
+					return new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
+				})
 				.then((text) => {
 					const lines = text.trim().split("\n").map((l) => JSON.parse(l) as { t: number; m: any });
 					const apply = (m: any) => {
