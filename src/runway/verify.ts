@@ -15,6 +15,36 @@ export function isTestFile(path: string) {
 	return TEST_FILE.test(path);
 }
 
+const IMPORT_RE = /(?:import|export)\s[^'"`;]*?from\s*["']([^"']+)["']|import\s*["']([^"']+)["']|import\(\s*["']([^"']+)["']\s*\)/g;
+
+function resolveRelative(from: string, spec: string): string | null {
+	if (!spec.startsWith("./") && !spec.startsWith("../")) return null;
+	const parts = from.split("/").slice(0, -1);
+	for (const seg of spec.split("/")) {
+		if (seg === "." || seg === "") continue;
+		if (seg === "..") parts.pop();
+		else parts.push(seg);
+	}
+	return parts.join("/");
+}
+
+/** Relative modules transitively imported by the entry files (including the entries). */
+export function reachableModules(entries: string[], files: Map<string, string>): string[] {
+	const seen = new Set<string>();
+	const stack = [...entries];
+	while (stack.length) {
+		const path = stack.pop()!;
+		if (seen.has(path) || !files.has(path)) continue;
+		seen.add(path);
+		if (path.endsWith(".json")) continue;
+		for (const m of files.get(path)!.matchAll(IMPORT_RE)) {
+			const target = resolveRelative(path, m[1] ?? m[2] ?? m[3]);
+			if (target && !seen.has(target)) stack.push(target);
+		}
+	}
+	return [...seen];
+}
+
 function runnerSource(testFiles: string[]): string {
 	const imports = testFiles.map((p, i) => `import * as t${i} from ${JSON.stringify(`./${p}`)};`);
 	const suites = testFiles.map((p, i) => `[${JSON.stringify(p)}, t${i}]`).join(", ");
@@ -47,8 +77,10 @@ export async function verifyTree(loader: WorkerLoader, treeOid: string, files: M
 	const testFiles = [...files.keys()].filter(isTestFile).sort();
 	if (testFiles.length === 0) return { passed: 0, failed: 0, results: [], ms: 0 };
 
-	const modules: Record<string, string | { json: unknown }> = { "__contrail_runner.js": runnerSource(testFiles) };
-	for (const [path, content] of files) {
+	// Only modules reachable from the test files are loaded, so stray scripts never break verification.
+	const modules: Record<string, string | { js: string } | { json: unknown }> = { "__contrail_runner.js": runnerSource(testFiles) };
+	for (const path of reachableModules(testFiles, files)) {
+		const content = files.get(path)!;
 		if (!MODULE_FILE.test(path) || content.length > MAX_MODULE_BYTES) continue;
 		if (path.endsWith(".json")) {
 			try {
@@ -57,7 +89,7 @@ export async function verifyTree(loader: WorkerLoader, treeOid: string, files: M
 				// Unparseable JSON simply isn't importable.
 			}
 		} else {
-			modules[path] = content;
+			modules[path] = { js: content };
 		}
 	}
 
