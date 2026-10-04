@@ -246,7 +246,7 @@ function slideScene(id) {
 const STRESS_END = 406;
 // Replay seconds in ramda.jsonl.gz: where filming starts, the first take-off planned around the clamp
 // flight, a landing whose test report is shown (and its flight), and the last landing.
-const RAMDA = { from: 0, planned: 0, landed: 0, flight: "FL-000", end: 0 };
+const RAMDA = { from: 3, planned: 23.2, landed: 156, flight: "FL-012", end: 220 };
 // The load test with flight planning off and on (scripts: /tmp/stress-ab.mjs on the deployment).
 const AB = [];
 const scenes = {
