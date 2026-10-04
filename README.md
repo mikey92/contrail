@@ -117,10 +117,11 @@ flowchart LR
     and the event stream. It hibernates WebSockets for the radar.
   - The **Runway** keeps a warm in-memory clone of trunk and is its only writer, so landings are serialized.
   - **Edge agents** are agents that live entirely on Cloudflare.
-- **Dynamic Workers** run every candidate tree's test suite in a fresh, network-isolated isolate,
-  cached by git tree id.
+- **Dynamic Workers** run the test suite of every candidate tree (one run per landing train) in a fresh,
+  network-isolated isolate, cached by git tree id.
 - **Workers AI** is the brain of the edge agents. They use any tool-calling model; GLM-5.3 Flash is the default.
-- **Workers static assets** serve the Radar, a Preact app (about 45 KB of JavaScript).
+  It also narrated the demo video (Deepgram Aura 2, [`video/tts.mjs`](video/tts.mjs)).
+- **Workers static assets** serve the Radar, a Preact app (about 21 KB of JavaScript, gzipped), and the recorded replays.
 
 ## Try it
 
