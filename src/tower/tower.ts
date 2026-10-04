@@ -57,6 +57,8 @@ export interface Workspace {
 export interface TakeOffResult {
 	flight: Flight;
 	intent: Intent;
+	/** Contrail of earlier flights on this intent that did not land: context handed to the next agent. */
+	previousAttempts?: { flight: string; agent: string; status: string; contrail: { kind: string; text: string }[] }[];
 	workspace: Workspace;
 	upstream: Workspace;
 	setup: string;
@@ -540,9 +542,26 @@ export class Tower extends DurableObject<Env> {
 			this.patch("flight", flight);
 			this.emit("flight.airborne", `${code} airborne — workspace ${repo} forked from trunk`, { flightId, agentId, data: { repo } });
 			const dir = code.toLowerCase();
+			const previousAttempts = this.rows("SELECT * FROM flights WHERE intent_id = ? AND id != ? AND status = 'aborted' ORDER BY seq", intent.id, flightId)
+				.map((r) => this.toFlight(r))
+				.map((f) => ({
+					flight: f.code,
+					agent: this.agentById(f.agentId).callsign,
+					status: f.status,
+					contrail: this.rows<{ kind: string; text: string }>(
+						"SELECT kind, text FROM contrail WHERE flight_id = ? AND kind IN ('plan', 'decision', 'handoff', 'conflict', 'test', 'note') ORDER BY id",
+						f.id,
+					),
+				}))
+				.filter((a) => a.contrail.length > 0);
+			if (previousAttempts.length) {
+				this.addContrail(flightId, null, "handoff", `Inherited the contrail of ${previousAttempts.map((a) => `${a.flight} (${a.agent})`).join(", ")}`);
+				this.emit("contrail.handoff", `${code} inherits context from ${previousAttempts.map((a) => a.flight).join(", ")}`, { flightId, agentId });
+			}
 			return {
 				flight,
 				intent: this.intentById(intent.id),
+				...(previousAttempts.length ? { previousAttempts } : {}),
 				workspace,
 				upstream,
 				setup: workspaceInstructions({ cloneUrl: workspace.cloneUrl, upstreamUrl: upstream.cloneUrl, dir, flightCode: code, callsign: agent.callsign }),
@@ -1216,6 +1235,43 @@ export class Tower extends DurableObject<Env> {
 
 	async resync(): Promise<TrunkState> {
 		return this.refreshTrunk();
+	}
+
+	// ───────────────────────── edge agents ─────────────────────────
+
+	async launchEdge(input: { count: number; model?: string; maxFlights?: number; limit?: number }): Promise<{ launched: Agent[] }> {
+		const fleet = this.meta<string[]>("edgeFleet", []);
+		const statuses = await Promise.all(fleet.map((id) => this.edgeStub(id).status().catch(() => null)));
+		const flying = statuses.filter((s) => s && s.phase !== "done" && s.phase !== "stopped").length;
+		const room = Math.max(0, (input.limit ?? 50) - flying);
+		const count = Math.min(Math.max(1, input.count), room);
+		const launched: Agent[] = [];
+		for (let i = 0; i < count; i++) {
+			const model = input.model ?? "@cf/zai-org/glm-5.3-flash";
+			const { agent } = await this.join({ kind: "edge", model: model.replace(/^@cf\//, "") });
+			await this.edgeStub(agent.id).start({ slug: this.project().slug, agentId: agent.id, callsign: agent.callsign, model, maxFlights: input.maxFlights ?? 6 });
+			fleet.push(agent.id);
+			launched.push(agent);
+		}
+		this.setMeta("edgeFleet", fleet);
+		if (launched.length) this.emit("edge.launched", `Launched ${launched.length} edge agent${launched.length > 1 ? "s" : ""} on Workers AI: ${launched.map((a) => a.callsign).join(", ")}`);
+		return { launched };
+	}
+
+	async stopEdge(): Promise<{ stopped: number }> {
+		const fleet = this.meta<string[]>("edgeFleet", []);
+		await Promise.all(fleet.map((id) => this.edgeStub(id).stop().catch(() => {})));
+		this.emit("edge.stopped", `Stopped ${fleet.length} edge agent(s)`);
+		return { stopped: fleet.length };
+	}
+
+	async edgeStatus() {
+		const fleet = this.meta<string[]>("edgeFleet", []);
+		return Promise.all(fleet.map(async (id) => ({ agentId: id, ...(await this.edgeStub(id).status().catch((e) => ({ error: errorMessage(e) }))) })));
+	}
+
+	private edgeStub(agentId: string) {
+		return this.env.EDGE.get(this.env.EDGE.idFromName(`${this.project().slug}:${agentId}`));
 	}
 
 	// ───────────────────────── live connections ─────────────────────────

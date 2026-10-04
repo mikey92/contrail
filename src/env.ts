@@ -1,3 +1,4 @@
+import type { EdgeAgent } from "./edge/agent";
 import type { Registry } from "./registry";
 import type { Runway } from "./runway/runway";
 import type { Tower } from "./tower/tower";
@@ -8,6 +9,8 @@ export interface Env {
 	TOWER: DurableObjectNamespace<Tower>;
 	RUNWAY: DurableObjectNamespace<Runway>;
 	REGISTRY: DurableObjectNamespace<Registry>;
+	EDGE: DurableObjectNamespace<EdgeAgent>;
+	AI: Ai;
 	ASSETS: Fetcher;
 	/** Admin key for creating projects and intents. */
 	CONTRAIL_ADMIN_KEY: string;

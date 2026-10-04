@@ -10,10 +10,15 @@
 		"bindings": [
 			{ "name": "TOWER", "class_name": "Tower" },
 			{ "name": "RUNWAY", "class_name": "Runway" },
-			{ "name": "REGISTRY", "class_name": "Registry" }
+			{ "name": "REGISTRY", "class_name": "Registry" },
+			{ "name": "EDGE", "class_name": "EdgeAgent" }
 		]
 	},
-	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["Tower", "Runway", "Registry"] }],
+	"migrations": [
+		{ "tag": "v1", "new_sqlite_classes": ["Tower", "Runway", "Registry"] },
+		{ "tag": "v2", "new_sqlite_classes": ["EdgeAgent"] }
+	],
+	"ai": { "binding": "AI" },
 	"assets": {
 		"directory": "./dist/ui",
 		"binding": "ASSETS",

@@ -8,6 +8,8 @@ export interface TreeMergeResult {
 	/** What the flight changed relative to the merge base. */
 	changes: FileChange[];
 	conflicts: ConflictReport[];
+	/** For content conflicts: the file text with conflict markers (used by workspaces that resolve in place). */
+	conflictTexts: Map<string, string>;
 	unioned: number;
 }
 
@@ -43,6 +45,7 @@ export async function mergeTrees(repo: Repo, baseOid: string, oursOid: string, t
 	const [B, O, T] = await Promise.all([listTree(repo, baseOid), listTree(repo, oursOid), listTree(repo, theirsOid)]);
 	const files: FlatTree = new Map(O);
 	const conflicts: ConflictReport[] = [];
+	const conflictTexts = new Map<string, string>();
 	let unioned = 0;
 
 	for (const path of new Set([...B.keys(), ...O.keys(), ...T.keys()])) {
@@ -70,10 +73,11 @@ export async function mergeTrees(repo: Repo, baseOid: string, oursOid: string, t
 		unioned += merged.unioned;
 		if (!merged.clean) {
 			conflicts.push({ path, kind: "content", hunks: merged.conflicts, causedBy: [] });
+			conflictTexts.set(path, merged.text);
 			continue;
 		}
 		files.set(path, { oid: await writeText(repo, merged.text), mode: t.mode });
 	}
 
-	return { files, changes: await describeChanges(repo, B, T), conflicts, unioned };
+	return { files, changes: await describeChanges(repo, B, T), conflicts, conflictTexts, unioned };
 }

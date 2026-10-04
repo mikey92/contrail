@@ -7,6 +7,7 @@ import { handleMcp } from "./mcp";
 import type { ProjectSource } from "./tower/tower";
 import { errorMessage, randomToken, safeEqual } from "./util";
 
+export { EdgeAgent } from "./edge/agent";
 export { Registry } from "./registry";
 export { Runway } from "./runway/runway";
 export { Tower } from "./tower/tower";
@@ -126,6 +127,25 @@ app.post("/api/p/:slug/intents", async (c) => {
 app.post("/api/p/:slug/resync", async (c) => {
 	if (!isAdmin(c)) return c.json({ error: "admin key required" }, 401);
 	return c.json(await tower(c.env, c.req.param("slug")).resync());
+});
+
+// ── edge agents (run on Workers AI inside Durable Objects) ──
+
+app.post("/api/p/:slug/edge/launch", async (c) => {
+	if (!isAdmin(c)) return c.json({ error: "admin key required" }, 401);
+	const body = await c.req.json<{ count?: number; model?: string; maxFlights?: number }>().catch(() => ({}) as any);
+	return c.json(await tower(c.env, c.req.param("slug")).launchEdge({ count: Number(body.count ?? 4), model: body.model, maxFlights: body.maxFlights }));
+});
+
+app.post("/api/p/:slug/edge/stop", async (c) => {
+	if (!isAdmin(c)) return c.json({ error: "admin key required" }, 401);
+	return c.json(await tower(c.env, c.req.param("slug")).stopEdge());
+});
+
+app.get("/api/p/:slug/edge", async (c) => {
+	const slug = c.req.param("slug");
+	if (!(await canView(c, slug))) return c.json({ error: "not found" }, 404);
+	return c.json({ fleet: await tower(c.env, slug).edgeStatus() });
 });
 
 // Agents join with the project's join code (or the admin key) and receive a personal agent key.
