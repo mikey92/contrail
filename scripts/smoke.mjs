@@ -149,11 +149,24 @@ edit(fd.dir, "src/pricing.js", (s) =>
     "    const lineTotal = book.priceCents * line.qty;\n    const bulk = line.qty >= 3 ? Math.round(lineTotal * 0.9) : lineTotal;\n    const paid = book.format === \"paperback\" ? line.qty - Math.floor(line.qty / 3) : line.qty;\n    total += Math.min(bulk, book.priceCents * paid);\n",
   ),
 );
-edit(fd.dir, "test/pricing.test.js", (s) => s.replace(/<<<<<<<[^\n]*\n|=======\n|>>>>>>>[^\n]*\n/g, ""));
+// git's own merge interleaves the two appended tests; rebuild the file from trunk + our test.
+writeFileSync(
+  join(fd.dir, "test/pricing.test.js"),
+  append(`export function paperbacksBuyTwoGetOne() {\n  const cart = cartOf([\"9780143127550\", 3]);\n  assert.equal(subtotal(cart, catalog), 1800 * 2);\n}`)(sh("git show upstream/main:test/pricing.test.js", fd.dir)),
+);
 sh(`git add -A && git commit -q -m "Resolve with bulk discount: cheaper rule wins" && git push -q origin HEAD:main`, fd.dir);
 await D.tool("log", { kind: "decision", text: "Bulk discount and buy-2-get-1 do not stack: each line pays the cheaper of the two." });
 const ld2 = await D.tool("request_landing", { summary: "Every third paperback is free; does not stack with the bulk discount." });
-check(ld2.landing.status === "landed", `${fd.flight.code} landed after resolving (${ld2.landing.status}${ld2.landing.error ? `: ${ld2.landing.error}` : ""})`);
+// The textual conflict is gone, but FL-003's test bought 3 paperbacks: the verifier catches the semantic clash.
+const failing = ld2.landing.tests?.results?.filter((r) => !r.ok).map((r) => r.name) ?? [];
+check(ld2.landing.status === "failed" && failing.includes("discountsBulkLines"), `semantic conflict caught by the test gate (${failing.join(", ") || ld2.landing.status})`);
+
+edit(fd.dir, "test/pricing.test.js", (s) =>
+  s.replace('const cart = cartOf(["9781984801258", 3]);\n  assert.equal(subtotal(cart, catalog), Math.round(1700 * 3 * 0.9));', 'const cart = cartOf(["9780593135204", 3]);\n  assert.equal(subtotal(cart, catalog), Math.round(2899 * 3 * 0.9));'),
+);
+commitPush(fd.dir, "Bulk discount test uses a hardcover: paperbacks now get the cheaper rule");
+const ld3 = await D.tool("request_landing", { summary: "Every third paperback is free; does not stack with the bulk discount (cheaper rule wins)." });
+check(ld3.landing.status === "landed", `${fd.flight.code} landed after resolving (${ld3.landing.status}${ld3.landing.error ? `: ${ld3.landing.error}` : ""})`);
 
 // ── 3. context: why does subtotal look like this? ─────
 const why = await D.tool("why", { path: "src/pricing.js", symbol: "subtotal" });
