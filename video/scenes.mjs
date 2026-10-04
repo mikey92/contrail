@@ -472,10 +472,25 @@ const scenes = {
 	},
 
 	"11-scale": {
-		url: (s) => replay("stress", "stress.jsonl.gz", 8, { speed: (STRESS_END - 8) / (cue(s, "Three hundred out of") - 0.4) }),
+		// The busy first two minutes at a watchable speed, then the long tail (hot counters landing one
+		// after another) fast-forwarded so the totals are final when the numbers come up.
+		url: (s) =>
+			replay("stress", "stress.jsonl.gz", 8, {
+				pins: [
+					[130, cue(s, "Under load")],
+					[STRESS_END, cue(s, "Three hundred out of") - 0.3],
+				],
+			}),
 		prepare: replayReady,
 		run: async (page, s, t) => {
 			await startReplay(page);
+			await t.at(cue(s, "the hottest ones") - 1.2);
+			const f = await boxOf(page, '[data-path="src/counters.js"]');
+			await camera(page, { x: f.x - 20, y: f.y - 80, width: Math.max(f.width + 40, 1000), height: 560 });
+			await t.at(cue(s, "Most changes increment") + 0.6);
+			await camera(page, null, { ms: 1000 });
+			await t.at(cue(s, "landings ride in trains"));
+			await spotlight(page, ".runway", { ms: 3200, pad: 2, color: "#f97316" });
 			await t.at(cue(s, "Three hundred out of") + 0.1);
 			const stat = (n, label, color) =>
 				`<div style="padding:8px 0"><div style="font-size:54px;font-weight:800;color:${color};letter-spacing:-.02em">${n}</div><div style="font-size:19px;color:#8193ad;text-transform:uppercase;letter-spacing:.12em;font-family:'JetBrains Mono',monospace">${label}</div></div>`;
