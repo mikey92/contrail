@@ -903,7 +903,15 @@ export class Tower extends DurableObject<Env> {
 	}
 
 	async landingStatus(agentId: string, input: { flight?: string }): Promise<LandingView> {
-		const flight = this.ownFlight(agentId, input.flight);
+		let flight: Flight;
+		try {
+			flight = this.ownFlight(agentId, input.flight);
+		} catch (err) {
+			// The flight may have landed (e.g. after a review approval): report on the latest one.
+			const last = this.row("SELECT * FROM flights WHERE agent_id = ? ORDER BY seq DESC LIMIT 1", agentId);
+			if (!last) throw err;
+			flight = this.toFlight(last);
+		}
 		const r = this.row("SELECT * FROM landings WHERE flight_id = ? ORDER BY seq DESC LIMIT 1", flight.id);
 		if (!r) throw new Error("no landing requested yet");
 		const landing = this.toLanding(r);
