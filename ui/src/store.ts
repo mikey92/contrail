@@ -137,6 +137,36 @@ export function useRadar(slug: string, fixture: string | null) {
 	}, []);
 
 	useEffect(() => {
+		const params = new URLSearchParams(location.search);
+		const replayUrl = params.get("replay");
+		if (replayUrl) {
+			// Replays a recorded radar stream (scripts/tap.mjs) at `speed`×, starting at `from` seconds.
+			const speed = Number(params.get("speed") ?? 1);
+			const from = Number(params.get("from") ?? 0) * 1000;
+			let cancelled = false;
+			const timers: number[] = [];
+			fetch(replayUrl)
+				.then((r) => r.text())
+				.then((text) => {
+					const lines = text.trim().split("\n").map((l) => JSON.parse(l) as { t: number; m: any });
+					const apply = (m: any) => {
+						if (m.kind === "snapshot") dispatch({ type: "snapshot", snapshot: m.snapshot });
+						else if (m.kind === "patch") dispatch({ type: "patch", entity: m.entity, value: m.value });
+						else if (m.kind === "event") dispatch({ type: "event", event: { ...m.event, at: Date.now() } });
+					};
+					// Fast-forward everything before `from` without animation.
+					for (const l of lines) if (l.t <= from) apply(l.m);
+					dispatch({ type: "connected", value: true });
+					for (const l of lines) {
+						if (l.t <= from) continue;
+						timers.push(setTimeout(() => !cancelled && apply(l.m), (l.t - from) / speed) as unknown as number);
+					}
+				});
+			return () => {
+				cancelled = true;
+				for (const t of timers) clearTimeout(t);
+			};
+		}
 		if (fixture) {
 			fetch(`/fixtures/${fixture}.snapshot.json`)
 				.then((r) => r.json())

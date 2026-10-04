@@ -57,7 +57,7 @@ export function Radar({ slug, fixture }: { slug: string; fixture: string | null 
 					<Stat label="auto-merged" value={s.stats.unioned} accent="#a78bfa" />
 					<Stat label="Artifacts repos" value={s.stats.repos} accent="#f97316" />
 				</div>
-				<div class={`live ${s.connected ? "on" : ""}`}>{fixture ? "replay" : s.connected ? "live" : "reconnecting"}</div>
+				<div class={`live ${s.connected ? "on" : ""}`}>{fixture || new URLSearchParams(location.search).has("replay") ? "replay" : s.connected ? "live" : "reconnecting"}</div>
 				{s.project?.playground && <LaunchButton slug={slug} />}
 				<button class="btn ghost" onClick={() => setClone(true)} title="Clone trunk with its contrail notes">
 					Clone trunk
