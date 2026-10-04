@@ -134,6 +134,7 @@ function launch({ kind, model, callsign, key }) {
       "--json",
       "--skip-git-repo-check",
       "--ephemeral",
+      "--ignore-user-config",
       "-C",
       dir,
       "-s",
@@ -146,6 +147,8 @@ function launch({ kind, model, callsign, key }) {
       `mcp_servers.contrail.url="${mcpUrl}"`,
       "-c",
       'mcp_servers.contrail.bearer_token_env_var="CONTRAIL_KEY"',
+      "-c",
+      'mcp_servers.contrail.default_tools_approval_mode="approve"',
       ...(model ? ["-m", model] : []),
       text,
     ];

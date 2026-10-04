@@ -8,6 +8,8 @@ export interface ToolDef {
 	name: string;
 	description: string;
 	inputSchema: Record<string, unknown>;
+	/** MCP tool annotations; clients use them to decide what needs approval. */
+	annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean; idempotentHint?: boolean; openWorldHint?: boolean };
 	run: (tower: TowerStub, agentId: string, args: Record<string, any>) => Promise<unknown>;
 	/** One-line human summary placed before the JSON payload. */
 	summarize?: (result: any) => string;
@@ -91,6 +93,7 @@ export const TOOLS: ToolDef[] = [
 	},
 	{
 		name: "landing_status",
+		annotations: { readOnlyHint: true, openWorldHint: false },
 		description: "Check the result of your latest landing request.",
 		inputSchema: { type: "object", properties: {} },
 		run: (t, a) => t.landingStatus(a, {}),
@@ -98,6 +101,7 @@ export const TOOLS: ToolDef[] = [
 	},
 	{
 		name: "radar",
+		annotations: { readOnlyHint: true, openWorldHint: false },
 		description: "See the airspace: every active flight, what it is cleared for or holding for, recent landings, open intents, and your radio messages.",
 		inputSchema: { type: "object", properties: {} },
 		run: (t, a) => t.radar(a),
@@ -105,6 +109,7 @@ export const TOOLS: ToolDef[] = [
 	},
 	{
 		name: "why",
+		annotations: { readOnlyHint: true, openWorldHint: false },
 		description:
 			"Ask why code on trunk is the way it is. Give a path and a line or symbol; get the intents, agents, plans and decisions that shaped it. Use it before changing code you did not write.",
 		inputSchema: {

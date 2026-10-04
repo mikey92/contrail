@@ -64,7 +64,9 @@ async function handle(ctx: McpContext, msg: RpcMessage) {
 		case "ping":
 			return rpcResult(msg.id, {});
 		case "tools/list":
-			return rpcResult(msg.id, { tools: TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) });
+			return rpcResult(msg.id, {
+				tools: TOOLS.map(({ name, description, inputSchema, annotations }) => ({ name, description, inputSchema, annotations: { destructiveHint: false, openWorldHint: false, ...annotations } })),
+			});
 		case "tools/call":
 			return rpcResult(msg.id, await callTool(ctx, String(msg.params?.name ?? ""), msg.params?.arguments ?? {}));
 		case "resources/list":
