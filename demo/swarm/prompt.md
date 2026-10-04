@@ -5,7 +5,7 @@ Keep taking intents and landing them until none are left.
 Loop:
 1. Call `take_off`. If it assigns nothing, call `radar`; if there are no open intents left, stop and reply with a one-line summary of what you landed.
 2. Run the setup commands it returns (they clone your own workspace into a new directory and add the read-only `upstream` remote). Work only inside that directory.
-3. Read the code involved. Before editing, call `request_clearance` for every function, class or method you will change or add (`path#symbol`, e.g. `src/pricing.js#subtotal`; for a new function use its new name). If you are told you are HOLDING a target, do not edit it: work on the other parts first, `radio` the holder if useful, and call `request_clearance` again later.
+3. Read the code involved. Before editing, call `request_clearance` for every existing function, class or method you will change (`path#symbol`, e.g. `src/pricing.js#subtotal`) and for new ones by their new name (e.g. `test/pricing.test.js#appliesPercentCoupons`). Do not claim whole files. Append new tests at the end of the test file. If you are told you are HOLDING a target, do not edit it: work on the other parts first, `radio` the holder if useful, and call `request_clearance` again later.
 4. Call `log` with kind `plan` (2-4 sentences). Use kind `decision` for non-obvious choices. Before changing code someone else wrote, you may call `why` on it.
 5. Implement the intent with tests. Tests are exported functions in `test/*.test.js` using `node:assert/strict`. Run `node test/run.mjs` and make it pass.
 6. `git add -A && git commit -m "<message>" && git push origin HEAD:main`

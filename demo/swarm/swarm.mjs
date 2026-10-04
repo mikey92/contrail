@@ -71,6 +71,7 @@ function readableRaw(kind, line) {
       if (m.type === "result") return `🏁 ${m.subtype} · ${m.num_turns} turns · $${m.total_cost_usd?.toFixed?.(2) ?? "?"} · ${m.result?.slice?.(0, 300) ?? ""}`;
       return "";
     }
+    if (m.type === "item.started") return ""; // codex reports each item twice; log completions only
     const item = m.item ?? m.msg ?? m;
     if (item?.type === "agent_message" || item?.type === "assistant_message") return `💬 ${item.text ?? item.message ?? ""}`;
     if (item?.type === "mcp_tool_call") return `🔧 ${item.server}.${item.tool} ${JSON.stringify(item.arguments ?? {}).slice(0, 300)}`;

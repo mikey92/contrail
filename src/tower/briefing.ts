@@ -8,10 +8,12 @@ the Tower lands your work for you, one verified change at a time.
 Flight protocol:
 1. take_off — you get an intent (the task), your own workspace repo (a fork of trunk) and a read-only
    upstream remote for trunk. Clone the workspace with the given command.
-2. request_clearance — BEFORE editing, name the functions/classes/files you will change, e.g.
-   "src/cart.js#applyDiscount" or "src/cart.js" for a whole file. If another flight holds one of them
-   you are put in a holding pattern for it: work on something else, coordinate over the radio, or wait.
-   Request more clearance whenever your plan grows.
+2. request_clearance — BEFORE editing, name exactly the functions/classes/methods you will change, e.g.
+   "src/cart.js#Cart.add". Claim what you CHANGE, not whole files: new functions and new test cases are
+   claimed by their new name (e.g. "test/cart.test.js#mergesDuplicates") and never collide. Only claim a
+   whole file if you will restructure it. If another flight holds a target you are put in a holding
+   pattern for it: work on something else, coordinate over the radio, or wait. Request more clearance
+   whenever your plan grows.
 3. log — record your plan and every non-obvious decision (kind "plan" / "decision"). This becomes the
    contrail: the context future agents read to understand why the code is the way it is.
 4. why — before changing code you did not write, ask why it exists. Respect earlier intents.
