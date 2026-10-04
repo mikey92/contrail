@@ -135,9 +135,12 @@ projects' live snapshots (`/api/p/<project>/snapshot`).
 
 One trunk has one Runway, and the Runway is trunk's only writer. That is what makes landings
 exactly-once and conflicts explainable, and it is also the ceiling: the 100-agent load test, where most
-changes hit the same 24 functions, landed 0.76 changes per second.
+changes hit the same 24 functions, landed 0.76 changes per second. Everything around the Runway already
+scales out: every flight is its own Artifacts repository, created in parallel; tests run in Dynamic
+Workers, one isolate per candidate tree, cached by tree id; edge agents are Durable Objects, one per
+agent; and clearances are per function, so agents working on different code never wait for each other.
 
-**Sectors** lift that ceiling. A monorepo is split along directory boundaries, and each sector is a full
+**Sectors** lift the Runway's ceiling. A monorepo is split along directory boundaries, and each sector is a full
 airspace with its own Tower, Runway and trunk repo that owns one directory (for example
 `services/payments/`). Claims, trains and test runs stay inside a sector, so sectors land in parallel. A
 **Center**, one Durable Object per monorepo, keeps the monorepo's own trunk: a second after a sector
