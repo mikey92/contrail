@@ -25,6 +25,14 @@ export function Home() {
 					flight gets its own Artifacts repo, claims the exact functions it will touch, and lands through a runway that merges, tests and records{" "}
 					<em>why</em> — one verified change at a time.
 				</p>
+				<div class="hero-links">
+					<a class="btn" href="/demo.mp4">
+						▶ Watch the 6-minute demo
+					</a>
+					<a class="btn ghost" href="https://github.com/mikey92/contrail">
+						Source on GitHub
+					</a>
+				</div>
 				<div class="pillars">
 					<div>
 						<b>Clearances, not branches.</b> Agents claim functions, not files. Overlaps are caught before code is written — the second agent holds,

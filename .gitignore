@@ -5,3 +5,4 @@ dist/
 *.log
 .DS_Store
 ui/public/replays/*.jsonl
+ui/public/demo.mp4

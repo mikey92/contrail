@@ -1523,3 +1523,10 @@ details.diffs summary {
 	background: linear-gradient(135deg, #f97316, #fb923c);
 	color: #1c0a00;
 }
+
+.hero-links {
+	display: flex;
+	gap: 12px;
+	margin: 22px 0 6px;
+	position: relative;
+}
