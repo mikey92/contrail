@@ -293,8 +293,6 @@ const scenes = {
 			await t.at(0.2);
 			const file = await boxOf(page, '[data-path="src/pricing.js"]');
 			await camera(page, { x: file.x - 120, y: file.y - 120, width: file.width + 240, height: file.height + 240 });
-			await t.at(s.total - 1.5);
-			await camera(page, null, { ms: 1200 });
 		},
 	},
 
