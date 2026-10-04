@@ -225,7 +225,7 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 			<svg width={size.w} height={size.h} class="map">
 				<g transform={`translate(0, ${APRON})`}>
 					{groupBoxes.map((g) => (
-						<g key={g.name}>
+						<g key={g.name} data-group={g.name}>
 							<rect x={g.x} y={g.y} width={g.w} height={g.h} rx={8} class="group" />
 							<text x={g.x + 8} y={g.y + 15} class="group-label">
 								{g.name}

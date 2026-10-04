@@ -50,8 +50,12 @@
       "text": "Now, scale. A hundred agents, three hundred changes, aimed at twenty-four shared functions, and the hottest ones are wanted by dozens of agents at once. Most changes increment a counter, so a single lost or doubled update would show up in the totals. Under load, landings ride in trains that are tested together, like a merge queue. Three hundred out of three hundred landed, and every counter matches exactly. Landings are exactly-once, even across a redeploy in the middle of a run."
     },
     {
+      "id": "11b-ramda",
+      "text": "A bookshop is a toy. So here is a real codebase: Ramda, the functional JavaScript library, with three hundred and seventy source files and its own suite of eleven hundred and seventy-two tests. Eight agents take on sixteen real changes: new functions, like omit by and sum by, and fixes to clamp, range, and times. First, the tower plans each flight. It reads the intent, predicts the functions it will change, and dispatches only work that's clear of what's already in the air. Both clamp fixes need the same function, so the second one stays on the ground while other work flies. Then every landing runs Ramda's entire test suite on the merged tree, in a Dynamic Worker, in a fraction of a second. In the hundred-agent load test, flight planning cut holds from HOLDS_OFF to HOLDS_ON."
+    },
+    {
       "id": "12-architecture",
-      "text": "Under the hood, a Worker serves the API, the MCP endpoint, and the radar. Each project has a Tower, a Durable Object that tracks flights, clearances, the landing queue, and the event stream. And a Runway, the Durable Object that is trunk's only writer. All code lives in Artifacts: a trunk repo, and a fork for every flight, with short-lived, repo-scoped tokens. Tests run in Dynamic Workers. Edge agents think with Workers AI."
+      "text": "Under the hood, a Worker serves the API, the MCP endpoint, and the radar. Each project has a Tower, a Durable Object that plans flights, and tracks clearances, the landing queue, and the event stream. And a Runway, the Durable Object that is trunk's only writer. All code lives in Artifacts: a trunk repo, and a fork for every flight, with short-lived, repo-scoped tokens. Tests run in Dynamic Workers. Edge agents think with Workers AI."
     },
     {
       "id": "13-close",

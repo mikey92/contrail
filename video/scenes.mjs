@@ -244,6 +244,11 @@ function slideScene(id) {
 // ───────────────────────── the scenes ─────────────────────────
 
 const STRESS_END = 406;
+// Replay seconds in ramda.jsonl.gz: where filming starts, the first take-off planned around the clamp
+// flight, a landing whose test report is shown (and its flight), and the last landing.
+const RAMDA = { from: 0, planned: 0, landed: 0, flight: "FL-000", end: 0 };
+// The load test with flight planning off and on (scripts: /tmp/stress-ab.mjs on the deployment).
+const AB = [];
 const scenes = {
 	"01-hook": {
 		url: () => replay("stress", "stress.jsonl.gz", 24, { speed: 3 }),
@@ -505,6 +510,50 @@ const scenes = {
 					stat("105", "test runs (trains)", "#f97316"),
 				].join("")}</div>`,
 				{ right: "430px", top: "200px" },
+			);
+		},
+	},
+
+	"11b-ramda": {
+		// The real-codebase run: the planned take-off first, then a landing's test report, then the
+		// load-test comparison.
+		url: (s) =>
+			replay("ramda", "ramda.jsonl.gz", RAMDA.from, {
+				pins: [
+					[RAMDA.planned - 1.5, cue(s, "First, the tower plans") - 0.5],
+					[RAMDA.planned + 0.5, cue(s, "so the second one stays")],
+					[RAMDA.landed, cue(s, "Then every landing") - 0.6],
+					[RAMDA.end, cue(s, "In the hundred-agent load test") - 0.4],
+				],
+			}),
+		prepare: replayReady,
+		run: async (page, s, t) => {
+			await startReplay(page);
+			await t.at(cue(s, "three hundred and seventy source files") - 0.4);
+			await spotlight(page, '[data-group="source/"]', { ms: 2600, pad: 2 });
+			await t.at(cue(s, "its own suite") - 0.2);
+			await spotlight(page, '[data-group="test/"]', { ms: 2600, pad: 2 });
+			await t.at(cue(s, "so the second one stays") - 0.2);
+			const clamp = await boxOf(page, '[data-path="source/clamp.js"]');
+			await camera(page, { x: clamp.x - 420, y: clamp.y - 260, width: clamp.width + 840, height: clamp.height + 520 });
+			await t.at(cue(s, "while other work flies"));
+			await camera(page, null, { ms: 1000 });
+			await page.waitForTimeout(1050);
+			await spotlight(page, ".feed .ev-flight-planned", { ms: 3200, pad: 4, color: "#38bdf8" });
+			await t.at(cue(s, "Then every landing") - 0.2);
+			await click(page, '.tabs button:has-text("Flights")');
+			await page.waitForTimeout(500);
+			await click(page, page.locator(".flights .fcard", { hasText: RAMDA.flight }).first());
+			await t.at(cue(s, "Ramda's entire test suite"));
+			await spotlight(page, ".drawer section.landing.landed .tests", { ms: 3600, pad: 6, color: "#4ade80" });
+			await t.at(cue(s, "In the hundred-agent load test") - 0.6);
+			await click(page, ".drawer .close");
+			const stat = (n, label, color) =>
+				`<div style="padding:6px 0"><div style="font-size:50px;font-weight:800;color:${color};letter-spacing:-.02em">${n}</div><div style="font-size:18px;color:#8193ad;text-transform:uppercase;letter-spacing:.12em;font-family:'JetBrains Mono',monospace">${label}</div></div>`;
+			await overlay(
+				page,
+				`<div style="padding:26px 36px"><div style="font-size:20px;color:#cbd5e1;margin-bottom:10px">100 agents · 300 changes · flight planning off → on</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 46px">${AB.map(([n, label, color]) => stat(n, label, color)).join("")}</div></div>`,
+				{ right: "430px", top: "220px" },
 			);
 		},
 	},
