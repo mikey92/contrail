@@ -124,7 +124,8 @@ export function Runway({ landings, flights, agents, intents, onSelect }: { landi
 				<span class="muted">→ trunk/main</span>
 			</div>
 			<div class="rw-approach">
-				{approach.map((l) => {
+				{approach.length > 4 && <div class="rw-more">{approach.length} on approach</div>}
+				{approach.slice(0, 4).map((l) => {
 					const f = flights[l.flightId];
 					const a = f && agents[f.agentId];
 					return (

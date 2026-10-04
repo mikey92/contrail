@@ -314,6 +314,17 @@ a {
 	stroke: #0b1120;
 	stroke-width: 3px;
 }
+.holdcount rect {
+	fill: rgba(251, 191, 36, 0.18);
+	stroke: rgba(251, 191, 36, 0.7);
+}
+.holdcount text {
+	fill: #fde68a;
+	font-family: var(--mono);
+	font-size: 10px;
+	font-weight: 700;
+	text-anchor: middle;
+}
 .connector {
 	stroke-width: 1.2;
 	stroke-dasharray: 2 4;
@@ -518,6 +529,12 @@ a {
 	to {
 		background: color-mix(in srgb, var(--c) 28%, transparent);
 	}
+}
+.rw-more {
+	font-family: var(--mono);
+	font-size: 10.5px;
+	color: var(--violet);
+	letter-spacing: 0.05em;
 }
 .rw-strip {
 	position: relative;

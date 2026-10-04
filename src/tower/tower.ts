@@ -126,6 +126,7 @@ export class Tower extends DurableObject<Env> {
 		const stats = this.meta<Record<string, number>>("stats", {});
 		stats[stat] = (stats[stat] ?? 0) + by;
 		this.setMeta("stats", stats);
+		this.patch("stats", stats);
 	}
 
 	private project(): ProjectInfo {
@@ -517,11 +518,18 @@ export class Tower extends DurableObject<Env> {
 		this.emit("flight.taxiing", `${agent.callsign} taxiing as ${code} for INT-${intent.seq}`, { flightId, agentId });
 
 		try {
-			const trunkRepo = await this.env.ARTIFACTS.get(project.trunkRepo);
-			try {
-				await trunkRepo.fork(repo, { defaultBranchOnly: true, description: `${code} · ${agent.callsign} · INT-${intent.seq} ${intent.title}`.slice(0, 200) });
-			} finally {
-				trunkRepo[Symbol.dispose]?.();
+			// Artifacts runs one fork of a repo at a time; under a take-off burst, wait for our turn.
+			for (let attempt = 0; ; attempt++) {
+				const trunkRepo = await this.env.ARTIFACTS.get(project.trunkRepo);
+				try {
+					await trunkRepo.fork(repo, { defaultBranchOnly: true, description: `${code} · ${agent.callsign} · INT-${intent.seq} ${intent.title}`.slice(0, 200) });
+					break;
+				} catch (err) {
+					if ((err as { code?: string }).code !== "FORK_IN_PROGRESS" || attempt >= 40) throw err;
+					await sleep(300 + Math.random() * 700);
+				} finally {
+					trunkRepo[Symbol.dispose]?.();
+				}
 			}
 			let workspace: Workspace | null = null;
 			for (let i = 0; i < 60 && !workspace; i++) {
@@ -612,6 +620,9 @@ export class Tower extends DurableObject<Env> {
 		const granted = all.filter((c) => c.status === "granted");
 		const result: ClearanceResult = { granted: [], holding: [], radio: [] };
 		const expires = now() + CLEARANCE_TTL_MS;
+		// Re-requests (renewals, agents polling while they hold) stay silent: only changes are reported.
+		const newlyGranted: string[] = [];
+		const newHolds: HoldInfo[] = [];
 
 		for (const target of targets) {
 			const already = mine.find((c) => c.target === target);
@@ -634,13 +645,15 @@ export class Tower extends DurableObject<Env> {
 						expires,
 					);
 				result.granted.push(target);
+				newlyGranted.push(target);
 				continue;
 			}
 			const holder = this.flightById(collisions[0].with.flightId);
 			const holderAgent = this.agentById(holder.agentId);
 			const holderIntent = this.intentById(holder.intentId);
 			const heldClearance = granted.find((c) => c.flightId === holder.id && c.target === collisions[0].with.target);
-			if (!already)
+			if (!already) {
+				this.bump("conflictsPrevented");
 				this.sql.exec(
 					"INSERT INTO clearances (id, flight_id, target, status, reason, created_at, expires_at) VALUES (?, ?, ?, 'holding', ?, ?, ?)",
 					randomId(),
@@ -650,7 +663,8 @@ export class Tower extends DurableObject<Env> {
 					now(),
 					expires,
 				);
-			result.holding.push({
+			}
+			const hold: HoldInfo = {
 				target,
 				heldBy: {
 					flight: holder.code,
@@ -660,38 +674,44 @@ export class Tower extends DurableObject<Env> {
 					reason: heldClearance?.reason ?? null,
 					since: heldClearance?.createdAt ?? holder.createdAt,
 				},
-			});
-			this.sendRadio(
-				holder.id,
-				"traffic",
-				`${agent.callsign} (${flight.code}) is holding for ${target}, which you hold. Land or release it when you are done with it.`,
-			);
+			};
+			result.holding.push(hold);
+			if (!already) {
+				newHolds.push(hold);
+				this.sendRadio(
+					holder.id,
+					"traffic",
+					`${agent.callsign} (${flight.code}) is holding for ${target}, which you hold. Land or release it when you are done with it.`,
+				);
+			}
 		}
 
-		if (result.granted.length) {
-			this.addContrail(flight.id, agentId, "clearance", `Cleared: ${result.granted.join(", ")}${input.reason ? ` — ${input.reason}` : ""}`, result.granted);
-			this.emit("clearance.granted", `${flight.code} cleared for ${result.granted.join(", ")}`, { flightId: flight.id, agentId, data: { targets: result.granted } });
+		if (newlyGranted.length) {
+			this.addContrail(flight.id, agentId, "clearance", `Cleared: ${newlyGranted.join(", ")}${input.reason ? ` — ${input.reason}` : ""}`, newlyGranted);
+			this.emit("clearance.granted", `${flight.code} cleared for ${newlyGranted.join(", ")}`, { flightId: flight.id, agentId, data: { targets: newlyGranted } });
 		}
 		if (result.holding.length) {
-			this.bump("conflictsPrevented", result.holding.length);
 			this.setFlightStatus(flight.id, "holding");
+		}
+		if (newHolds.length) {
 			this.addContrail(
 				flight.id,
 				agentId,
 				"clearance",
-				`Holding for ${result.holding.map((h) => `${h.target} (held by ${h.heldBy.callsign} ${h.heldBy.flight})`).join(", ")}`,
-				result.holding.map((h) => h.target),
+				`Holding for ${newHolds.map((h) => `${h.target} (held by ${h.heldBy.callsign} ${h.heldBy.flight})`).join(", ")}`,
+				newHolds.map((h) => h.target),
 			);
-			this.emit("clearance.holding", `${flight.code} holding — ${result.holding.map((h) => `${h.target} held by ${h.heldBy.flight}`).join(", ")}`, {
+			this.emit("clearance.holding", `${flight.code} holding — ${newHolds.map((h) => `${h.target} held by ${h.heldBy.flight}`).join(", ")}`, {
 				flightId: flight.id,
 				agentId,
-				data: { holding: result.holding },
+				data: { holding: newHolds },
 			});
-		} else if (flight.status === "holding" && !this.row("SELECT id FROM clearances WHERE flight_id = ? AND status = 'holding'", flight.id)) {
+		} else if (!result.holding.length && flight.status === "holding" && !this.row("SELECT id FROM clearances WHERE flight_id = ? AND status = 'holding'", flight.id)) {
 			this.setFlightStatus(flight.id, "airborne");
 		}
-		this.patch("clearances", this.activeClearances());
-		this.patch("flight", this.flightById(flight.id));
+		const after = this.flightById(flight.id);
+		if (newlyGranted.length || newHolds.length) this.patch("clearances", this.activeClearances());
+		if (after.status !== flight.status) this.patch("flight", after);
 		result.radio = this.drainRadio(flight.id);
 		return result;
 	}

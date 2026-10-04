@@ -154,19 +154,38 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 		for (const other of mine.slice(1)) connectors.push({ from: f.id, to: center(other.rect!), color });
 	}
 
-	// Fan out flights that share a spot so their tags never stack.
+	// Flights sharing a spot: the cleared one sits on it, the rest stack in a holding ring around it.
 	const buckets = new Map<string, string[]>();
 	for (const [id, p] of positions) {
-		const key = `${Math.round(p.x / 40)}:${Math.round(p.y / 30)}`;
+		const key = `${Math.round(p.x / 30)}:${Math.round(p.y / 22)}`;
 		buckets.set(key, [...(buckets.get(key) ?? []), id]);
 	}
+	const showTag = new Set<string>();
+	const crowded = active.length > 14;
 	for (const ids of buckets.values()) {
-		if (ids.length < 2) continue;
-		ids.sort((a, b) => (flights[a].status === "holding" ? 1 : 0) - (flights[b].status === "holding" ? 1 : 0));
-		ids.forEach((id, i) => {
+		ids.sort((a, b) => (flights[a].status === "holding" ? 1 : 0) - (flights[b].status === "holding" ? 1 : 0) || flights[a].createdAt - flights[b].createdAt);
+		const holders = ids.filter((id) => flights[id].status === "holding");
+		const others = ids.filter((id) => flights[id].status !== "holding");
+		others.forEach((id, i) => {
 			const p = positions.get(id)!;
-			positions.set(id, { ...p, x: p.x + (i - (ids.length - 1) / 2) * 34, y: p.y + i * 26 });
+			positions.set(id, { ...p, x: p.x + i * 30, y: p.y + i * 22 });
+			if (!crowded || i === 0) showTag.add(id);
 		});
+		const r = Math.min(80, 24 + holders.length * 4);
+		holders.forEach((id, i) => {
+			const p = positions.get(id)!;
+			const a = (i / Math.max(holders.length, 1)) * Math.PI * 2 - Math.PI / 2;
+			positions.set(id, { ...p, x: p.x + Math.cos(a) * r, y: p.y + Math.sin(a) * r * 0.6 });
+			if (!crowded || i < 1) showTag.add(id);
+		});
+	}
+	if (selected) showTag.add(selected);
+	const holdCounts = new Map<string, { x: number; y: number; n: number }>();
+	for (const x of claims) {
+		if (x.c.status !== "holding") continue;
+		const c = center(x.rect!);
+		const k = x.c.target;
+		holdCounts.set(k, { x: x.rect!.x + x.rect!.w - 4, y: c.y, n: (holdCounts.get(k)?.n ?? 0) + 1 });
 	}
 
 	const flashTargets = new Map<string, Flash>();
@@ -224,7 +243,7 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 									style={{ fill: color, stroke: color }}
 									class={selected === flight.id ? "selected" : ""}
 								/>
-								{rect!.w > 70 && rect!.h >= 10 && (
+								{rect!.w > 70 && rect!.h >= 10 && (c.status !== "holding" || !crowded) && (
 									<text
 										x={rect!.x + rect!.w - 4}
 										y={c.status === "holding" ? rect!.y + rect!.h - 4 : rect!.y + Math.min(rect!.h / 2 + 4, 12)}
@@ -241,6 +260,16 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 						const p = positions.get(k.from)!;
 						return <line key={`k${i}`} x1={p.x} y1={p.y - APRON} x2={k.to.x} y2={k.to.y} class="connector" style={{ stroke: k.color }} />;
 					})}
+					{[...holdCounts.entries()]
+						.filter(([, h]) => h.n > 1)
+						.map(([t, h]) => (
+							<g key={`hc-${t}`} class="holdcount">
+								<rect x={h.x - 34} y={h.y - 8} width={34} height={16} rx={8} />
+								<text x={h.x - 17} y={h.y + 4}>
+									⏳{h.n}
+								</text>
+							</g>
+						))}
 					{flashRects.map(({ t, fl, rect }) => (
 						<rect key={`${fl.id}-${t}`} x={rect!.x - 3} y={rect!.y - 3} width={rect!.w + 6} height={rect!.h + 6} rx={4} class={`flash flash-${fl.kind}`} />
 					))}
@@ -267,10 +296,12 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 								<path d="M12 2c.8 0 1.4.7 1.4 1.6v6.1l7.6 4.6v2l-7.6-2.3v4.6l2.1 1.6V22L12 21l-3.5 1v-1.8l2.1-1.6V15L3 17.3v-2l7.6-4.6V3.6C10.6 2.7 11.2 2 12 2z" />
 							</svg>
 						</div>
-						<div class="tag">
-							<b>{agent?.callsign ?? "?"}</b> {f.code}
-							{f.status !== "airborne" && <span class={`st st-${f.status}`}>{f.status}</span>}
-						</div>
+						{showTag.has(f.id) && (
+							<div class="tag">
+								<b>{agent?.callsign ?? "?"}</b> {f.code}
+								{f.status !== "airborne" && <span class={`st st-${f.status}`}>{f.status}</span>}
+							</div>
+						)}
 					</div>
 				);
 			})}
