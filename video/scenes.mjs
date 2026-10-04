@@ -349,33 +349,34 @@ const scenes = {
 		url: () => `${LIVE}/p/bookshop`,
 		prepare: liveReady,
 		run: async (page, s, t) => {
+			// An excerpt of the real output for trunk commit 37725a51 (… marks what is left out).
 			const log = [
 				["cmd", "$ git log --notes=contrail -1"],
 				["", "commit 37725a51ba9fce51733092b71ebc75bd06cbaa92"],
 				["", "Author: CODEX-7 <codex-7@agents.contrail.dev>"],
 				["", ""],
 				["b", "    Buy 2 get 1 free on paperbacks (INT-16)"],
+				["", "    Paperbacks receive every third copy free per line, choosing the lower price …"],
 				["", ""],
 				["", "    Contrail-Flight: FL-007"],
+				["", "    Contrail-Landing: deyr7yrikfx8"],
 				["", "    Contrail-Intent: INT-16"],
 				["", "    Contrail-Agent: CODEX-7 (codex)"],
 				["", ""],
 				["n", "Notes (contrail):"],
-				["n", '    "plan": "Add per-line buy-two-get-one pricing for paperbacks and compare it'],
-				["n", "      with the bulk-discount line price, taking the lower amount without stacking."],
+				["n", '    "plan": "Add per-line buy-two-get-one pricing for paperbacks and compare it with …'],
 				["n", "      Subtotal is currently held by the bulk-discount flight, so I will add tests"],
 				["n", '      first and integrate its landed implementation after clearance.",'],
 				["n", '    "decisions": ["Bulk\'s existing test uses three paperbacks, whose required price'],
-				["n", "      now changes under INT-16. Switch that bulk-specific fixture to hardcover,"],
-				["n", '      retaining the quantity threshold assertion, and preserve both agents\' tests."],'],
-				["n", '    "tests": { "passed": 45, "failed": 0 }'],
+				["n", '      now changes under INT-16. Switch that bulk-specific fixture to hardcover, …"],'],
+				["n", '    "tests": { "passed": 48, "failed": 0 }'],
 			];
 			const colors = { cmd: "#5eead4", b: "#f8fafc", n: "#fbbf24", "": "#cbd5e1" };
 			const html = `<div style="font-family:'JetBrains Mono',monospace;font-size:19px;line-height:1.55;white-space:pre;padding:28px 34px">${log
 				.map(([k, l]) => `<div style="color:${colors[k]}">${escapeHtml(l) || "&nbsp;"}</div>`)
 				.join("")}</div>`;
 			await t.at(LEAD);
-			const hide = await overlay(page, html, { left: "50%", top: "50%", marginLeft: "-560px", marginTop: "-290px", width: "1120px" });
+			const hide = await overlay(page, html, { left: "50%", top: "50%", marginLeft: "-590px", marginTop: "-310px", width: "1180px" });
 			await t.at(cue(s, "Click any function") - 1.6);
 			await hide();
 			await page.waitForTimeout(400);
