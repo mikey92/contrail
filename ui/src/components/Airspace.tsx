@@ -1,7 +1,7 @@
 import { hierarchy, treemap, treemapSquarify } from "d3-hierarchy";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { Agent, Clearance, Flight, Intent, TrunkFile } from "../../../src/shared/types";
-import { ACTIVE_STATUSES, type Flash } from "../store";
+import { ACTIVE_STATUSES, type Flash, statusLabel } from "../store";
 
 interface Rect {
 	x: number;
@@ -31,6 +31,8 @@ interface GroupBox extends Rect {
 
 const HEADER = 18;
 const APRON = 54;
+/** Strip under the map for the legend. */
+const LEGEND = 26;
 const SOURCE_DIRS = new Set(["src", "source", "lib", "app", "pkg"]);
 
 function layout(files: TrunkFile[], width: number, height: number) {
@@ -109,7 +111,7 @@ const center = (r: Rect) => ({ x: r.x + r.w / 2, y: r.y + r.h / 2 });
 const KIND: Record<string, [string, string]> = {
 	"claude-code": ["CC", "Claude Code"],
 	codex: ["CX", "Codex"],
-	edge: ["⚡", "Edge agent on Workers AI"],
+	edge: ["CF", "Edge agent: a Durable Object reasoning on Workers AI"],
 	human: ["H", "Human"],
 };
 
@@ -149,7 +151,7 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 		return () => ro.disconnect();
 	}, []);
 
-	const mapH = Math.max(200, size.h - APRON);
+	const mapH = Math.max(200, size.h - APRON - LEGEND);
 	const { groupBoxes, fileBoxes } = useMemo(() => layout(files, size.w, mapH), [files, size.w, mapH]);
 
 	const active = Object.values(flights).filter((f) => ACTIVE_STATUSES.includes(f.status));
@@ -165,17 +167,14 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 		positions.set(f.id, { x: 40 + slot * (size.w - 80), y: APRON / 2 - 4, orbit: false });
 	});
 	// A flight sits on its primary claim: holding targets first (it circles them), then granted
-	// symbols in source files, then anything else. Thin connectors point at its other claims.
+	// symbols in source files, then anything else. Its other claims carry its color and code.
 	const score = (x: (typeof claims)[number], f: Flight) =>
 		(f.status === "holding" && x.c.status === "holding" ? 0 : 10) + (x.c.target.includes("#") ? 0 : 2) + (/^(test|tests|__tests__)\//.test(x.c.target) ? 4 : 0);
-	const connectors: { from: string; to: { x: number; y: number }; color: string }[] = [];
 	for (const f of active) {
 		if (positions.has(f.id)) continue;
 		const mine = claims.filter((x) => x.c.flightId === f.id).sort((a, b) => score(a, f) - score(b, f));
 		const primary = center(mine[0].rect!);
 		positions.set(f.id, { x: primary.x, y: primary.y + APRON, orbit: f.status === "holding" });
-		const color = agents[f.agentId]?.color ?? "#94a3b8";
-		for (const other of mine.slice(1)) connectors.push({ from: f.id, to: center(other.rect!), color });
 	}
 
 	// Flights sharing a spot: the cleared one sits on it, the rest stack in a holding ring around it.
@@ -186,6 +185,8 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 	}
 	const showTag = new Set<string>();
 	const crowded = active.length > 14;
+	// With dozens of flights the planes and their colors tell the story; tags would bury the map.
+	const tagless = active.length > 30;
 	for (const ids of buckets.values()) {
 		ids.sort((a, b) => (flights[a].status === "holding" ? 1 : 0) - (flights[b].status === "holding" ? 1 : 0) || flights[a].createdAt - flights[b].createdAt);
 		const holders = ids.filter((id) => flights[id].status === "holding");
@@ -203,6 +204,7 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 			if (!crowded || i < 1) showTag.add(id);
 		});
 	}
+	if (tagless) showTag.clear();
 	if (selected) showTag.add(selected);
 	const holdCounts = new Map<string, { x: number; y: number; n: number }>();
 	for (const x of claims) {
@@ -220,8 +222,24 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 
 	return (
 		<div class="airspace" ref={ref}>
-			<div class="sweep" />
-			<div class="apron-label">AIRSPACE · flights without clearance cruise here</div>
+			<div class="apron-label">Taxiing · agents that have not claimed any code yet</div>
+			<div class="legend">
+				<span>
+					<i class="lg-file" /> File
+				</span>
+				<span>
+					<i class="lg-band" /> Function
+				</span>
+				<span>
+					<svg viewBox="0 0 24 24" class="lg-plane">
+						<path d="M12 2c.8 0 1.4.7 1.4 1.6v6.1l7.6 4.6v2l-7.6-2.3v4.6l2.1 1.6V22L12 21l-3.5 1v-1.8l2.1-1.6V15L3 17.3v-2l7.6-4.6V3.6C10.6 2.7 11.2 2 12 2z" />
+					</svg>{" "}
+					Agent on the code it is cleared to change
+				</span>
+				<span>
+					<i class="lg-hold" /> Waiting for code another agent holds
+				</span>
+			</div>
 			<svg width={size.w} height={size.h} class="map">
 				<g transform={`translate(0, ${APRON})`}>
 					{groupBoxes.map((g) => (
@@ -235,7 +253,7 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 					{fileBoxes.map((f) => (
 						<g key={f.path} data-path={f.path}>
 							<rect x={f.x} y={f.y} width={f.w} height={f.h} rx={5} class="file" />
-							{f.w > 40 && (
+							{f.w > 40 && f.h >= 18 && (
 								<text x={f.x + 6} y={f.y + 13} class="file-label">
 									{f.name}
 									<tspan class="file-lines"> {f.lines}</tspan>
@@ -267,30 +285,21 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 									style={{ fill: color, stroke: color }}
 									class={selected === flight.id ? "selected" : ""}
 								/>
-								{rect!.w > 70 && rect!.h >= 10 && (c.status !== "holding" || !crowded) && (
-									<text
-										x={rect!.x + rect!.w - 4}
-										y={c.status === "holding" ? rect!.y + rect!.h - 4 : rect!.y + Math.min(rect!.h / 2 + 4, 12)}
-										class="claim-tag"
-										style={{ fill: color }}
-									>
-										{c.status === "holding" ? `⏳ ${flight.code}` : flight.code}
+								{rect!.w > 70 && rect!.h >= 10 && c.status !== "holding" && (
+									<text x={rect!.x + rect!.w - 4} y={rect!.y + Math.min(rect!.h / 2 + 4, 12)} class="claim-tag" style={{ fill: color }}>
+										{flight.code}
 									</text>
 								)}
 							</g>
 						);
 					})}
-					{connectors.map((k, i) => {
-						const p = positions.get(k.from)!;
-						return <line key={`k${i}`} x1={p.x} y1={p.y - APRON} x2={k.to.x} y2={k.to.y} class="connector" style={{ stroke: k.color }} />;
-					})}
 					{[...holdCounts.entries()]
 						.filter(([, h]) => h.n > 1)
 						.map(([t, h]) => (
 							<g key={`hc-${t}`} class="holdcount">
-								<rect x={h.x - 34} y={h.y - 8} width={34} height={16} rx={8} />
-								<text x={h.x - 17} y={h.y + 4}>
-									⏳{h.n}
+								<rect x={h.x - 64} y={h.y - 8} width={64} height={16} rx={8} />
+								<text x={h.x - 32} y={h.y + 4}>
+									{h.n} waiting
 								</text>
 							</g>
 						))}
@@ -325,7 +334,7 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 							<div class="tag">
 								<KindBadge kind={agent?.kind} />
 								<b>{agent?.callsign ?? "?"}</b> {f.code}
-								{f.status !== "airborne" && <span class={`st st-${f.status}`}>{f.status}</span>}
+								{f.status !== "airborne" && <span class={`st st-${f.status}`}>{statusLabel(f.status)}</span>}
 							</div>
 						)}
 					</div>
@@ -334,7 +343,7 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 			{hover && (
 				<div class="hovercard" style={{ left: Math.min(hover.x + hover.w + 8, size.w - 230), top: hover.y + APRON }}>
 					<div class="mono">{hover.target}</div>
-					<div class="muted">{hover.kind} · click for its contrail</div>
+					<div class="muted">{hover.kind} · click to see why it changed</div>
 				</div>
 			)}
 		</div>

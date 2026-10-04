@@ -1,6 +1,6 @@
 import { useEffect, useState } from "preact/hooks";
 import type { Agent, Clearance, ContrailEntry, Flight, Intent, Landing } from "../../../src/shared/types";
-import { relTime } from "../store";
+import { relTime, toned } from "../store";
 import { Diff } from "./Review";
 
 interface FlightDetail {
@@ -29,7 +29,8 @@ async function load(slug: string, fixture: string | null, ref: string, code: str
 	const url = fixture ? `/fixtures/${fixture}.${code}.json` : `/api/p/${slug}/flights/${encodeURIComponent(ref)}`;
 	const res = await fetch(url);
 	if (!res.ok) throw new Error("not available");
-	return (await res.json()) as FlightDetail;
+	const detail = (await res.json()) as FlightDetail;
+	return { ...detail, agent: toned(detail.agent) };
 }
 
 export function FlightDrawer({
@@ -59,7 +60,7 @@ export function FlightDrawer({
 		let cancelled = false;
 		load(slug, fixture, flightId, flight?.code)
 			.then((d) => !cancelled && (setDetail(d), setError(null)))
-			.catch((e) => !cancelled && setError(String(e.message ?? e)));
+			.catch(() => !cancelled && setError("This flight's details are not available."));
 		return () => {
 			cancelled = true;
 		};
@@ -230,7 +231,7 @@ export function WhyPanel({ slug, fixture, target, onClose }: { slug: string; fix
 				<button class="close" onClick={onClose}>
 					×
 				</button>
-				<div class="why-kicker">why()</div>
+				<div class="why-kicker">Why this code looks the way it does</div>
 				<h3 class="mono">{target}</h3>
 				{!data && <div class="muted">Reading the contrail…</div>}
 				{data?.note && <div class="muted">{data.note}</div>}

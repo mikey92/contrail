@@ -1,30 +1,24 @@
 import type { Agent, Flight, Intent, Landing, RadarEvent } from "../../../src/shared/types";
-import { ACTIVE_STATUSES, relTime } from "../store";
+import { ACTIVE_STATUSES, relTime, statusLabel } from "../store";
 import { KindBadge } from "./Airspace";
+import { eventIcon, Icon } from "./Icons";
 
-const ICON: Record<string, string> = {
-	"agent.joined": "＋",
-	"intent.created": "◆",
-	"flight.taxiing": "⇢",
-	"flight.planned": "⤳",
-	"flight.airborne": "✈",
-	"flight.aborted": "✕",
-	"clearance.granted": "✓",
-	"clearance.holding": "⏳",
-	"clearance.released": "↺",
-	"contrail.plan": "✎",
-	"contrail.decision": "✎",
-	"contrail.note": "✎",
-	"contrail.handoff": "✎",
-	radio: "📻",
-	"landing.queued": "↘",
-	"runway.train": "▤",
-	"landing.landed": "🛬",
-	"landing.conflict": "⚠",
-	"landing.failed": "✖",
-	turbulence: "〰",
-	"project.created": "★",
-};
+const TARGET = "[\\w./-]+\\.\\w+#[\\w$.-]+";
+const LIST = new RegExp(`${TARGET}(?:, ${TARGET}){2,}`, "g");
+const TOKEN = new RegExp(`(FL-\\d{3,}|INT-\\d+|${TARGET})`);
+
+/** Long lists of targets read as "a, b and 3 more"; flight codes and targets are set in mono. */
+function Text({ text }: { text: string }) {
+	const short = text.replace(LIST, (list) => {
+		const items = list.split(", ");
+		return `${items.slice(0, 2).join(", ")} and ${items.length - 2} more`;
+	});
+	return (
+		<>
+			{short.split(TOKEN).map((part, i) => (i % 2 ? <span key={i} class="mono">{part}</span> : part))}
+		</>
+	);
+}
 
 export function Feed({ events, flights, agents, onSelect }: { events: RadarEvent[]; flights: Record<string, Flight>; agents: Record<string, Agent>; onSelect: (id: string) => void }) {
 	const list = [...events].reverse().slice(0, 150);
@@ -35,15 +29,15 @@ export function Feed({ events, flights, agents, onSelect }: { events: RadarEvent
 				const agent = flight ? agents[flight.agentId] : e.agentId ? agents[e.agentId] : null;
 				return (
 					<div key={e.seq} class={`ev ev-${e.type.replace(/\./g, "-")}`} onClick={() => e.flightId && onSelect(e.flightId)}>
-						<span class="ev-icon">{ICON[e.type] ?? "•"}</span>
+						<span class="ev-icon">
+							<Icon name={eventIcon(e.type)} />
+						</span>
 						<div class="ev-body">
 							<div class="ev-text">
-								{agent && <span class="dot" style={{ background: agent.color }} />}
-								{e.text}
+								{agent && <span class="dot" style={{ background: agent.color }} title={agent.callsign} />}
+								<Text text={e.text} />
 							</div>
-							<div class="ev-meta">
-								{e.type} · {relTime(e.at)}
-							</div>
+							<div class="ev-meta">{relTime(e.at)}</div>
 						</div>
 					</div>
 				);
@@ -67,7 +61,7 @@ export function FlightList({ flights, agents, intents, onSelect }: { flights: Re
 					<KindBadge kind={a?.kind} />
 					<b>{a?.callsign}</b>
 					<span class="mono muted">{f.code}</span>
-					<span class={`st st-${f.status}`}>{f.status}</span>
+					<span class={`st st-${f.status}`}>{statusLabel(f.status)}</span>
 				</div>
 				<div class="fcard-intent">{i ? `INT-${i.seq} ${i.title}` : ""}</div>
 				{f.plan && <div class="fcard-plan">{f.plan.slice(0, 160)}</div>}
@@ -80,10 +74,12 @@ export function FlightList({ flights, agents, intents, onSelect }: { flights: Re
 	};
 	return (
 		<div class="flights">
-			<div class="section-title">In the air · {active.length}</div>
+			<div class="section-title">
+				In the air <span class="n">{active.length}</span>
+			</div>
 			{active.map(card)}
 			{active.length === 0 && <div class="empty">No active flights.</div>}
-			<div class="section-title">Landed &amp; closed</div>
+			<div class="section-title">Landed and closed</div>
 			{done.map(card)}
 		</div>
 	);
@@ -94,11 +90,11 @@ export function IntentBoard({ intents, flights, agents, onSelect }: { intents: R
 	const landed = list.filter((i) => i.status === "landed").length;
 	return (
 		<div class="intents">
+			<div class="progress-label">
+				<b>{landed}</b> of {list.length} intents landed
+			</div>
 			<div class="progress">
 				<div class="bar" style={{ width: `${list.length ? (landed / list.length) * 100 : 0}%` }} />
-				<span>
-					{landed} / {list.length} intents landed
-				</span>
 			</div>
 			{list.map((i) => {
 				const f = i.flightId ? flights[i.flightId] : null;
@@ -107,7 +103,7 @@ export function IntentBoard({ intents, flights, agents, onSelect }: { intents: R
 					<div key={i.id} class={`irow is-${i.status}`} onClick={() => f && onSelect(f.id)}>
 						<span class="mono muted">INT-{i.seq}</span>
 						<span class="ititle">{i.title}</span>
-						<span class={`ist ist-${i.status}`}>{i.status === "assigned" && f ? f.status : i.status}</span>
+						<span class={`ist ist-${i.status === "assigned" && f ? f.status : i.status}`}>{i.status === "assigned" && f ? statusLabel(f.status) : i.status}</span>
 						{a && <span class="dot" title={a.callsign} style={{ background: a.color }} />}
 					</div>
 				);
@@ -123,23 +119,23 @@ export function Runway({ landings, flights, agents, intents, onSelect }: { landi
 	return (
 		<div class="runway">
 			<div class="rw-label">
-				<span>RUNWAY</span>
-				<span class="muted">→ trunk/main</span>
+				<span>Runway</span>
+				<span class="muted">lands on main</span>
 			</div>
 			<div class="rw-approach">
-				{approach.length > 4 && <div class="rw-more">{approach.length} on approach</div>}
-				{approach.slice(0, 4).map((l) => {
+				{approach.length > 3 && <div class="rw-more">{approach.length} on approach</div>}
+				{approach.slice(0, approach.length > 3 ? 2 : 3).map((l) => {
 					const f = flights[l.flightId];
 					const a = f && agents[f.agentId];
 					return (
 						<div key={l.id} class={`rw-chip ${l.status}`} style={{ "--c": a?.color } as any} onClick={() => f && onSelect(f.id)}>
-							<span class="mono">{f?.code}</span> {l.status === "queued" ? "on approach" : l.status === "review" ? "awaiting review" : l.status}
+							<span class="mono">{f?.code}</span> {l.status === "queued" ? "on approach" : l.status === "review" ? "awaiting review" : l.status === "verifying" ? "testing" : l.status}
 						</div>
 					);
 				})}
 			</div>
 			<div class="rw-strip">
-				{landed.map((l) => {
+				{[...landed].reverse().map((l) => {
 					const f = flights[l.flightId];
 					const a = f && agents[f.agentId];
 					const i = f && intents[f.intentId];
@@ -153,7 +149,7 @@ export function Runway({ landings, flights, agents, intents, onSelect }: { landi
 							<div class="rw-meta mono">
 								{f?.code} <span class="plus">+{plus}</span> <span class="minus">−{minus}</span>
 								{l.tests && <span class="ok"> ✓{l.tests.passed}</span>}
-								{l.unioned > 0 && <span class="union" title="parallel inserts auto-merged"> ⇉{l.unioned}</span>}
+								{l.unioned > 0 && <span class="union" title="parallel inserts auto-merged"> +{l.unioned} merged</span>}
 							</div>
 						</div>
 					);

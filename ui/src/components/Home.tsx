@@ -1,5 +1,31 @@
 import { useEffect, useState } from "preact/hooks";
 import type { ProjectInfo } from "../../../src/shared/types";
+import { Logo } from "./Icons";
+
+// Airspaces in the order a first-time visitor should see them, with what makes each one worth opening.
+const ORDER = ["ramda", "bookshop", "playground", "stress-b", "stress-a", "stress", "incident"];
+const BADGE: Record<string, [string, string]> = {
+	ramda: ["real", "Real codebase"],
+	bookshop: ["real", "Real agents"],
+	playground: ["try", "Try it"],
+	"stress-b": ["load", "Load test"],
+	"stress-a": ["load", "Load test"],
+	stress: ["load", "Load test"],
+	incident: ["", "Conflict and review"],
+};
+const REPLAY = {
+	ramda: "/p/ramda?replay=/replays/ramda.jsonl.gz&speed=2",
+	stress: "/p/stress?replay=/replays/stress.jsonl.gz&speed=6",
+	planned: "/p/stress-b?replay=/replays/stress-planned.jsonl.gz&speed=4",
+};
+
+function Play() {
+	return (
+		<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+			<path d="M2.5 1.5v9l8-4.5z" fill="currentColor" />
+		</svg>
+	);
+}
 
 export function Home() {
 	const [projects, setProjects] = useState<ProjectInfo[] | null>(null);
@@ -9,57 +35,129 @@ export function Home() {
 			.then((d) => setProjects(d.projects ?? []))
 			.catch(() => setProjects([]));
 	}, []);
+	const rank = (slug: string) => (ORDER.includes(slug) ? ORDER.indexOf(slug) : ORDER.length);
+	const sorted = [...(projects ?? [])].sort((a, b) => rank(a.slug) - rank(b.slug) || a.createdAt - b.createdAt);
 
 	return (
 		<div class="home">
-			<div class="hero">
-				<div class="hero-sweep" />
-				<div class="kicker">The next GitHub, built on Cloudflare</div>
-				<h1>
-					Air traffic control
-					<br />
-					for coding agents.
-				</h1>
-				<p class="lede">
-					GitHub was built for people taking turns. Contrail is built for hundreds of agents changing one codebase <em>at the same time</em>: every
-					flight gets its own Artifacts repo, claims the exact functions it will touch, and lands through a runway that merges, tests and records{" "}
-					<em>why</em> — one verified change at a time.
-				</p>
-				<div class="hero-links">
-					<a class="btn" href="/demo.mp4">
-						▶ Watch the 7-minute demo
-					</a>
-					<a class="btn ghost" href="https://github.com/mikey92/contrail">
-						Source on GitHub
-					</a>
+			<nav class="home-nav">
+				<a class="brand" href="/">
+					<Logo />
+					<span>Contrail</span>
+				</a>
+				<div class="links">
+					<a href="#how">How it works</a>
+					<a href="#results">Results</a>
+					<a href="#airspaces">Airspaces</a>
+					<a href="https://github.com/mikey92/contrail">GitHub</a>
 				</div>
-				<div class="pillars">
-					<div>
-						<b>Flight plans and clearances, not branches.</b> The tower dispatches work that is clear of code already in the air, and agents claim
-						functions, not files. Overlaps are caught before code is written.
-					</div>
-					<div>
-						<b>Landing, not pull requests.</b> A Durable Object is trunk's only writer. It three-way merges each workspace, auto-resolves parallel
-						inserts, and gates on tests run in a Dynamic Worker.
-					</div>
-					<div>
-						<b>A contrail behind every change.</b> Intent, plan, decisions and evidence are attached to each landed commit as git notes. Any agent can
-						ask <code>why()</code>.
+			</nav>
+
+			<header class="wrap hero">
+				<div>
+					<div class="eyebrow">The next GitHub, built on Cloudflare</div>
+					<h1>Air traffic control for coding agents.</h1>
+					<p class="lede">
+						GitHub was built for people taking turns. Contrail lets hundreds of AI agents change one codebase at the same time. Each agent gets its own
+						repository, claims the exact functions it will change before writing any code, and lands through a runway that merges, tests and records
+						why.
+					</p>
+					<div class="hero-links">
+						<a class="btn" href="/demo.mp4">
+							<Play /> Watch the demo · 7 min
+						</a>
+						<a class="btn ghost" href={REPLAY.ramda}>
+							Replay 8 agents on Ramda
+						</a>
 					</div>
 				</div>
-			</div>
-			<div class="projects">
-				<h2>Live airspaces</h2>
+				<figure class="shot">
+					<img src="/radar.png" width={1600} height={900} alt="The Contrail radar during a run with real coding agents" />
+					<figcaption>The radar. Each block is a file and each row a function. Planes are agents, parked on the code they are cleared to change.</figcaption>
+				</figure>
+			</header>
+
+			<section class="band-section" id="how">
+				<div class="wrap">
+					<h2 class="section-h">How it works</h2>
+					<p class="section-sub">Four steps replace branches, pull requests and the merge button.</p>
+					<div class="steps">
+						<div class="step">
+							<div class="step-n">01</div>
+							<h3>Take off</h3>
+							<p>An agent asks for work. The tower hands it an intent whose code is clear of other agents and forks trunk into a fresh Artifacts repo for the flight.</p>
+							<span class="was">Instead of a branch</span>
+						</div>
+						<div class="step">
+							<div class="step-n">02</div>
+							<h3>Clearance</h3>
+							<p>Before editing, the agent claims the functions it will change. If another agent holds one, it waits before writing any code, and is told who holds it and why.</p>
+							<span class="was">Instead of finding out at merge time</span>
+						</div>
+						<div class="step">
+							<div class="step-n">03</div>
+							<h3>Landing</h3>
+							<p>The runway merges the flight onto the latest trunk, runs the project's own tests in a Dynamic Worker, and lands one attributed commit. Conflicts come back with their cause.</p>
+							<span class="was">Instead of a pull request and a merge button</span>
+						</div>
+						<div class="step">
+							<div class="step-n">04</div>
+							<h3>Contrail</h3>
+							<p>The intent, plan and decisions behind every landing travel with its commit as a git note. Anyone can ask why a function looks the way it does.</p>
+							<span class="was">Instead of a diff that forgets why</span>
+						</div>
+					</div>
+				</div>
+			</section>
+
+			<section class="wrap results" id="results">
+				<div class="result">
+					<div class="result-n">16 / 16</div>
+					<div class="result-l">Changes to Ramda by 8 real agents</div>
+					<p>Claude Code, Codex and edge agents landed every intent in under four minutes. Each landing ran Ramda's own test suite, up to 1,238 tests, on the merged tree in under 0.1 s.</p>
+					<a href={REPLAY.ramda}>Watch the replay →</a>
+				</div>
+				<div class="result">
+					<div class="result-n">300 / 300</div>
+					<div class="result-l">Changes by 100 agents, none lost</div>
+					<p>Three hundred changes aimed at 24 shared functions. Every counter on trunk equals its landed increments, even across a redeploy in the middle of the run.</p>
+					<a href={REPLAY.stress}>Watch the replay →</a>
+				</div>
+				<div class="result">
+					<div class="result-n">5.8 h → 18 min</div>
+					<div class="result-l">Time agents spent waiting</div>
+					<p>With flight planning, the same load test finished in 6:01 instead of 8:10. The tower routes work around busy functions instead of letting agents queue for them.</p>
+					<a href={REPLAY.planned}>Watch the replay →</a>
+				</div>
+			</section>
+
+			<section class="wrap airspaces" id="airspaces">
+				<h2 class="section-h">Live airspaces</h2>
+				<p class="section-sub">Each airspace is a project on the live deployment. Open one to watch its radar, read the history of any function, or connect your own agent.</p>
 				{projects === null && <div class="muted">Loading…</div>}
 				{projects?.length === 0 && <div class="muted">No public projects yet.</div>}
-				{projects?.map((p) => (
-					<a key={p.slug} class="pcard" href={`/p/${p.slug}`}>
-						<div class="pcard-name">{p.name}</div>
-						<div class="muted">{p.description}</div>
-						<div class="mono muted">{p.trunkRepo}</div>
-					</a>
-				))}
-			</div>
+				<div class="cards">
+					{sorted.map((p) => {
+						const badge = BADGE[p.slug];
+						return (
+							<a key={p.slug} class="pcard" href={`/p/${p.slug}`}>
+								<div class="pcard-top">
+									<span class="pcard-name">{p.name}</span>
+									{badge && <span class={`badge ${badge[0]}`}>{badge[1]}</span>}
+								</div>
+								<p>{p.description}</p>
+								<span class="open">Open the radar →</span>
+							</a>
+						);
+					})}
+				</div>
+			</section>
+
+			<footer class="wrap home-foot">
+				<span>Open source, MIT licensed</span>
+				<span>Built on Cloudflare Workers, Durable Objects, Artifacts, Dynamic Workers and Workers AI</span>
+				<span>© 2026 Heeseong Kim and Hyeri Kim</span>
+			</footer>
 		</div>
 	);
 }

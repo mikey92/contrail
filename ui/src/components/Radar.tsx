@@ -1,6 +1,7 @@
 import { useState } from "preact/hooks";
 import { ACTIVE_STATUSES, useRadar } from "../store";
 import { Airspace } from "./Airspace";
+import { Icon, Logo } from "./Icons";
 import { ConnectModal, FlightDrawer, WhyPanel } from "./Detail";
 import { ClonePanel, OperatorPanel } from "./Operator";
 import { ReviewInbox } from "./Review";
@@ -18,7 +19,7 @@ export function Radar({ slug, fixture }: { slug: string; fixture: string | null 
 	if (!s.ready) {
 		return (
 			<div class="boot">
-				<div class="boot-sweep" />
+				<Logo size={34} />
 				<div>Contacting the tower…</div>
 			</div>
 		);
@@ -34,31 +35,25 @@ export function Radar({ slug, fixture }: { slug: string; fixture: string | null 
 	return (
 		<div class="radar">
 			<header class="topbar">
-				<a class="brand" href="/">
-					<svg viewBox="0 0 32 32" class="logo">
-						<path d="M3 23 C 11 21, 15 15, 21 10" stroke="#5eead4" stroke-width="2.4" fill="none" stroke-linecap="round" opacity=".6" />
-						<path d="M6 27 C 13 25, 18 19, 23 14" stroke="#5eead4" stroke-width="2.4" fill="none" stroke-linecap="round" opacity=".3" />
-						<path d="M27 5 l-4 8 -5 -2 z" fill="#e2e8f0" />
-					</svg>
+				<a class="brand" href="/" title="All airspaces">
+					<Logo />
 					<span>Contrail</span>
 				</a>
 				<div class="proj">
 					<div class="proj-name">{s.project?.name}</div>
-					<div class="proj-sub mono">
-						trunk {s.trunk.head?.slice(0, 8) ?? "—"} · {s.project?.trunkRepo}
+					<div class="proj-sub">
+						<span class="mono">main @ {s.trunk.head?.slice(0, 8) ?? "—"}</span> · {s.stats.repos} Artifacts repos · {s.stats.unioned} auto-merged
 					</div>
 				</div>
 				<div class="stats">
-					<Stat label="in the air" value={airborne} accent="#5eead4" />
-					<Stat label="holding" value={holding} accent="#fbbf24" />
-					<Stat label="landed" value={s.stats.landings} accent="#4ade80" />
-					<Stat label="intents done" value={`${landedIntents}/${intents.length}`} />
-					<Stat label="collisions avoided" value={s.stats.conflictsPrevented} accent="#fbbf24" />
-					<Stat label="planned around" value={s.stats.planned ?? 0} accent="#38bdf8" />
-					<Stat label="auto-merged" value={s.stats.unioned} accent="#a78bfa" />
-					<Stat label="Artifacts repos" value={s.stats.repos} accent="#f97316" />
+					<Stat label="In the air" value={airborne} tone="air" />
+					<Stat label="Holding" value={holding} tone="hold" />
+					<Stat label="Landed" value={s.stats.landings} tone="ok" />
+					<Stat label="Intents done" value={`${landedIntents}/${intents.length}`} />
+					<Stat label="Collisions avoided" value={s.stats.conflictsPrevented} tone="hold" />
+					<Stat label="Planned around" value={s.stats.planned ?? 0} tone="plan" />
 				</div>
-				<div class={`live ${s.connected ? "on" : ""}`}>{fixture || new URLSearchParams(location.search).has("replay") ? "replay" : s.connected ? "live" : "reconnecting"}</div>
+				<div class={`live ${s.connected ? "on" : ""}`}>{fixture || new URLSearchParams(location.search).has("replay") ? "Replay" : s.connected ? "Live" : "Reconnecting"}</div>
 				{s.project?.playground && <LaunchButton slug={slug} />}
 				<button class="btn ghost" onClick={() => setClone(true)} title="Clone trunk with its contrail notes">
 					Clone trunk
@@ -67,7 +62,11 @@ export function Radar({ slug, fixture }: { slug: string; fixture: string | null 
 					Connect an agent
 				</button>
 				<button class="icon-btn" onClick={() => setOperator(true)} title="Operator">
-					⚙
+					<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+						<circle cx="3.5" cy="8" r="1.3" fill="currentColor" />
+						<circle cx="8" cy="8" r="1.3" fill="currentColor" />
+						<circle cx="12.5" cy="8" r="1.3" fill="currentColor" />
+					</svg>
 				</button>
 			</header>
 
@@ -140,17 +139,16 @@ function LaunchButton({ slug }: { slug: string }) {
 	};
 	return (
 		<button class="btn launch" onClick={launch} title="Spawn edge agents (Durable Objects reasoning on Workers AI)">
-			{msg ?? "⚡ Launch edge agents"}
+			<Icon name="bolt" size={14} />
+			{msg ?? "Launch edge agents"}
 		</button>
 	);
 }
 
-function Stat({ label, value, accent }: { label: string; value: string | number; accent?: string }) {
+function Stat({ label, value, tone }: { label: string; value: string | number; tone?: "air" | "hold" | "ok" | "plan" }) {
 	return (
-		<div class="stat">
-			<div class="stat-v" style={accent ? { color: accent } : undefined}>
-				{value}
-			</div>
+		<div class={`stat ${tone ? `t-${tone}` : ""}`}>
+			<div class="stat-v">{value}</div>
 			<div class="stat-l">{label}</div>
 		</div>
 	);

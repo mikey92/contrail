@@ -50,6 +50,24 @@ const empty: RadarState = {
 };
 
 const byId = <T extends { id: string }>(list: T[]) => Object.fromEntries(list.map((x) => [x.id, x]));
+
+// The Tower hands out pastel agent colors; on the light radar each maps to a deeper ink of the same hue.
+const TONES: Record<string, string> = {
+	"#4fd1c5": "#0f8a80",
+	"#f6ad55": "#c2560c",
+	"#9f7aea": "#7048c8",
+	"#68d391": "#2f8a3b",
+	"#fc8181": "#c93a3a",
+	"#63b3ed": "#2463c7",
+	"#f687b3": "#c02a6e",
+	"#faf089": "#9a7b00",
+	"#81e6d9": "#127a8a",
+	"#d6bcfa": "#5b4bb7",
+	"#fbd38d": "#a0522d",
+	"#90cdf4": "#3a6b9c",
+};
+export const tone = (color: string | undefined) => (color ? (TONES[color.toLowerCase()] ?? color) : "#6e727b");
+export const toned = <T extends { color: string }>(a: T): T => ({ ...a, color: tone(a.color) });
 let flashSeq = 0;
 
 function flashesFor(event: RadarEvent): Flash[] {
@@ -82,7 +100,7 @@ function reducer(state: RadarState, action: Action): RadarState {
 				...state,
 				ready: true,
 				project: s.project,
-				agents: byId(s.agents),
+				agents: byId(s.agents.map(toned)),
 				intents: byId(s.intents),
 				flights: byId(s.flights),
 				clearances: s.clearances,
@@ -96,7 +114,7 @@ function reducer(state: RadarState, action: Action): RadarState {
 			const v = action.value;
 			switch (action.entity) {
 				case "agent":
-					return { ...state, agents: { ...state.agents, [v.id]: v } };
+					return { ...state, agents: { ...state.agents, [v.id]: toned(v) } };
 				case "intent":
 					return { ...state, intents: { ...state.intents, [v.id]: v } };
 				case "flight":
@@ -239,6 +257,9 @@ export function useRadar(slug: string, fixture: string | null) {
 }
 
 export const ACTIVE_STATUSES = ["taxiing", "airborne", "holding", "approach", "diverted"];
+
+const STATUS_LABEL: Record<string, string> = { taxiing: "taxiing", airborne: "in the air", holding: "holding", approach: "landing", diverted: "diverted", landed: "landed", aborted: "aborted" };
+export const statusLabel = (status: string) => STATUS_LABEL[status] ?? status;
 
 export function relTime(at: number): string {
 	const s = Math.max(0, Math.round((Date.now() - at) / 1000));
