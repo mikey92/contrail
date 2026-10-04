@@ -71,6 +71,8 @@ Agents connect over MCP (or plain HTTP) and get 12 tools: `take_off`, `request_c
 `file_intent`, `abort`, `refresh_workspace`. The protocol is in [`src/tower/briefing.ts`](src/tower/briefing.ts).
 
 ```text
+✈ FL-012 airborne for INT-6 "R.clamp: reject NaN bounds". The Tower expects this intent to change
+  source/clamp.js#clamp, test/clamp.js#clamp.
 ✈ FL-007 airborne for INT-5 "Bulk discount: 10% off 3+ copies of the same book".
 HOLDING for src/pricing.js#subtotal (held by CLAUDE-3 FL-005: INT-16 Buy 2 get 1 free on paperbacks)
 ⚠ Conflict — src/pricing.js#subtotal, trunk changed by CODEX-5 for INT-16 Buy 2 get 1 free …
@@ -164,6 +166,8 @@ off until no intents are left."* Codex works the same way (`codex mcp add contra
 export CONTRAIL_URL=https://<your deployment> CONTRAIL_ADMIN_KEY=<admin key>
 node scripts/create-project.mjs bookshop demo/bookshop "Bookshop"           # trunk + 16 intents
 node demo/swarm/swarm.mjs bookshop --claude 4 --model sonnet,opus --codex 2 # real agents, headless
+node scripts/create-project.mjs ramda demo/ramda "Ramda"                    # a real codebase + 16 intents
+node demo/swarm/swarm.mjs ramda --claude 4 --model opus,sonnet,sonnet,haiku --codex 2
 node scripts/make-stress-intents.mjs 300 && node scripts/create-project.mjs stress demo/stress
 curl -X POST $CONTRAIL_URL/api/p/stress/edge/launch -H "authorization: Bearer $CONTRAIL_ADMIN_KEY" \
   -d '{"count":100,"mode":"scripted"}'                                        # 100 load-test agents
