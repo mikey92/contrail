@@ -151,7 +151,7 @@ export function Home() {
 				<div class="result">
 					<div class="result-n">3,000 / 3,000</div>
 					<div class="result-l">Changes by 1,000 agents in one monorepo</div>
-					<p>The load test ×10, split into 10 sectors that each land through their own runway: 6.0 landings a second, 8× one trunk, with every counter still equal to its landed increments. The monorepo's own trunk followed 2.5 s behind.</p>
+					<p>The load test ×10, split into 10 sectors that each land through their own runway: 6.0 landings a second, 8× one trunk, with every counter still equal to its landed increments. The monorepo's own trunk followed 2.5 s behind.</p>
 					<a href={REPLAY.monorepo}>Open the monorepo →</a>
 				</div>
 			</section>
