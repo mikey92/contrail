@@ -237,9 +237,8 @@ const scenes = {
 		prepare: replayReady,
 		run: async (page, s) => {
 			await startReplay(page);
-			const sky = await boxOf(page, ".sky");
-			const f = 0.92;
-			await camera(page, { x: sky.x + (sky.width * (1 - f)) / 2, y: sky.y + (sky.height * (1 - f)) / 2, width: sky.width * f, height: sky.height * f }, { ms: s.total * 1000, ease: "linear" });
+			// A slow push-in on the whole radar.
+			await camera(page, { x: 1920 * 0.03, y: 1080 * 0.03, width: 1920 * 0.94, height: 1080 * 0.94 }, { ms: s.total * 1000, ease: "linear" });
 		},
 	},
 	"01b-title": slideScene("title"),
