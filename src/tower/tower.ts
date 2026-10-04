@@ -100,6 +100,9 @@ export class Tower extends DurableObject<Env> {
 		this.sql = ctx.storage.sql;
 		ctx.blockConcurrencyWhile(async () => {
 			for (const stmt of SCHEMA) this.sql.exec(stmt);
+			// A restart (deploy, eviction) can interrupt a train: put its landings back in the queue.
+			const stale = this.sql.exec("UPDATE landings SET status = 'queued' WHERE status IN ('merging', 'verifying') RETURNING id").toArray();
+			if (stale.length) await ctx.storage.setAlarm(Date.now() + 500);
 		});
 	}
 
@@ -1365,6 +1368,7 @@ export class Tower extends DurableObject<Env> {
 		this.promoteHolds();
 		this.patch("clearances", this.activeClearances());
 		await this.ctx.storage.setAlarm(now() + 60_000);
+		if (this.row("SELECT id FROM landings WHERE status = 'queued' LIMIT 1")) await this.processQueue();
 	}
 
 	async ensureAlarm() {

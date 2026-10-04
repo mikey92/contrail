@@ -20,6 +20,7 @@ import {
 	fetchMain,
 	fetchNotes,
 	listTree,
+	log,
 	mergeBase,
 	newRepo,
 	type Person,
@@ -183,7 +184,17 @@ export class Runway extends DurableObject<Env> {
 				}
 
 				const tree = await writeFlatTree(r, merged.files);
-				if (tree === (await commitTreeOid(r, tip))) throw new Error("nothing to land: trunk already contains these changes");
+				if (tree === (await commitTreeOid(r, tip))) {
+					// Replayed after a restart? If this flight already landed, report that landing.
+					const code = job.message.match(/^Contrail-Flight: (\S+)$/m)?.[1];
+					const prior = code ? (await log(r, tip, 100)).find((c) => c.commit.message.includes(`Contrail-Flight: ${code}\n`)) : undefined;
+					if (prior) {
+						outcome.status = "landed";
+						outcome.trunkAfter = prior.oid;
+						continue;
+					}
+					throw new Error("nothing to land: trunk already contains these changes");
+				}
 
 				if (!job.skipTests) {
 					const texts = new Map<string, string>();
