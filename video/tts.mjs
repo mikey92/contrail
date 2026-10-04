@@ -10,9 +10,9 @@ import { join } from "node:path";
 
 const [script, outDir] = process.argv.slice(2);
 const account = process.env.CLOUDFLARE_ACCOUNT_ID;
-const wranglerConfig = join(homedir(), "Library/Preferences/.wrangler/config/default.toml");
-const token =
-  process.env.CLOUDFLARE_API_TOKEN ?? (existsSync(wranglerConfig) ? readFileSync(wranglerConfig, "utf8").match(/^oauth_token = "([^"]+)"/m)?.[1] : undefined);
+// Wrangler keeps its login in ~/.wrangler (current versions) or the platform config directory (older ones).
+const wranglerConfig = [join(homedir(), ".wrangler/config/default.toml"), join(homedir(), "Library/Preferences/.wrangler/config/default.toml")].find(existsSync);
+const token = process.env.CLOUDFLARE_API_TOKEN ?? (wranglerConfig ? readFileSync(wranglerConfig, "utf8").match(/^oauth_token = "([^"]+)"/m)?.[1] : undefined);
 if (!account || !token) throw new Error("set CLOUDFLARE_ACCOUNT_ID and log in with wrangler (or set CLOUDFLARE_API_TOKEN)");
 
 const { speaker = "thalia", segments } = JSON.parse(readFileSync(script, "utf8"));
