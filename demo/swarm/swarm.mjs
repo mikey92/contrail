@@ -109,6 +109,8 @@ function launch({ kind, model, callsign, key }) {
       "mcp__contrail",
       "Bash(git:*)",
       "Bash(node:*)",
+      "Bash(npm test:*)",
+      "Bash(npm run test:*)",
       "Bash(ls:*)",
       "Bash(cat:*)",
       "Bash(cd:*)",
