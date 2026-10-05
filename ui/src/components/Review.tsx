@@ -151,8 +151,8 @@ function ReviewCard({
 						<span class={`cst cst-${c.status}`} title={c.status} aria-label={c.status}>
 							{c.status[0].toUpperCase()}
 						</span>
-						<span class="mono">{c.path}</span>
-						<span class="syms">
+						<span class="change-what">
+							<span class="mono">{c.path}</span>
 							{c.symbols.map((s) => (
 								<span key={s} class="sym">
 									{s}

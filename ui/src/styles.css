@@ -1579,10 +1579,23 @@ code {
 }
 .change {
 	display: flex;
-	align-items: center;
+	align-items: baseline;
 	gap: 6px;
 	font-size: 0.75rem;
 	padding: 3px 0;
+}
+/* A file's path and the functions it changed flow and wrap together; its line counts stay on the right. */
+.change-what {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px 6px;
+}
+.change-what > .mono {
+	min-width: 0;
+	overflow-wrap: anywhere;
 }
 .cst {
 	font-family: var(--mono);
@@ -1609,13 +1622,10 @@ code {
 	color: var(--bad);
 	background: var(--bad-bg);
 }
-.syms {
-	display: flex;
-	gap: 4px;
-	flex-wrap: wrap;
-	flex: 1;
-}
 .sym {
+	max-width: 100%;
+	overflow-wrap: anywhere;
+	text-align: start;
 	border: 0;
 	font-family: var(--mono);
 	font-size: 0.6875rem;
@@ -1624,6 +1634,11 @@ code {
 	background: var(--plan-bg);
 	color: var(--plan);
 	cursor: pointer;
+}
+button.sym {
+	display: inline-flex;
+	align-items: center;
+	min-height: 24px;
 }
 .conflict {
 	margin-top: 8px;
@@ -1994,7 +2009,7 @@ details.diffs summary {
 	cursor: pointer;
 	color: var(--air);
 	font-size: 0.75rem;
-	margin-top: 6px;
+	line-height: var(--target);
 }
 .rcomment {
 	width: 100%;
@@ -2790,6 +2805,8 @@ details.diffs summary {
 }
 .proj-up {
 	margin-left: 8px;
+	/* Taller to the pointer than the line it sits in. */
+	padding-block: 0.52em;
 	font-size: 0.7812rem;
 	font-weight: 400;
 	color: var(--air);
@@ -2930,7 +2947,7 @@ details.diffs summary {
 	.cmd .copy,
 	.close,
 	.chip,
-	.sym,
+	button.sym,
 	.crossing-leg,
 	.rw-chip,
 	.home-nav .links a,
@@ -2941,15 +2958,18 @@ details.diffs summary {
 	.result a,
 	.operator input,
 	.operator select,
-	.rkey input,
-	details.diffs summary {
+	.rkey input {
 		min-height: 44px;
 	}
 	.icon-btn,
 	.rb-btn,
 	.close,
-	.seg button {
+	.seg button,
+	.proj-up {
 		min-width: 44px;
+	}
+	.proj-up {
+		justify-content: center;
 	}
 	.btn,
 	.chip,
@@ -2960,14 +2980,11 @@ details.diffs summary {
 	.pcard-name,
 	.brand,
 	.proj-up,
-	.result a,
-	details.diffs summary {
+	.result a {
 		display: inline-flex;
 		align-items: center;
 	}
-	.sym {
-		display: inline-flex;
-		align-items: center;
+	button.sym {
 		min-width: 44px;
 		justify-content: center;
 	}
@@ -3108,10 +3125,6 @@ details.diffs summary {
 	.rw-chip,
 	.chip {
 		gap: 0.35em;
-	}
-	details.diffs summary {
-		display: list-item;
-		line-height: 44px;
 	}
 }
 @media (max-width: 700px) {

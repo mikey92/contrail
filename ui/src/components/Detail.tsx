@@ -141,8 +141,8 @@ export function FlightDrawer({
 									<span class={`cst cst-${c.status}`} title={c.status} aria-label={c.status}>
 										{c.status[0].toUpperCase()}
 									</span>
-									<span class="mono">{c.path}</span>
-									<span class="syms">
+									<span class="change-what">
+										<span class="mono">{c.path}</span>
 										{c.symbols.map((s) => (
 											<button key={s} class="sym" onClick={() => onWhy(`${c.path}#${s}`)} aria-label={`${s}: why it looks the way it does`}>
 												{s}
