@@ -1,5 +1,5 @@
 import { useEffect, useState } from "preact/hooks";
-import { ACTIVE_STATUSES, duration, type RadarState, useRadar, useReplay } from "../store";
+import { ACTIVE_STATUSES, duration, type RadarState, type Replay, useRadar, useReplay } from "../store";
 import { Airspace } from "./Airspace";
 import { Icon, Logo } from "./Icons";
 import { ConnectModal, FlightDrawer, WhyPanel } from "./Detail";
@@ -88,7 +88,10 @@ export function Radar({ slug, fixture }: { slug: string; fixture: string | null 
 					<span>Contrail</span>
 				</a>
 				<div class="proj">
-					<div class="proj-name">{s.project?.name}</div>
+					<div class="proj-name">
+						{s.project?.name}
+						{s.project?.center && <CenterLink center={s.project.center} replay={replay} />}
+					</div>
 					<div class="proj-sub" title={`Trunk is at ${s.trunk.head ?? "—"}. ${s.stats.repos} Artifacts repositories (trunk and one per flight). ${s.stats.unioned} parallel inserts merged automatically.`}>
 						<span class="mono">main @ {s.trunk.head?.slice(0, 8) ?? "—"}</span> · {s.stats.repos} Artifacts repos · {s.stats.unioned} auto-merged
 					</div>
@@ -187,6 +190,26 @@ export function Radar({ slug, fixture }: { slug: string; fixture: string | null 
 			{operator && <OperatorPanel slug={slug} onClose={() => setOperator(false)} />}
 			{clone && <ClonePanel slug={slug} onClose={() => setClone(false)} />}
 		</div>
+	);
+}
+
+/**
+ * A sector's way back to its monorepo. In a sector replay recorded with its center
+ * (/replays/<center>/<sector>.jsonl.gz), it opens the center's replay at the same moment.
+ */
+function CenterLink({ center, replay }: { center: string; replay: Replay | null }) {
+	const recording = new URLSearchParams(location.search).get("replay") ?? "";
+	const match = /^\/replays\/([a-z0-9-]+)\/[a-z0-9-]+\.jsonl(\.gz)?$/.exec(recording);
+	const centerReplay = replay && match?.[1] === center ? `/replays/${center}.jsonl.gz` : null;
+	const open = (e: MouseEvent) => {
+		if (!centerReplay || !replay) return;
+		e.preventDefault();
+		location.href = `/c/${center}?replay=${centerReplay}&from=${Math.floor(replay.t / 1000)}&speed=${replay.speed}`;
+	};
+	return (
+		<a class="proj-up" href={`/c/${center}`} onClick={open} title={centerReplay ? "Back to the monorepo's replay, at this moment" : "The monorepo this sector belongs to"}>
+			in {center}
+		</a>
 	);
 }
 

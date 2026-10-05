@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { CenterInfo, CenterSnapshot, SectorSummary } from "../../../src/shared/types";
 import { duration, fetchRecording, relTime, SampleReplay, useReplay } from "../store";
 import { Command } from "./Detail";
@@ -47,6 +47,38 @@ function toSnapshot(header: Header, x: Sample): CenterSnapshot {
 
 const landedIn = (s: CenterSnapshot) => s.sectors.reduce((total, x) => total + (x.summary?.landed ?? 0), 0);
 
+/** The window for "landings per second", here and on the stat tile. */
+const RATE_WINDOW = 30_000;
+/** The same load test on one trunk: 300 intents by 100 agents in 6:37 (README, "Measured"). */
+const ONE_TRUNK_RATE = 300 / 397;
+
+interface RatePoint {
+	t: number;
+	landed: number;
+	/** Landings per second over the RATE_WINDOW before t. */
+	rate: number;
+}
+
+/** Landed totals at every sample (a sector that did not answer keeps its last count) and the rate behind each. */
+function ratePoints(header: Header, samples: Sample[]): RatePoint[] {
+	const at = header.fields.indexOf("landed");
+	const last = header.center.sectors.map(() => 0);
+	const landed = samples.map((x) => {
+		x.s.forEach((row, i) => {
+			if (row) last[i] = Number(row[at]) || 0;
+		});
+		return last.reduce((a, b) => a + b, 0);
+	});
+	const out: RatePoint[] = [];
+	let j = 0;
+	for (let i = 0; i < samples.length; i++) {
+		while (samples[i].t - samples[j].t > RATE_WINDOW) j++;
+		const dt = (samples[i].t - samples[j].t) / 1000;
+		out.push({ t: samples[i].t, landed: landed[i], rate: dt > 0 ? (landed[i] - landed[j]) / dt : 0 });
+	}
+	return out;
+}
+
 /** A monorepo split into sectors: every sector lands through its own runway, the Center composes one trunk. */
 export function Center({ slug }: { slug: string }) {
 	const params = new URLSearchParams(location.search);
@@ -92,7 +124,7 @@ function CenterLive({ slug }: { slug: string }) {
 }
 
 function CenterReplay({ slug, path, params }: { slug: string; path: string; params: URLSearchParams }) {
-	const [loaded, setLoaded] = useState<{ header: Header; player: SampleReplay<Sample> } | null>(null);
+	const [loaded, setLoaded] = useState<{ header: Header; player: SampleReplay<Sample>; points: RatePoint[] } | null>(null);
 	const [failed, setFailed] = useState(false);
 	useReplay(loaded?.player ?? null, (r) => r.current);
 
@@ -109,7 +141,7 @@ function CenterReplay({ slug, path, params }: { slug: string; path: string; para
 				if (header?.kind !== "center" || !samples.length) throw new Error("not a center recording");
 				const speed = Number(params.get("speed") ?? 1);
 				player = new SampleReplay<Sample>(samples, Number(params.get("from") ?? 0) * 1000, speed > 0 ? speed : 1);
-				setLoaded({ header, player });
+				setLoaded({ header, player, points: ratePoints(header, samples) });
 			})
 			.catch(() => !cancelled && setFailed(true));
 		return () => {
@@ -120,16 +152,18 @@ function CenterReplay({ slug, path, params }: { slug: string; path: string; para
 
 	if (failed) return <Boot text="This replay could not be loaded." link />;
 	if (!loaded) return <Boot text="Loading the recording…" />;
-	const { header, player } = loaded;
+	const { header, player, points } = loaded;
 	const x = player.current;
 	const snap = toSnapshot(header, x);
-	// Landings over the last 30 s of recording time.
-	const before = player.at(Math.max(player.start, player.t - 30_000));
-	const rate = x.t > before.t ? ((landedIn(snap) - landedIn(toSnapshot(header, before))) * 1000) / (x.t - before.t) : 0;
+	const i = player.samples.indexOf(x);
 	// Each sector's own radar replay, recorded on the same clock: open it at this moment.
 	const streams = header.sectorStreams ? path.replace(/\.jsonl(\.gz)?$/, "") : null;
 	const sectorHref = streams ? (sector: string) => `/p/${sector}?replay=${streams}/${sector}.jsonl.gz&from=${Math.floor(player.t / 1000)}&speed=${player.speed}` : undefined;
-	return <CenterView slug={slug} snap={snap} rate={rate} now={x.at + (player.t - x.t)} replay={player} sectorHref={sectorHref} />;
+	return (
+		<CenterView slug={slug} snap={snap} rate={points[i]?.rate ?? 0} now={x.at + (player.t - x.t)} replay={player} sectorHref={sectorHref}>
+			<RateChart points={points} t={player.t} total={player.total} />
+		</CenterView>
+	);
 }
 
 function Boot({ text, link = false }: { text: preact.ComponentChildren; link?: boolean }) {
@@ -153,6 +187,7 @@ function CenterView({
 	now,
 	replay,
 	sectorHref,
+	children,
 }: {
 	slug: string;
 	snap: CenterSnapshot;
@@ -160,6 +195,7 @@ function CenterView({
 	now: number;
 	replay?: SampleReplay<Sample>;
 	sectorHref?: (sector: string) => string;
+	children?: preact.ComponentChildren;
 }) {
 	const [clone, setClone] = useState<string[] | null>(null);
 	const openClone = async () => {
@@ -255,6 +291,7 @@ function CenterView({
 						);
 					})}
 				</div>
+				{children}
 			</main>
 
 			{clone && (
@@ -271,6 +308,133 @@ function CenterView({
 				</div>
 			)}
 		</div>
+	);
+}
+
+const clockOf = (ms: number) => duration(Math.round(ms / 1000) * 1000);
+
+/**
+ * Landings per second across every sector, drawn up to the replay's clock, against the same load test
+ * on one trunk. One series in the accent hue; the reference is a labelled grey rule. Hover reads a point;
+ * the table view has the same numbers every 30 s.
+ */
+function RateChart({ points, t, total }: { points: RatePoint[]; t: number; total: number }) {
+	const box = useRef<HTMLDivElement>(null);
+	const [width, setWidth] = useState(0);
+	const [hover, setHover] = useState<number | null>(null);
+	const [table, setTable] = useState(false);
+	useEffect(() => {
+		const el = box.current;
+		if (!el) return;
+		const ro = new ResizeObserver(() => setWidth(el.clientWidth));
+		ro.observe(el);
+		setWidth(el.clientWidth);
+		return () => ro.disconnect();
+	}, []);
+
+	const peak = useMemo(() => points.reduce((best, p) => (p.rate > best.rate ? p : best), points[0]), [points]);
+	const yMax = Math.max(5, Math.ceil(peak.rate / 5) * 5);
+	const H = 200;
+	const m = { l: 34, r: 12, t: 10, b: 24 };
+	const iw = Math.max(1, width - m.l - m.r);
+	const ih = H - m.t - m.b;
+	const x = (ms: number) => m.l + (total > 0 ? (ms / total) * iw : 0);
+	const y = (v: number) => m.t + ih - (v / yMax) * ih;
+	const shown = points.filter((p) => p.t <= t);
+	const line = shown.map((p, i) => `${i ? "L" : "M"}${x(p.t).toFixed(1)},${y(p.rate).toFixed(1)}`).join("");
+	const area = shown.length > 1 ? `${line}L${x(shown[shown.length - 1].t).toFixed(1)},${y(0)}L${x(shown[0].t).toFixed(1)},${y(0)}Z` : "";
+	const end = shown[shown.length - 1];
+	const minutes = Math.max(1, Math.round(total / 60_000 / 6)) * 60_000;
+	const xTicks: number[] = [];
+	for (let v = 0; v <= total; v += minutes) xTicks.push(v);
+	const yTicks = [0, yMax / 4, yMax / 2, (3 * yMax) / 4, yMax].filter((v) => Number.isInteger(v));
+	const focus = hover !== null ? shown[hover] : null;
+
+	const onMove = (e: PointerEvent) => {
+		if (!shown.length) return;
+		const rect = (e.currentTarget as SVGElement).getBoundingClientRect();
+		const ms = ((e.clientX - rect.left - m.l) / iw) * total;
+		let best = 0;
+		for (let i = 1; i < shown.length; i++) if (Math.abs(shown[i].t - ms) < Math.abs(shown[best].t - ms)) best = i;
+		setHover(best);
+	};
+	const rows = points.filter((p, i) => i === points.length - 1 || Math.floor(p.t / 30_000) !== Math.floor((points[i + 1]?.t ?? 0) / 30_000));
+
+	return (
+		<figure class="rate-chart">
+			<figcaption>
+				<div class="rc-title">Landings per second, all sectors</div>
+				<div class="rc-sub">
+					Peak {peak.rate.toFixed(1)} at {clockOf(peak.t)}, over the 30 seconds before each point. The same load test on one trunk averaged {ONE_TRUNK_RATE.toFixed(2)}.
+				</div>
+				<button class="rc-toggle" onClick={() => setTable(!table)} aria-pressed={table}>
+					{table ? "Chart" : "Table"}
+				</button>
+			</figcaption>
+			{table ? (
+				<div class="rc-table">
+					<table>
+						<thead>
+							<tr>
+								<th>Time</th>
+								<th>Landings/s</th>
+								<th>Landed</th>
+							</tr>
+						</thead>
+						<tbody>
+							{rows.map((p) => (
+								<tr key={p.t}>
+									<td>{clockOf(p.t)}</td>
+									<td>{p.rate.toFixed(1)}</td>
+									<td>{n(p.landed)}</td>
+								</tr>
+							))}
+						</tbody>
+					</table>
+				</div>
+			) : (
+				<div class="rc-plot" ref={box}>
+					{width > 0 && (
+						<svg width={width} height={H} role="img" aria-label={`Landings per second over the run, peaking at ${peak.rate.toFixed(1)}`} onPointerMove={onMove} onPointerLeave={() => setHover(null)}>
+							{yTicks.map((v) => (
+								<g key={v}>
+									<line class="rc-grid" x1={m.l} x2={m.l + iw} y1={y(v)} y2={y(v)} />
+									<text class="rc-tick" x={m.l - 8} y={y(v) + 4} text-anchor="end">
+										{v}
+									</text>
+								</g>
+							))}
+							{xTicks.map((v) => (
+								<text key={v} class="rc-tick" x={x(v)} y={H - 6} text-anchor={v === 0 ? "start" : "middle"}>
+									{clockOf(v)}
+								</text>
+							))}
+							<line class="rc-ref" x1={m.l} x2={m.l + iw} y1={y(ONE_TRUNK_RATE)} y2={y(ONE_TRUNK_RATE)} />
+							<text class="rc-ref-label" x={m.l + iw} y={y(ONE_TRUNK_RATE) - 6} text-anchor="end">
+								One trunk, 100 agents
+							</text>
+							{area && <path class="rc-area" d={area} />}
+							{line && <path class="rc-line" d={line} />}
+							{end && <circle class="rc-dot" cx={x(end.t)} cy={y(end.rate)} r={4} />}
+							{focus && (
+								<g>
+									<line class="rc-cross" x1={x(focus.t)} x2={x(focus.t)} y1={m.t} y2={m.t + ih} />
+									<circle class="rc-dot" cx={x(focus.t)} cy={y(focus.rate)} r={4} />
+								</g>
+							)}
+						</svg>
+					)}
+					{focus && (
+						<div class="rc-tip" style={{ left: `${Math.min(Math.max(x(focus.t), 80), width - 80)}px` }}>
+							<b>{focus.rate.toFixed(1)} landings/s</b>
+							<span>
+								{clockOf(focus.t)} · {n(focus.landed)} landed
+							</span>
+						</div>
+					)}
+				</div>
+			)}
+		</figure>
 	);
 }
 
