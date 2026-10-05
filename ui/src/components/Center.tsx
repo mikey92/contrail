@@ -285,7 +285,9 @@ function CenterView({
 							<a key={s.slug} class="sector" href={sectorHref ? sectorHref(s.slug) : `/p/${s.slug}`} title={sectorHref ? `Watch ${s.name}'s radar from this moment` : `Open ${s.name}'s radar`}>
 								<div class="sector-top">
 									<span class="sector-name">{s.name}</span>
-									<span class="mono sector-prefix">{s.prefix}</span>
+									<span class="mono sector-prefix" title={s.prefix}>
+										{s.prefix}
+									</span>
 								</div>
 								<div class="sector-bar" title={`${pct}% landed`} role="progressbar" aria-label={`${s.name}: intents landed`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
 									<i style={{ width: `${pct}%` }} />

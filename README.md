@@ -14,7 +14,10 @@ Workers and Workers AI.
 **Scale:** [1,000 agents in one monorepo of 10 sectors](https://contrail.mikey9220.workers.dev/c/monorepo?replay=/replays/monorepo.jsonl.gz&speed=4) ·
 **Crossings:** [one change landed in three sectors at once](https://contrail.mikey9220.workers.dev/c/shop)
 
-![The Contrail radar: each block is a file and each row a function; planes are agents on the code they are cleared to change, with the activity feed on the right and the runway below](docs/radar.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/radar-dark.png">
+  <img src="docs/radar.png" alt="The Contrail radar: each block is a file and each row a function; planes are agents on the code they are cleared to change, with the activity feed on the right and the runway below">
+</picture>
 
 ---
 
@@ -174,7 +177,10 @@ run landed about 1.8 changes per second each while their work was spread out, an
 whole run, crowded tail included, so that is roughly 30 to 100 sectors. However many sectors move, the
 Center commits at most about once a second, so the monorepo's history stays readable.
 
-![The monorepo replay 1:34 into the run: 336 agents in the air and 127 holding across 10 sectors, 1,228 of 3,000 changes landed, 12 landings per second](docs/center.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/center-dark.png">
+  <img src="docs/center.png" alt="The monorepo replay 1:34 into the run: 336 agents in the air and 127 holding across 10 sectors, 1,228 of 3,000 changes landed, 12 landings per second">
+</picture>
 
 **Crossings** keep a change that spans sectors whole: an API and its client, say, must change together
 or not at all. An agent takes off at the Center instead of in one sector. Its workspace is a fork of the

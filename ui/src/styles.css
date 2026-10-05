@@ -2188,6 +2188,7 @@ details.diffs summary {
 	box-shadow: var(--shadow-lg);
 	overflow: hidden;
 }
+.shot picture,
 .shot img {
 	display: block;
 	width: 100%;
@@ -2533,7 +2534,8 @@ details.diffs summary {
 }
 .sectors {
 	display: grid;
-	grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+	/* Cards widen with the reader's text size. */
+	grid-template-columns: repeat(auto-fill, minmax(min(13.75rem, 100%), 1fr));
 	gap: 12px;
 }
 .sector {
@@ -2558,6 +2560,18 @@ details.diffs summary {
 }
 .sector-name {
 	font-weight: 600;
+}
+/* One line each: the directory gives way to the name, which is cut only when it alone is too wide. */
+.sector-name,
+.sector-prefix {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.sector-name {
+	flex-shrink: 0;
+	max-width: 100%;
 }
 .sector-prefix {
 	font-size: 0.75rem;

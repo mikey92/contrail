@@ -102,7 +102,10 @@ export function Home() {
 					</div>
 				</div>
 				<figure class="shot">
-					<img src="/radar.png" width={1600} height={900} alt="The Contrail radar during a run with real coding agents" />
+					<picture>
+						<source srcset="/radar-dark.png" media="(prefers-color-scheme: dark)" />
+						<img src="/radar.png" width={1600} height={900} alt="The Contrail radar during a run with real coding agents" />
+					</picture>
 					<figcaption>The radar. Each block is a file and each row a function. Planes are agents, parked on the code they are cleared to change.</figcaption>
 				</figure>
 			</header>
