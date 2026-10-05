@@ -57,6 +57,7 @@ interface Label {
 
 const HEADER = 18;
 const APRON = 54;
+const APRON_LABEL = "Taxiing · agents that have not claimed any code yet";
 /** Strip under the map for the legend. */
 const LEGEND = 26;
 const SOURCE_DIRS = new Set(["src", "source", "lib", "app", "pkg"]);
@@ -432,12 +433,42 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 		return start > r.x + 4 && !labels.some((l) => Math.abs(l.y - y) < 11 && l.x < end && l.end + 6 > start);
 	};
 
-	// Where each active flight is drawn.
+	// With dozens of flights, or on a phone, the planes and their colors tell the story; tags would bury the map.
+	const tagless = active.length > 30 || size.w < 640;
+	// On a phone the planes' 44 pt targets would overlap at desktop spacing: spread them out.
+	const spread = size.w < 640 ? 1.6 : 1;
+	// Each plane keeps a target of its own: 44 pt for a finger, 28 pt for a pointer.
+	const reach = touch || spread > 1 ? 44 : 28;
+	// The text size the reader chose: tags and the apron's label grow with it.
+	const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+	// A plane's tag, estimated from the CSS of .plane .tag with a little room to spare.
+	const fs = 0.6875 * rem;
+	const tagH = fs * 1.5 + 6;
+	const tagW = (f: Flight) => {
+		const agent = agents[f.agentId];
+		const kind = KIND[agent?.kind ?? ""];
+		return (
+			25 +
+			(kind ? textWidth(kind[0], `600 ${fs}px ${MONO}`) + 15 : 0) +
+			textWidth(agent?.callsign ?? "?", `600 ${fs}px ${SANS}`) +
+			4 +
+			textWidth(f.code, `500 ${fs}px ${SANS}`) +
+			(f.status !== "airborne" ? 20 + textWidth(statusLabel(f.status), `600 ${fs}px ${SANS}`) : 0)
+		);
+	};
+	// Where each active flight is drawn. Taxiing ones line up in the apron after its label, far enough apart
+	// for their tags, the last one too; when they need the room, the label says just "Taxiing".
 	const cruising = active.filter((f) => !claims.some((x) => x.c.flightId === f.id));
 	const positions = new Map<string, { x: number; y: number; orbit: boolean }>();
+	const widest = tagless ? 0 : Math.max(0, ...cruising.map(tagW));
+	const xEnd = size.w - 40 - widest;
+	const after = (label: string) => 44 + textWidth(label, `400 ${0.7188 * rem}px ${SANS}`);
+	const roomy = (x: number) => cruising.length <= 1 || (xEnd - x) / (cruising.length - 1) >= Math.max(widest + 27, reach);
+	const apronLabel = roomy(after(APRON_LABEL)) ? APRON_LABEL : "Taxiing";
+	const x0 = after(apronLabel);
 	cruising.forEach((f, i) => {
-		const slot = (i + 0.5) / Math.max(cruising.length, 1);
-		positions.set(f.id, { x: 40 + slot * (size.w - 80), y: APRON / 2 - 4, orbit: false });
+		const x = cruising.length === 1 ? (x0 + xEnd) / 2 : x0 + (i / (cruising.length - 1)) * (xEnd - x0);
+		positions.set(f.id, { x, y: APRON / 2 - 4, orbit: false });
 	});
 	// A flight sits on its primary claim: holding targets first (it circles them), then granted
 	// symbols in source files, then anything else. Its other claims carry its color and code.
@@ -459,10 +490,6 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 	const showTag = new Set<string>();
 	const hidden = new Set<string>();
 	const crowded = active.length > 14;
-	// On a phone the planes' 44 pt targets would overlap at desktop spacing: spread them out.
-	const spread = size.w < 640 ? 1.6 : 1;
-	// With dozens of flights, or on a phone, the planes and their colors tell the story; tags would bury the map.
-	const tagless = active.length > 30 || size.w < 640;
 	for (const ids of buckets.values()) {
 		ids.sort((a, b) => (flights[a].status === "holding" ? 1 : 0) - (flights[b].status === "holding" ? 1 : 0) || flights[a].createdAt - flights[b].createdAt);
 		const holders = ids.filter((id) => flights[id].status === "holding");
@@ -487,8 +514,7 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 	// Every plane stays whole on the map.
 	const inside = (p: { x: number; y: number; orbit: boolean }) => ({ ...p, x: Math.min(Math.max(p.x, 22), size.w - 22), y: Math.min(Math.max(p.y, 22), size.h - 22) });
 	for (const [id, p] of positions) positions.set(id, inside(p));
-	// Planes closer than a target are nudged apart, so each keeps its own: 44 pt for a finger, 28 pt for a pointer.
-	const reach = touch || spread > 1 ? 44 : 28;
+	// Planes closer than a target are nudged apart, so each keeps its own.
 	const shown = [...positions.keys()].filter((id) => !hidden.has(id));
 	for (let round = 0; round < 40; round++) {
 		let moved = false;
@@ -509,6 +535,49 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 	}
 	if (tagless) showTag.clear();
 	if (selected) showTag.add(selected);
+	// A tag goes right of its plane and below it, unless that would cover another plane or tag, or leave the
+	// map: then it tries above, then the left side, then level with the plane.
+	const tagSide = new Map<string, { left: boolean; up: boolean; level: boolean }>();
+	if (showTag.size) {
+		const h = tagH;
+		// A holding plane circles 20 px out from its spot, so its whole circle is taken.
+		const planeBoxes = [...positions].filter(([id]) => !hidden.has(id)).map(([id, p]) => {
+			const r = p.orbit ? 32 : 12;
+			return { id, x: p.x - r, y: p.y - r, w: 2 * r, h: 2 * r };
+		});
+		const overlap = (a: Rect, b: Rect) => Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)) * Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+		// The names of directories, files and functions, and the apron's label: better left readable too.
+		const texts = [...labels.map((l) => ({ x: l.x, y: l.y + APRON - 10, w: l.end - l.x, h: 13 })), { x: 14, y: 9, w: x0 - 44, h: 17 }];
+		const legend = { x: 0, y: size.h - LEGEND, w: size.w, h: LEGEND };
+		const placed: Rect[] = [];
+		for (const id of [...showTag].sort((a, b) => (b === selected ? 1 : 0) - (a === selected ? 1 : 0))) {
+			const f = flights[id];
+			const p = positions.get(id);
+			if (!f || !p) continue;
+			const w = tagW(f);
+			let best: { left: boolean; up: boolean; level: boolean; r: Rect; cost: number } | null = null;
+			for (const [left, up, level] of [
+				[false, false, false],
+				[false, true, false],
+				[true, false, false],
+				[true, true, false],
+				[false, false, true],
+				[true, false, true],
+			]) {
+				const r = { x: left ? p.x - (level ? 18 : 13) - w : p.x + (level ? 18 : 13), y: level ? p.y - h / 2 : up ? p.y - 7 - h : p.y + 7, w, h };
+				let cost = r.x < 0 || r.y < 0 || r.x + w > size.w || r.y + h > size.h ? 1e6 : 0;
+				// Hiding an agent is worst, then another tag, then a name on the map, then the legend.
+				for (const g of planeBoxes) if (g.id !== id) cost += 10 * overlap(r, g);
+				for (const t of placed) cost += 2 * overlap(r, t);
+				for (const t of texts) cost += 0.5 * overlap(r, t);
+				cost += 0.1 * overlap(r, legend);
+				if (!best || cost < best.cost) best = { left, up, level, r, cost };
+				if (cost === 0) break;
+			}
+			placed.push(best!.r);
+			tagSide.set(id, best!);
+		}
+	}
 	const holdCounts = new Map<string, { x: number; y: number; n: number }>();
 	for (const x of claims) {
 		if (x.c.status !== "holding") continue;
@@ -528,7 +597,7 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 
 	return (
 		<div class="airspace" ref={ref}>
-			<div class="apron-label">Taxiing · agents that have not claimed any code yet</div>
+			<div class="apron-label">{apronLabel}</div>
 			<div class="legend">
 				<span>
 					<i class="lg-file" /> File
@@ -608,7 +677,7 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 							</svg>
 						</div>
 						{showTag.has(f.id) ? (
-							<div class="tag">
+							<div class={`tag${tagSide.get(f.id)?.left ? " left" : ""}${tagSide.get(f.id)?.up ? " up" : ""}${tagSide.get(f.id)?.level ? " level" : ""}`}>
 								<KindBadge kind={agent?.kind} />
 								<b>{agent?.callsign ?? "?"}</b> {f.code}
 								{f.status !== "airborne" && <span class={`st st-${f.status}`}>{statusLabel(f.status)}</span>}

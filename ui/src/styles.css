@@ -799,6 +799,24 @@ code {
 	color: var(--ink-2);
 	box-shadow: var(--shadow-sm);
 }
+.plane .tag.left {
+	left: auto;
+	right: 35px;
+}
+.plane .tag.up {
+	top: auto;
+	bottom: 29px;
+}
+.plane .tag.level {
+	top: 50%;
+	transform: translateY(-50%);
+}
+.plane .tag.level:not(.left) {
+	left: 40px;
+}
+.plane .tag.level.left {
+	right: 40px;
+}
 .plane .tag b {
 	color: var(--ink);
 	font-weight: 600;
