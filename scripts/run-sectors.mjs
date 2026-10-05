@@ -77,6 +77,14 @@ if (record) {
 const ping = record ? setInterval(() => sockets.forEach((ws) => ws.readyState === 1 && ws.send("ping")), 20_000) : null;
 if (!verifyOnly) {
   console.log(`${first.center.name}: launching ${agents} scripted agents in each of ${sectors.length} sectors (${agents * sectors.length} agents)`);
+  // Agents start landing while the rest are still being launched: keep sampling meanwhile.
+  let launching = true;
+  const sampler = (async () => {
+    while (record && launching) {
+      await sleep(1000);
+      if (launching) sample(await get(`/api/c/${slug}`));
+    }
+  })();
   await Promise.all(
     sectors.map(async (s) => {
       const res = await fetch(`${base}/api/p/${s.slug}/edge/launch`, {
@@ -88,6 +96,8 @@ if (!verifyOnly) {
       if (!res.ok) throw new Error(`launch ${s.slug}: ${JSON.stringify(body)}`);
     }),
   );
+  launching = false;
+  await sampler;
   console.log(`launched in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
 }
 
