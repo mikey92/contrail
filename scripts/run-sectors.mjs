@@ -2,24 +2,28 @@
 // Runs a sectored load test: scripted (LLM-free) agents fly in every sector at once. Prints progress, then
 // the throughput, and checks for lost updates in every sector and in the composed monorepo trunk.
 //   CONTRAIL_URL=… CONTRAIL_ADMIN_KEY=… node scripts/run-sectors.mjs <center-slug> [--agents 100] [--timeout 1800] [--out result.json]
-// With --verify-only it launches nothing and only checks the center as it is.
-import { writeFileSync } from "node:fs";
+// With --verify-only it launches nothing and only checks the center as it is. With --record <dir> it also
+// records the run for the monorepo page's replay: the center once a second (<dir>/<center>.jsonl.gz) and
+// every sector's radar stream (<dir>/<center>/<sector>.jsonl.gz), on one clock.
+import { mkdirSync, writeFileSync } from "node:fs";
+import { gzipSync } from "node:zlib";
 
 const args = process.argv.slice(2);
 const option = (name, fallback) => {
   const i = args.indexOf(name);
   return i === -1 ? fallback : args[i + 1];
 };
-const valued = new Set(["--agents", "--timeout", "--out"]);
+const valued = new Set(["--agents", "--timeout", "--out", "--record"]);
 const slug = args.find((a, i) => !a.startsWith("--") && !valued.has(args[i - 1]));
 const agents = Number(option("--agents", 100));
 const timeoutS = Number(option("--timeout", 1800));
 const out = option("--out", null);
 const verifyOnly = args.includes("--verify-only");
+const record = verifyOnly ? null : option("--record", null);
 const base = process.env.CONTRAIL_URL?.replace(/\/$/, "");
 const admin = process.env.CONTRAIL_ADMIN_KEY;
 if (!slug || !base || !admin) {
-  console.error("usage: CONTRAIL_URL=… CONTRAIL_ADMIN_KEY=… node scripts/run-sectors.mjs <center-slug> [--agents 100] [--timeout 1800] [--out result.json] [--verify-only]");
+  console.error("usage: CONTRAIL_URL=… CONTRAIL_ADMIN_KEY=… node scripts/run-sectors.mjs <center-slug> [--agents 100] [--timeout 1800] [--out result.json] [--record dir] [--verify-only]");
   process.exit(2);
 }
 const auth = { authorization: `Bearer ${admin}` };
@@ -29,11 +33,48 @@ const get = async (path) => {
   return path.includes("/file?") ? res.text() : res.json();
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const clock = (ms) => `${Math.floor(ms / 60000)}:${String(Math.floor((ms % 60000) / 1000)).padStart(2, "0")}`;
+// Minutes and seconds, to the nearest second (as the radar's end card shows them).
+const clock = (ms) => {
+  const s = Math.round(ms / 1000);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+};
 
 const first = await get(`/api/c/${slug}`);
 const sectors = first.center.sectors;
 const t0 = Date.now();
+
+// The recording: one clock (t, ms since t0) for the center's samples and every sector's radar stream.
+const FIELDS = ["landed", "inAir", "holding", "intents", "landings", "agents", "conflictsPrevented", "head", "firstTakeOff", "lastLanding"];
+const centerLines = [];
+const streams = new Map(sectors.map((s) => [s.slug, []]));
+const sockets = [];
+let recording = false;
+const sample = (snap) =>
+  centerLines.push({
+    t: Date.now() - t0,
+    at: Date.now(),
+    head: snap.head?.slice(0, 8) ?? null,
+    composedAt: snap.composedAt,
+    behind: snap.behind,
+    compositions: snap.compositions,
+    s: snap.sectors.map((x) => (x.summary ? FIELDS.map((f) => (f === "head" ? (x.summary.head?.slice(0, 8) ?? null) : (x.summary[f] ?? null))) : null)),
+  });
+function tap(sectorSlug) {
+  const lines = streams.get(sectorSlug);
+  const ws = new WebSocket(`${base.replace(/^http/, "ws")}/api/p/${sectorSlug}/live`);
+  sockets.push(ws);
+  ws.onmessage = (m) => m.data !== "pong" && lines.push({ t: Date.now() - t0, m: JSON.parse(m.data) });
+  ws.onclose = () => recording && setTimeout(() => tap(sectorSlug), 500);
+  return new Promise((resolve) => (ws.onopen = resolve));
+}
+if (record) {
+  recording = true;
+  centerLines.push({ t: 0, kind: "center", center: first.center, fields: FIELDS, sectorStreams: true });
+  await Promise.race([Promise.all(sectors.map((s) => tap(s.slug))), sleep(10_000)]);
+  sample(await get(`/api/c/${slug}`));
+  console.log(`recording ${sectors.length} sector streams and the center into ${record}`);
+}
+const ping = record ? setInterval(() => sockets.forEach((ws) => ws.readyState === 1 && ws.send("ping")), 20_000) : null;
 if (!verifyOnly) {
   console.log(`${first.center.name}: launching ${agents} scripted agents in each of ${sectors.length} sectors (${agents * sectors.length} agents)`);
   await Promise.all(
@@ -54,8 +95,9 @@ let snap = first;
 let lastPrint = 0;
 const history = [];
 while (!verifyOnly) {
-  await sleep(3000);
+  await sleep(record ? 1000 : 3000);
   snap = await get(`/api/c/${slug}`);
+  if (record) sample(snap);
   const sum = (k) => snap.sectors.reduce((n, s) => n + (s.summary?.[k] ?? 0), 0);
   const landed = sum("landed");
   const intents = sum("intents");
@@ -71,6 +113,20 @@ while (!verifyOnly) {
     console.log("timed out");
     break;
   }
+}
+
+if (record) {
+  // A last look once everything has settled, then save the recording.
+  await sleep(2000);
+  sample(await get(`/api/c/${slug}`));
+  recording = false;
+  clearInterval(ping);
+  for (const ws of sockets) ws.close();
+  mkdirSync(`${record}/${slug}`, { recursive: true });
+  const save = (file, lines) => writeFileSync(file, gzipSync(`${lines.map((l) => JSON.stringify(l)).join("\n")}\n`, { level: 9 }));
+  save(`${record}/${slug}.jsonl.gz`, centerLines);
+  for (const [sectorSlug, lines] of streams) save(`${record}/${slug}/${sectorSlug}.jsonl.gz`, lines);
+  console.log(`saved ${centerLines.length} center samples and ${[...streams.values()].reduce((n, l) => n + l.length, 0)} sector stream messages`);
 }
 
 // Verify: every counter equals its landed increments, in each sector and in the composed monorepo.

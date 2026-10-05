@@ -237,11 +237,25 @@ function recordingStart(lines: Line[]): number | null {
 	return snap && last ? last - snap.t : null;
 }
 
+/** What replay controls need from a recorded run: a clock over recording time. */
+export interface ReplayClock {
+	readonly t: number;
+	readonly total: number;
+	readonly speed: number;
+	readonly playing: boolean;
+	readonly ended: boolean;
+	subscribe(fn: () => void): () => void;
+	toggle(): void;
+	restart(): void;
+	seek(t: number): void;
+	setSpeed(speed: number): void;
+}
+
 /**
  * Plays a recorded radar stream on a clock. Every tick moves recording time on by the elapsed time ×
  * speed and applies all the lines it passed as one batch: one render per tick, however busy the run.
  */
-export class Replay {
+export class Replay implements ReplayClock {
 	/** Recording time on screen, ms. */
 	t: number;
 	readonly start: number;
@@ -342,8 +356,114 @@ export class Replay {
 	}
 }
 
+/**
+ * Plays a recorded time series on a clock: `current` is the latest sample at the clock's time. The
+ * monorepo page uses it for a sectored run, sampled once a second.
+ */
+export class SampleReplay<S extends { t: number }> implements ReplayClock {
+	t: number;
+	readonly start: number;
+	readonly total: number;
+	speed: number;
+	playing = true;
+	private last = performance.now();
+	private timer: ReturnType<typeof setInterval>;
+	private listeners = new Set<() => void>();
+
+	constructor(
+		readonly samples: S[],
+		from: number,
+		speed: number,
+	) {
+		this.start = samples[0].t;
+		this.total = samples[samples.length - 1].t;
+		this.speed = speed;
+		this.t = Math.min(this.total, Math.max(this.start, from));
+		if (this.ended) this.playing = false;
+		this.timer = setInterval(() => this.tick(), 100);
+	}
+
+	get ended() {
+		return this.t >= this.total;
+	}
+
+	/** The latest sample at or before the clock. */
+	get current(): S {
+		return this.at(this.t);
+	}
+
+	/** The latest sample at or before recording time `t`. */
+	at(t: number): S {
+		let lo = 0;
+		let hi = this.samples.length - 1;
+		while (lo < hi) {
+			const mid = (lo + hi + 1) >> 1;
+			if (this.samples[mid].t <= t) lo = mid;
+			else hi = mid - 1;
+		}
+		return this.samples[lo];
+	}
+
+	subscribe(fn: () => void) {
+		this.listeners.add(fn);
+		return () => {
+			this.listeners.delete(fn);
+		};
+	}
+
+	toggle() {
+		if (this.ended) return this.restart();
+		this.playing = !this.playing;
+		this.changed();
+	}
+
+	setSpeed(speed: number) {
+		this.speed = speed;
+		this.changed();
+	}
+
+	restart() {
+		this.playing = true;
+		this.seek(this.start);
+	}
+
+	seek(t: number) {
+		this.t = Math.min(this.total, Math.max(this.start, t));
+		if (this.ended) this.playing = false;
+		this.changed();
+	}
+
+	stop() {
+		clearInterval(this.timer);
+	}
+
+	private tick() {
+		const now = performance.now();
+		const elapsed = Math.min(1000, now - this.last);
+		this.last = now;
+		if (!this.playing) return;
+		this.t = Math.min(this.total, this.t + elapsed * this.speed);
+		if (this.ended) this.playing = false;
+		this.changed();
+	}
+
+	private changed() {
+		for (const fn of this.listeners) fn();
+	}
+}
+
+/** A recording from this site only (e.g. /replays/ramda.jsonl.gz), as text; gzipped recordings are unpacked. */
+export async function fetchRecording(path: string | null): Promise<string> {
+	if (!path || !path.startsWith("/") || path.startsWith("//")) throw new Error("not a recording on this site");
+	const res = await fetch(path);
+	if (!res.ok) throw new Error(`HTTP ${res.status}`);
+	const bytes = new Uint8Array(await res.arrayBuffer());
+	if (bytes[0] !== 0x1f || bytes[1] !== 0x8b) return new TextDecoder().decode(bytes);
+	return new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
+}
+
 /** Re-renders the caller when `pick` of the replay changes: the controls follow its clock, the radar only its end. */
-export function useReplay<T>(replay: Replay | null, pick: (r: Replay) => T): T | undefined {
+export function useReplay<R extends ReplayClock, T>(replay: R | null, pick: (r: R) => T): T | undefined {
 	const [, rerender] = useState(0);
 	const value = replay ? pick(replay) : undefined;
 	const shown = useRef(value);
@@ -366,25 +486,13 @@ export function useRadar(slug: string, fixture: string | null) {
 		const params = new URLSearchParams(location.search);
 		const replayParam = params.get("replay");
 		if (replayParam !== null) {
-			// Replays come from this site only (e.g. /replays/ramda.jsonl.gz), never from an arbitrary origin.
-			const replayUrl = replayParam.startsWith("/") && !replayParam.startsWith("//") ? replayParam : null;
 			// Replays a recorded radar stream (scripts/tap.mjs) at `speed`×, starting at `from` seconds.
 			const speed = Number(params.get("speed") ?? 1);
 			const from = Number(params.get("from") ?? 0) * 1000;
 			let cancelled = false;
 			let player: Replay | null = null;
 			const timers: number[] = [];
-			(replayUrl ? fetch(replayUrl) : Promise.reject(new Error("not a replay on this site")))
-				.then((r) => {
-					if (!r.ok) throw new Error(`HTTP ${r.status}`);
-					return r.arrayBuffer();
-				})
-				// Replays may be stored gzipped (.jsonl.gz) to keep the repository small.
-				.then((buf) => {
-					const bytes = new Uint8Array(buf);
-					if (bytes[0] !== 0x1f || bytes[1] !== 0x8b) return new TextDecoder().decode(bytes);
-					return new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
-				})
+			fetchRecording(replayParam)
 				.then((text) => {
 					if (cancelled) return;
 					const lines = text.trim().split("\n").map((l) => JSON.parse(l) as Line);
@@ -510,8 +618,8 @@ export function duration(ms: number): string {
 	return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
-export function relTime(at: number): string {
-	const s = Math.max(0, Math.round(((recordedNow ?? Date.now()) - at) / 1000));
+export function relTime(at: number, now = recordedNow ?? Date.now()): string {
+	const s = Math.max(0, Math.round((now - at) / 1000));
 	if (s < 60) return `${s}s ago`;
 	const m = Math.round(s / 60);
 	if (m < 60) return `${m}m ago`;
