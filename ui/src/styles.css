@@ -2316,6 +2316,23 @@ details.diffs summary {
 	font-weight: 600;
 	margin: 0 0 6px;
 }
+.crossings-count {
+	font-weight: 400;
+	font-size: 13px;
+	color: var(--muted);
+	margin-left: 6px;
+}
+.crossing-summary {
+	margin: 0;
+	max-width: 900px;
+	font-size: 13px;
+	line-height: 1.5;
+	color: var(--ink-2);
+	display: -webkit-box;
+	-webkit-line-clamp: 3;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+}
 .crossings-lede {
 	max-width: 760px;
 	color: var(--ink-2);

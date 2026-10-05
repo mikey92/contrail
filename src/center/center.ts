@@ -532,6 +532,8 @@ export class Center extends DurableObject<Env> {
 		});
 		const leg: CrossingLeg = { sector: sector.slug, name: sector.name, prefix: sector.prefix, agentId, flightId: flight.id, flight: flight.code, repo: flight.repo, landing: null };
 		cx.legs.push(leg);
+		const order = (l: CrossingLeg) => info.sectors.findIndex((s) => s.slug === l.sector);
+		cx.legs.sort((a, b) => order(a) - order(b));
 		agent.legs[sector.slug] = agentId;
 		await this.ctx.storage.put(AGENT(agent.id), agent);
 		await this.saveCrossing(cx);
@@ -875,8 +877,11 @@ export class Center extends DurableObject<Env> {
 		if (cx.status === "aborted") return "Aborted. Call take_off for the next crossing.";
 		if (!l) return "Not landing yet: commit, git push origin HEAD:main, then request_landing.";
 		if (l.status === "landing") return "Landing: each sector is merging and testing its part. Call landing_status in a little while.";
-		if (l.status === "landed")
-			return `Landed in ${cx.legs.filter((x) => x.landing?.status === "landed").map((x) => x.name).join(" and ")} at once${l.commit ? `; the monorepo trunk has it as ${l.commit.slice(0, 8)}` : ""}. Your crossing is complete — call take_off for the next one.`;
+		if (l.status === "landed") {
+			const names = cx.legs.filter((x) => x.landing?.status === "landed").map((x) => x.name);
+			const list = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : (names[0] ?? "its sectors");
+			return `Landed in ${list} at once${l.commit ? `; the monorepo trunk has it as ${l.commit.slice(0, 8)}` : ""}. Your crossing is complete — call take_off for the next one.`;
+		}
 		if (cx.legs.some((x) => x.landing?.status === "conflict"))
 			return `${l.error} Pull the monorepo trunk (git pull --no-rebase upstream main), resolve the conflicting hunks, commit, push and request_landing again.`;
 		if (/airspace violation/.test(l.error ?? "")) return `${l.error} Call request_clearance for that code: you hold until it is free and the radio tells you when. Then pull upstream main, push and request_landing again.`;

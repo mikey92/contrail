@@ -1263,8 +1263,8 @@ export class Tower extends DurableObject<Env> {
 			this.patch("intent", this.intentById(intent.id));
 			this.emit(
 				"landing.landed",
-				`${flight.code} landed INT-${intent.seq} "${intent.title}" as ${o.trunkAfter?.slice(0, 8)}${o.unioned ? ` (auto-merged ${o.unioned} parallel insert${o.unioned > 1 ? "s" : ""})` : ""}`,
-				{ flightId: flight.id, agentId: agent.id, data: { landingId: landing.id, commit: o.trunkAfter, changes: o.changes, ms: o.ms } },
+				`${flight.code} landed INT-${intent.seq} "${intent.title}" as ${o.trunkAfter?.slice(0, 8)}${l.crossing ? ` with crossing ${l.crossing}, in every sector it touches at once` : ""}${o.unioned ? ` (auto-merged ${o.unioned} parallel insert${o.unioned > 1 ? "s" : ""})` : ""}`,
+				{ flightId: flight.id, agentId: agent.id, data: { landingId: landing.id, commit: o.trunkAfter, changes: o.changes, ms: o.ms, ...(l.crossing ? { crossing: l.crossing } : {}) } },
 			);
 			this.notifyTurbulence(flight, agent.callsign, intent, o.changes);
 			return;

@@ -46,6 +46,7 @@ const BY_EVENT: Record<string, string> = {
 	"contrail.read": "read",
 	radio: "radio",
 	"landing.queued": "descend",
+	"landing.ready": "clock",
 	"runway.train": "train",
 	"landing.landed": "landed",
 	"landing.conflict": "conflict",

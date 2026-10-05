@@ -207,7 +207,7 @@ export const CENTER_TOOLS: ToolDef<CenterStub>[] = [
 		run: (c, a, args) => c.requestLanding(a, { summary: String(args.summary ?? "") }),
 		summarize: (r) => {
 			const l = r.crossing.landing;
-			if (l?.status === "landed") return `🛬 ${r.crossing.code} landed in ${legs(r.crossing)} at once. ${r.next}`;
+			if (l?.status === "landed") return `🛬 ${r.crossing.code} landed (${legs(r.crossing)}). ${r.next}`;
 			return `✖ Not landed. ${r.next}`;
 		},
 	},

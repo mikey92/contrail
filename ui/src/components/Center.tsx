@@ -225,7 +225,7 @@ function CenterView({
 				<div class="proj">
 					<div class="proj-name">{snap.center.name}</div>
 					<div class="proj-sub">
-						<span class="mono">monorepo @ {snap.head?.slice(0, 8) ?? "—"}</span> · {snap.sectors.length} sectors · {n(snap.compositions)} compositions
+						<span class="mono">monorepo @ {snap.head?.slice(0, 8) ?? "—"}</span> · {snap.sectors.length} sectors · {n(snap.compositions)} composition{snap.compositions === 1 ? "" : "s"}
 					</div>
 				</div>
 				<div class="stats">
@@ -294,7 +294,7 @@ function CenterView({
 					})}
 				</div>
 				{children}
-				{!replay && snap.crossings?.length > 0 && <Crossings crossings={snap.crossings} now={now} />}
+				{!replay && snap.crossings?.length > 0 && <Crossings snap={snap} now={now} />}
 			</main>
 
 			{clone && (
@@ -336,16 +336,23 @@ function legState(leg: CrossingLeg): { label: string; tone: string } {
 }
 
 /** Changes that span sectors: each flies a leg in every sector it touches and lands in all of them, or in none. */
-function Crossings({ crossings, now }: { crossings: Crossing[]; now: number }) {
+function Crossings({ snap, now }: { snap: CenterSnapshot; now: number }) {
+	const order = (leg: CrossingLeg) => snap.center.sectors.findIndex((s) => s.slug === leg.sector);
+	const landed = snap.crossings.filter((cx) => cx.status === "landed").length;
 	return (
 		<section class="crossings">
-			<h2 class="crossings-title">Crossings</h2>
+			<h2 class="crossings-title">
+				Crossings{" "}
+				<span class="crossings-count">
+					{landed} landed{snap.openIntents ? ` · ${snap.openIntents} waiting for an agent` : ""}
+				</span>
+			</h2>
 			<p class="crossings-lede">
 				A crossing is one change across several sectors. It flies a leg in each sector it touches; every sector's runway merges and tests its part and
 				holds it until all of them are ready, then all of them land and the monorepo gets one commit. If one sector turns its part away, none lands.
 			</p>
 			<div class="crossing-list">
-				{crossings.map((cx) => {
+				{snap.crossings.map((cx) => {
 					const state = crossingState(cx);
 					return (
 						<article key={cx.code} class="crossing">
@@ -359,9 +366,10 @@ function Crossings({ crossings, now }: { crossings: Crossing[]; now: number }) {
 								{cx.model ? ` · ${cx.model}` : ""} · {relTime(cx.landing?.finishedAt ?? cx.updatedAt, now)}
 								{cx.attempts > 1 ? ` · ${cx.attempts} landing attempts` : ""}
 							</div>
+							{cx.landing?.summary && <p class="crossing-summary">{cx.landing.summary}</p>}
 							{cx.legs.length > 0 && (
 								<div class="crossing-legs">
-									{cx.legs.map((leg) => {
+									{[...cx.legs].sort((a, b) => order(a) - order(b)).map((leg) => {
 										const ls = legState(leg);
 										return (
 											<a key={leg.sector} class="crossing-leg" href={`/p/${leg.sector}`} title={leg.landing?.error ?? `Open ${leg.name}'s radar`}>

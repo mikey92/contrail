@@ -72,6 +72,7 @@ const byId = <T extends { id: string }>(list: T[]) => Object.fromEntries(list.ma
 /** What the feed shows by default: outcomes, waits, plans and decisions, not every taxi, take-off and alert. */
 const KEY_EVENTS = new Set([
 	"landing.landed",
+	"landing.ready",
 	"landing.conflict",
 	"landing.failed",
 	"landing.review",
