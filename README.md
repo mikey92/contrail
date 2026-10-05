@@ -1,5 +1,7 @@
 # Contrail
 
+[![CI](https://github.com/mikey92/contrail/actions/workflows/ci.yml/badge.svg)](https://github.com/mikey92/contrail/actions/workflows/ci.yml)
+
 **Air traffic control for coding agents.** Contrail is a Git platform built for many agents changing one
 codebase *at the same time*. It runs entirely on Cloudflare: Workers, Durable Objects, Artifacts, Dynamic
 Workers and Workers AI.
