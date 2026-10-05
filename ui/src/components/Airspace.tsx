@@ -1,5 +1,5 @@
 import { hierarchy, treemap, treemapSquarify } from "d3-hierarchy";
-import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { Agent, Clearance, Flight, Intent, TrunkFile } from "../../../src/shared/types";
 import { predictTargets, symbolIndex } from "../../../src/tower/planner";
 import { pressable, touch } from "../a11y";
@@ -395,6 +395,38 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 	const [fonts, setFonts] = useState(0);
 	const headings = useRef(new Map<string, { x: number; y: number; angle: number }>());
 
+	// A plane on the move takes no taps, like a view UIKit is animating: they reach what is under it until it
+	// settles, so two planes passing each other never hide one another's target.
+	useEffect(() => {
+		const el = ref.current!;
+		const track = (e: TransitionEvent) => {
+			const plane = e.target as HTMLElement;
+			if (e.propertyName !== "transform" || !plane.classList.contains("plane")) return;
+			const moving = e.type === "transitionrun" || !!plane.getAnimations?.().some((a) => a.playState === "running" && (a as CSSTransition).transitionProperty === "transform");
+			plane.toggleAttribute("data-moving", moving);
+		};
+		const types = ["transitionrun", "transitionend", "transitioncancel"] as const;
+		for (const t of types) el.addEventListener(t, track);
+		return () => {
+			for (const t of types) el.removeEventListener(t, track);
+		};
+	}, []);
+	// The render that moves a plane marks it at once, a frame before its transition starts; a plane whose
+	// transition never ran is cleared a little after it would have ended.
+	const moved = useRef<string[]>([]);
+	useLayoutEffect(() => {
+		const codes = moved.current.splice(0);
+		if (!codes.length || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+		for (const code of codes) {
+			const plane = ref.current?.querySelector<HTMLElement>(`.plane[data-flight="${code}"]`);
+			if (!plane) continue;
+			plane.setAttribute("data-moving", "");
+			setTimeout(() => {
+				if (!plane.getAnimations?.().some((a) => a.playState === "running" && (a as CSSTransition).transitionProperty === "transform")) plane.removeAttribute("data-moving");
+			}, 1800);
+		}
+	});
+
 	useEffect(() => {
 		const el = ref.current!;
 		const ro = new ResizeObserver(() => setSize({ w: el.clientWidth, h: el.clientHeight }));
@@ -481,10 +513,17 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 	const roomy = (x: number) => cruising.length <= 1 || (xEnd - x) / (cruising.length - 1) >= Math.max(widest + 27, reach);
 	const apronLabel = roomy(after(APRON_LABEL)) ? APRON_LABEL : "Taxiing";
 	const x0 = after(apronLabel);
-	cruising.forEach((f, i) => {
-		const x = cruising.length === 1 ? (x0 + xEnd) / 2 : x0 + (i / (cruising.length - 1)) * (xEnd - x0);
-		positions.set(f.id, { x, y: APRON / 2 - 4, orbit: false });
-	});
+	// As many line up as fit a target (and a tag) apart; the rest wait off the map, counted in the last place.
+	const fit = Math.max(1, Math.floor((xEnd - x0) / Math.max(widest + 27, reach)) + 1);
+	const lined = cruising.length > fit ? cruising.slice(0, fit - 1) : cruising;
+	const parked = cruising.filter((f) => !lined.includes(f));
+	const pick = parked.findIndex((f) => f.id === selected);
+	if (pick >= 0 && lined.length) [lined[lined.length - 1], parked[pick]] = [parked[pick], lined[lined.length - 1]];
+	const slots = parked.length ? fit : lined.length;
+	const slotX = (i: number) => (slots === 1 ? (x0 + xEnd) / 2 : x0 + (i / (slots - 1)) * (xEnd - x0));
+	lined.forEach((f, i) => positions.set(f.id, { x: slotX(i), y: APRON / 2 - 4, orbit: false }));
+	for (const f of parked) positions.set(f.id, { x: slotX(slots - 1), y: APRON / 2 - 4, orbit: false });
+	const apronMore = parked.length ? { x: slotX(slots - 1), n: parked.length } : null;
 	// A flight sits on its primary claim: holding targets first (it circles them), then granted
 	// symbols in source files, then anything else. Its other claims carry its color and code.
 	const score = (x: (typeof claims)[number], f: Flight) =>
@@ -503,7 +542,7 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 		buckets.set(key, [...(buckets.get(key) ?? []), id]);
 	}
 	const showTag = new Set<string>();
-	const hidden = new Set<string>();
+	const hidden = new Set(parked.map((f) => f.id));
 	const crowded = active.length > 14;
 	for (const ids of buckets.values()) {
 		ids.sort((a, b) => (flights[a].status === "holding" ? 1 : 0) - (flights[b].status === "holding" ? 1 : 0) || flights[a].createdAt - flights[b].createdAt);
@@ -550,6 +589,7 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 	}
 	if (tagless) showTag.clear();
 	if (selected) showTag.add(selected);
+	for (const id of hidden) showTag.delete(id);
 	// A tag goes right of its plane and below it, unless that would cover another plane or tag, or leave the
 	// map: then it tries above, then the left side, then level with the plane.
 	const tagSide = new Map<string, { left: boolean; up: boolean; level: boolean }>();
@@ -593,12 +633,41 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 			tagSide.set(id, best!);
 		}
 	}
-	const holdCounts = new Map<string, { x: number; y: number; n: number }>();
+	// A claim's flight code at the right end of its band, where it fits.
+	const coded = new Set(outlines.filter(({ c, rect, flight }) => rect!.w > 70 && rect!.h >= 10 && c.status !== "holding" && tagFits(rect!, flight.code)).map((x) => x.c.id));
+	const holdCounts = new Map<string, { left: number; x: number; y: number; n: number }>();
 	for (const x of claims) {
 		if (x.c.status !== "holding") continue;
 		const c = center(x.rect!);
 		const k = x.c.target;
-		holdCounts.set(k, { x: x.rect!.x + x.rect!.w - 4, y: c.y, n: (holdCounts.get(k)?.n ?? 0) + 1 });
+		holdCounts.set(k, { left: x.rect!.x, x: x.rect!.x + x.rect!.w - 4, y: c.y, n: (holdCounts.get(k)?.n ?? 0) + 1 });
+	}
+	// "N waiting" at the right end of the code they wait for; left of a flight code or another pill there,
+	// and left out when it finds no room on its band.
+	const pillFont = `600 ${0.6875 * rem}px ${SANS}`;
+	const pillH = 0.6875 * rem * 1.25 + 4;
+	const taken: Rect[] = outlines
+		.filter((x) => coded.has(x.c.id))
+		.map(({ rect, flight }) => {
+			const w = textWidth(flight.code, TAG_FONT);
+			return { x: rect!.x + rect!.w - 4 - w, y: labelY(rect!) - 9, w, h: 11 };
+		});
+	const pills: { t: string; x: number; y: number; n: number }[] = [];
+	for (const [t, h] of [...holdCounts].filter(([, h]) => h.n > 1).sort((a, b) => a[1].y - b[1].y)) {
+		const w = Math.max(64, textWidth(`${h.n} waiting`, pillFont) + 14);
+		let right = h.x;
+		for (let tries = 0; tries < 6; tries++) {
+			const r = { x: right - w, y: h.y - pillH / 2, w, h: pillH };
+			const hit = taken.find((o) => o.x < r.x + r.w && o.x + o.w > r.x && o.y < r.y + r.h && o.y + o.h > r.y);
+			if (!hit) {
+				if (r.x >= h.left + 2) {
+					taken.push(r);
+					pills.push({ t, x: right, y: h.y, n: h.n });
+				}
+				break;
+			}
+			right = hit.x - 4;
+		}
 	}
 
 	const flashTargets = new Map<string, Flash>();
@@ -654,7 +723,7 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 									style={{ fill: color, stroke: color }}
 									class={selected === flight.id ? "selected" : ""}
 								/>
-								{rect!.w > 70 && rect!.h >= 10 && c.status !== "holding" && tagFits(rect!, flight.code) && (
+								{coded.has(c.id) && (
 									<text x={rect!.x + rect!.w - 4} y={labelY(rect!)} class="claim-tag" style={{ fill: color }}>
 										{flight.code}
 									</text>
@@ -668,13 +737,18 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 				</g>
 			</svg>
 			{active.map((f) => {
-				if (hidden.has(f.id)) return null;
+				// A plane off the map comes back where it is, not flying in from where it was.
+				if (hidden.has(f.id)) {
+					headings.current.delete(f.id);
+					return null;
+				}
 				const p = positions.get(f.id)!;
 				const agent = agents[f.agentId];
 				const intent = intents[f.intentId];
 				const prev = headings.current.get(f.id);
 				let angle = prev?.angle ?? -35;
 				if (prev && (Math.abs(prev.x - p.x) > 4 || Math.abs(prev.y - p.y) > 4)) angle = (Math.atan2(p.y - prev.y, p.x - prev.x) * 180) / Math.PI + 90;
+				if (prev && (prev.x !== p.x || prev.y !== p.y)) moved.current.push(f.code);
 				headings.current.set(f.id, { x: p.x, y: p.y, angle });
 				return (
 					<div
@@ -707,13 +781,16 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 					</div>
 				);
 			})}
-			{[...holdCounts.entries()]
-				.filter(([, h]) => h.n > 1)
-				.map(([t, h]) => (
-					<div key={`hc-${t}`} class="holdcount" style={{ left: `${h.x - 64}px`, top: `${h.y + APRON - 8}px` }}>
-						{h.n} waiting
-					</div>
-				))}
+			{apronMore && (
+				<div class="holdcount apron-more" style={{ left: `${apronMore.x}px`, top: `${APRON / 2 - 4}px` }}>
+					{apronMore.n} more<span class="sr-only"> taxiing</span>
+				</div>
+			)}
+			{pills.map((h) => (
+				<div key={`hc-${h.t}`} class="holdcount" style={{ left: `${h.x}px`, top: `${h.y + APRON}px` }}>
+					{h.n} waiting
+				</div>
+			))}
 			{hover && (
 				<div class="hovercard" style={{ left: `${cardX}px`, top: `${Math.min(hover.y + APRON, size.h - 64)}px` }}>
 					<div class="mono">{hover.target}</div>

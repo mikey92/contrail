@@ -741,12 +741,19 @@ code {
 	fill: var(--hold) !important;
 }
 /* Drawn over the planes: it stands for the ones not drawn around the spot. */
+/* Taxiing planes that don't fit the apron, counted in its last place. */
+.holdcount.apron-more {
+	background: var(--surface);
+	border-color: var(--line-2);
+	color: var(--ink-2);
+}
+/* Anchored by its right end (or, in the apron, its middle) and sized by its text, so it grows with it. */
 .holdcount {
 	position: absolute;
 	z-index: 6;
 	min-width: 64px;
-	height: 16px;
-	padding: 0 6px;
+	padding: 1px 6px;
+	transform: translate(-100%, -50%);
 	border-radius: var(--r-m);
 	background: var(--hold-bg);
 	border: 1px solid var(--hold-line);
@@ -754,10 +761,13 @@ code {
 	color: var(--hold-text);
 	font-size: 0.6875rem;
 	font-weight: 600;
-	line-height: 14px;
+	line-height: 1.25;
 	text-align: center;
 	white-space: nowrap;
 	pointer-events: none;
+}
+.holdcount.apron-more {
+	transform: translate(-50%, -50%);
 }
 .flash {
 	fill: none;
@@ -807,6 +817,11 @@ code {
 	transition: transform 1.6s cubic-bezier(0.45, 0.05, 0.25, 1);
 	cursor: default;
 	z-index: 5;
+}
+/* On the move a plane takes no taps, and flies over the planes at rest. */
+.plane[data-moving] {
+	pointer-events: none;
+	z-index: 6;
 }
 .plane > .orbit,
 .plane > .steady {
