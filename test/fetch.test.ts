@@ -12,7 +12,14 @@ let server: Server;
 let base: string;
 let packBytes = 0;
 
-const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } }).trim();
+// No background maintenance: an auto gc packing a repo's loose objects while `git clone` copies them
+// fails the clone ("failed to copy file … No such file or directory").
+const git = (cwd: string, ...args: string[]) =>
+	execFileSync("git", ["-c", "gc.auto=0", "-c", "maintenance.auto=false", ...args], {
+		cwd,
+		encoding: "utf8",
+		env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" },
+	}).trim();
 
 /** A bare repo whose main has `commits` commits that each rewrite one file. */
 function makeRepo(name: string, commits: number) {
