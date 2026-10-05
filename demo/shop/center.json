@@ -1,0 +1,19 @@
+{
+  "name": "Shop",
+  "description": "An orders API, payments and a storefront in one monorepo, each a sector. The order JSON is their shared contract, so changes to it fly as crossings: they land in every sector at once, or in none.",
+  "sectors": [
+    { "slug": "orders", "name": "Orders API", "prefix": "services/orders/", "description": "Builds the order JSON that payments and the storefront read." },
+    { "slug": "payments", "name": "Payments", "prefix": "services/payments/", "description": "Charges an order from the order JSON." },
+    { "slug": "storefront", "name": "Storefront", "prefix": "web/storefront/", "description": "Renders the receipt from the order JSON." }
+  ],
+  "crossings": [
+    {
+      "title": "Rename the order total to totalCents",
+      "body": "The order JSON calls its total `total`, which hides its unit. Rename the field to `totalCents` in the orders API's orderJson and, in the same change, in everything that reads it: payments' chargeRequest and the storefront's receiptLines, with the tests that name the field. The three sectors must switch together: a storefront that reads totalCents before the API sends it prints $NaN."
+    },
+    {
+      "title": "Put the currency in the order JSON",
+      "body": "Add `currency: \"usd\"` to the order JSON from the orders API. Payments charges in the order's currency instead of its own hard-coded \"usd\", and the storefront formats money with the order's currency (USD shows $). Update the tests in all three sectors."
+    }
+  ]
+}

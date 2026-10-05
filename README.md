@@ -173,6 +173,23 @@ Center commits at most about once a second, so the monorepo's history stays read
 
 ![The monorepo replay 1:34 into the run: 336 agents in the air and 127 holding across 10 sectors, 1,228 of 3,000 changes landed, 12 landings per second](docs/center.png)
 
+**Crossings** keep a change that spans sectors whole: an API and its client, say, must change together
+or not at all. An agent takes off at the Center instead of in one sector. Its workspace is a fork of the
+monorepo trunk, and in each sector it touches it flies a *leg*, a flight there like any other, so it
+claims code, holds for code that others hold and leaves its plan in that sector's contrail. Landing is a
+two-phase commit. The Center splits the change by sector, each part as one commit on that sector's own
+history. Every sector's runway merges its part onto that sector's trunk, runs that sector's tests and
+holds the result unpushed, while that sector's other landings wait. Only when every sector is ready do
+all parts land, and the monorepo trunk gets one commit for the crossing. If one sector reports a
+conflict, failing tests or code another flight holds, every part is let go and no trunk moves. One
+crossing lands at a time, so two crossings never wait on each other's runways.
+
+[`scripts/crossing-smoke.mjs`](scripts/crossing-smoke.mjs) checks this against the live deployment
+(27 checks): a crossing that lands in two sectors as one monorepo commit; one whose tests fail in one
+sector, so neither sector moves until it is fixed; one that holds behind a sector's own flight, is turned
+away while it lacks that clearance, and lands after the flight lands and a real conflict is resolved; and
+a change outside every sector, which is refused.
+
 ## Built on Cloudflare
 
 ```mermaid
@@ -203,7 +220,8 @@ flowchart LR
     and the event stream. It hibernates WebSockets for the radar.
   - The **Runway** keeps a warm in-memory clone of trunk and is its only writer, so landings are serialized.
   - **Edge agents** are agents that live entirely on Cloudflare.
-  - The **Center** composes a sectored monorepo's trunk from its sectors' trunks (see [Scaling](#scaling-to-100000-agents)).
+  - The **Center** composes a sectored monorepo's trunk from its sectors' trunks, and lands crossings,
+    changes that span sectors, in every sector or none (see [Scaling](#scaling-to-100000-agents)).
 - **Dynamic Workers** run the test suite of every candidate tree (one run per landing train) in a fresh,
   network-isolated isolate with a CPU limit, cached by git tree id. The gate's configuration comes from
   trunk, never from the change being judged, and a tree that drops every test fails.
@@ -313,11 +331,22 @@ with the sector slugs and the monorepo's full `files` creates the Center, and `/
 `/c/<slug>?replay=/replays/<slug>.jsonl.gz` plays back a recorded run; each sector card opens that
 sector's radar replay at the same moment.
 
+`node scripts/create-center.mjs shop demo/shop` builds a center from a directory with a `center.json`:
+[`demo/shop`](demo/shop) is an orders API, payments and a storefront that share one order JSON, with
+crossings filed for changes to it.
+
+Crossings are flown through the Center. `POST /api/c/<slug>/intents` files work that spans sectors, and
+`POST /api/c/<slug>/join` (admin key) returns an agent key and the MCP command for `/mcp/c/<slug>`. The
+Center's tools mirror a project's: `take_off`, `request_clearance` and `why` take monorepo paths and go to
+the sector that owns each one, and `request_landing` lands the crossing in every sector or in none. The
+same tools are at `/api/c/<slug>/agent/<tool>` over REST.
+
 ### Test
 
 ```bash
 npm test                     # unit tests: clearances, planning, merge, symbols, the test gate
 node scripts/smoke.mjs       # end to end against $CONTRAIL_URL; creates and deletes two private projects
+node scripts/crossing-smoke.mjs  # crossings end to end; creates and deletes a private center with two sectors
 ```
 
 ### Bring your own codebase
@@ -349,16 +378,17 @@ reachable from the test files are loaded; `modules` maps bare package names to v
 src/
   index.ts            Worker: REST API, MCP endpoint, WebSocket, static UI
   mcp.ts              stateless MCP server (Streamable HTTP)
-  agent-api.ts        the 12 agent tools, shared by MCP and REST
+  agent-api.ts        the agent tools (12 for a project, 10 for a Center's crossings), shared by MCP and REST
   tower/              Tower DO: flights, clearances, flight planning, landing queue, contrail, radar events, review policy
   runway/             Runway DO: warm trunk clone, 3-way tree merge, clearance check, Dynamic Worker test gate, notes
-  center/             Center DO: composes sector trunks into one monorepo trunk
+  center/             Center DO: composes sector trunks into one monorepo trunk; lands crossings in every sector or none
   edge/               edge agents: Durable Object + in-memory git workspace + Workers AI loop
   git/                symbol extraction, diff3 merge with insert/insert union, in-memory fs
 ui/                   the Radar (Preact + Vite)
 demo/bookshop/        demo codebase + 16 intents
 demo/ramda/           a real codebase: Ramda 0.32 (MIT) with its mocha suite + 16 intents
 demo/stress/          load-test codebase (24 shared counters) + the 300 scripted intents
+demo/shop/            a monorepo in three sectors that share one contract, + crossings that change it
 demo/swarm/           launcher for real Claude Code / Codex agents
 scripts/              project creation, smoke test, stress intents and verifier, radar stream recorder
 video/                the demo video: narration (Workers AI text-to-speech), slides, filmed scenes, compositing
@@ -373,7 +403,8 @@ video/                the demo video: narration (Workers AI text-to-speech), sli
 - The test gate runs JavaScript test suites (exported test functions, or mocha-style `describe`/`it`)
   in Dynamic Workers. Other stacks would use the Sandbox SDK (containers) with the same Artifacts remotes.
 - One Runway per trunk serializes landings; sectors give a monorepo one Runway per directory (see
-  [Scaling](#scaling-to-100000-agents)). A change that spans sectors lands as one change per sector, not atomically.
+  [Scaling](#scaling-to-100000-agents)). Crossings land one at a time per monorepo, and each of a
+  crossing's sectors holds its runway for it until every sector is ready (at most a minute).
 - Agent keys don't expire yet; the admin key can delete a project, which revokes them.
 
 ## License

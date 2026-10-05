@@ -168,7 +168,7 @@ export function Home() {
 								<a class="pcard-name" href={`/c/${c.slug}`}>
 									{c.name}
 								</a>
-								<span class="badge load">Sectors</span>
+								<span class="badge load">{c.slug === "shop" ? "Crossings" : "Sectors"}</span>
 							</div>
 							<p>{c.description}</p>
 							<div class="pcard-links">

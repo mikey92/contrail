@@ -29,7 +29,7 @@ import {
 	writeFlatTree,
 } from "../runway/gitops";
 import type { AgentKind, CenterAgent, CenterInfo, CenterIntent, CenterSnapshot, ContrailKind, Crossing, CrossingLeg, CrossingStatus, Landing, SectorInfo } from "../shared/types";
-import { CROSSING_PROTOCOL, workspaceInstructions } from "../tower/briefing";
+import { conventionalTestCommand, CROSSING_PROTOCOL, workspaceInstructions } from "../tower/briefing";
 import { normalizeTarget } from "../tower/clearance";
 import type { HoldInfo, RadioMessage, Workspace } from "../tower/tower";
 import { callsignFor, cloneUrl, errorMessage, now, randomId, randomToken, repoSafe, sha256, sleep } from "../util";
@@ -430,7 +430,7 @@ export class Center extends DurableObject<Env> {
 		await this.ctx.storage.put<unknown>({ [INTENT(intent.seq)]: intent, [AGENT(agent.id)]: agent, [CROSSING(seq)]: cx });
 		try {
 			cx.repo = await this.forkTrunk(info, code, `${code} · ${agent.callsign} · ${intent.title}`);
-			const [workspace, upstream] = await Promise.all([this.mintWorkspace(cx.repo, "write"), this.mintWorkspace(info.trunkRepo, "read")]);
+			const [workspace, upstream, testCommand] = await Promise.all([this.mintWorkspace(cx.repo, "write"), this.mintWorkspace(info.trunkRepo, "read"), this.testCommand(info.trunkRepo)]);
 			const fork = await this.env.ARTIFACTS.get(cx.repo);
 			cx.base = (await fork.log({ ref: "main", limit: 1 }).finally(() => fork[Symbol.dispose]?.()))[0]?.hash ?? "";
 			await this.saveCrossing(cx);
@@ -440,7 +440,7 @@ export class Center extends DurableObject<Env> {
 				sectors: info.sectors.map((s) => ({ name: s.name, prefix: s.prefix })),
 				workspace,
 				upstream,
-				setup: workspaceInstructions({ cloneUrl: workspace.cloneUrl, upstreamUrl: upstream.cloneUrl, dir: code.toLowerCase(), flightCode: code, callsign: agent.callsign }),
+				setup: workspaceInstructions({ cloneUrl: workspace.cloneUrl, upstreamUrl: upstream.cloneUrl, dir: code.toLowerCase(), flightCode: code, callsign: agent.callsign, testCommand: testCommand ?? undefined }),
 				briefing: CROSSING_PROTOCOL,
 				radio: [] as RadioMessage[],
 			};
@@ -452,6 +452,21 @@ export class Center extends DurableObject<Env> {
 			intent.crossing = null;
 			await this.ctx.storage.put(INTENT(intent.seq), intent);
 			throw err;
+		}
+	}
+
+	/** How the monorepo runs its tests (`npm test`, a test/run.mjs runner), told to crossing agents at take-off. */
+	private async testCommand(trunkRepo: string): Promise<string | null> {
+		const repo = await this.env.ARTIFACTS.get(trunkRepo);
+		try {
+			return await conventionalTestCommand(async (path) => {
+				const blob = await repo.readFile({ ref: "main", path }).catch(() => null);
+				return blob ? new Response(blob).text() : null;
+			});
+		} catch {
+			return null;
+		} finally {
+			repo[Symbol.dispose]?.();
 		}
 	}
 
