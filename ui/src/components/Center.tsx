@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { CenterInfo, CenterSnapshot, Crossing, CrossingLeg, SectorSummary } from "../../../src/shared/types";
+import { useTitle } from "../a11y";
 import { duration, fetchRecording, relTime, SampleReplay, useReplay } from "../store";
 import { Command } from "./Detail";
-import { Logo } from "./Icons";
+import { Dialog } from "./Dialog";
+import { Icon, Logo } from "./Icons";
 import { ReplayBar } from "./ReplayBar";
 
 const n = (x: number) => x.toLocaleString("en-US");
@@ -170,15 +172,21 @@ function CenterReplay({ slug, path, params }: { slug: string; path: string; para
 
 function Boot({ text, link = false }: { text: preact.ComponentChildren; link?: boolean }) {
 	return (
-		<div class="boot">
+		<main class="boot" aria-busy={!link}>
 			<Logo size={34} />
-			<div>{text}</div>
+			{link ? (
+				<h1 class="boot-text">{text}</h1>
+			) : (
+				<div class="boot-text" role="status">
+					{text}
+				</div>
+			)}
 			{link && (
 				<a class="btn ghost" href="/">
-					See all airspaces
+					See All Airspaces
 				</a>
 			)}
-		</div>
+		</main>
 	);
 }
 
@@ -214,16 +222,17 @@ function CenterView({
 	// From the first take-off to the last landing, to the nearest second (as the radar's end card counts).
 	const span = starts.length && ends.length ? Math.round((Math.max(...ends) - Math.min(...starts)) / 1000) * 1000 : 0;
 	const recording = RECORDINGS[slug];
+	useTitle(`${snap.center.name}${replay ? " (replay)" : ""}`);
 
 	return (
 		<div class="center-page">
 			<header class="topbar">
-				<a class="brand" href="/" title="All airspaces">
+				<a class="brand" href="/" title="All airspaces" aria-label="Contrail: all airspaces">
 					<Logo />
 					<span>Contrail</span>
 				</a>
 				<div class="proj">
-					<div class="proj-name">{snap.center.name}</div>
+					<h1 class="proj-name">{snap.center.name}</h1>
 					<div class="proj-sub">
 						<span class="mono">monorepo @ {snap.head?.slice(0, 8) ?? "—"}</span> · {snap.sectors.length} sectors · {n(snap.compositions)} composition{snap.compositions === 1 ? "" : "s"}
 					</div>
@@ -240,30 +249,34 @@ function CenterView({
 						title={done ? "Landed intents divided by the time from the first take-off to the last landing" : "Landings per second over the last 30 seconds"}
 					/>
 				</div>
-				{replay ? (
-					<div class="live replay" title="A recorded run, played back in your browser">
+				{replay && (
+					<div class="live replay" title="A recorded run, played back in your browser" role="status">
 						{replay.ended ? "Replay ended" : "Replay"}
 					</div>
-				) : (
-					recording && (
-						<a class="btn ghost" href={`/c/${slug}?replay=${recording}&speed=4`} title="Watch the recorded run of every sector">
-							Watch the run
-						</a>
-					)
 				)}
-				<button class="btn ghost" onClick={openClone} title="Clone the composed monorepo trunk">
-					Clone monorepo
-				</button>
+				<div class="actions">
+					{!replay && recording && (
+						<a class="btn ghost" href={`/c/${slug}?replay=${recording}&speed=4`} title="Watch the recorded run of every sector">
+							<Icon name="play" size={13} />
+							Watch the Run
+						</a>
+					)}
+					<button class="btn ghost" onClick={openClone} title="Clone the composed monorepo trunk">
+						<Icon name="clone" size={15} />
+						Clone Monorepo
+					</button>
+				</div>
 			</header>
 			{replay && <ReplayBar replay={replay} />}
 
-			<main class="wrap center-main">
+			<main class="wrap center-main" id="main">
 				<p class="center-lede">
 					Each sector owns one directory of this monorepo and lands through its own runway, so sectors land in parallel. The Center folds every sector's
 					trunk into one monorepo trunk as soon as it moves{snap.composedAt ? `: last composed ${relTime(snap.composedAt, now)}` : ""}
 					{snap.behind ? `, ${snap.behind} sector${snap.behind > 1 ? "s" : ""} to fold in` : ""}.{done && span ? ` All ${n(landed)} intents landed in ${duration(span)}.` : ""}
 					{replay && sectorHref ? " Open a sector to watch its radar from this moment." : ""}
 				</p>
+				<h2 class="sr-only">Sectors</h2>
 				<div class="sectors">
 					{snap.sectors.map((s) => {
 						const m = s.summary;
@@ -274,7 +287,7 @@ function CenterView({
 									<span class="sector-name">{s.name}</span>
 									<span class="mono sector-prefix">{s.prefix}</span>
 								</div>
-								<div class="sector-bar" title={`${pct}% landed`}>
+								<div class="sector-bar" title={`${pct}% landed`} role="progressbar" aria-label={`${s.name}: intents landed`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
 									<i style={{ width: `${pct}%` }} />
 								</div>
 								{m ? (
@@ -298,17 +311,12 @@ function CenterView({
 			</main>
 
 			{clone && (
-				<div class="why-backdrop" onClick={() => setClone(null)}>
-					<div class="why connect" onClick={(e) => e.stopPropagation()}>
-						<button class="close" onClick={() => setClone(null)}>
-							×
-						</button>
-						<div class="why-kicker">Read-only, valid for an hour</div>
-						<h3>Clone the monorepo</h3>
+				<Dialog kicker="Read-only, valid for an hour" title="Clone the monorepo" onClose={() => setClone(null)}>
+					<div class="connect">
 						<p>The composed trunk: every sector's directory at its latest landing. Each commit names the sector heads it folded in.</p>
 						<Command text={clone.join("\n")} />
 					</div>
-				</div>
+				</Dialog>
 			)}
 		</div>
 	);
@@ -341,7 +349,7 @@ function Crossings({ snap, now }: { snap: CenterSnapshot; now: number }) {
 	const landed = snap.crossings.filter((cx) => cx.status === "landed").length;
 	return (
 		<section class="crossings">
-			<h2 class="crossings-title">
+			<h2 class="crossings-title" id="crossings">
 				Crossings{" "}
 				<span class="crossings-count">
 					{landed} landed{snap.openIntents ? ` · ${snap.openIntents} waiting for an agent` : ""}
@@ -449,8 +457,8 @@ function RateChart({ points, t, total }: { points: RatePoint[]; t: number; total
 				<div class="rc-sub">
 					Peak {peak.rate.toFixed(1)} at {clockOf(peak.t)}, over the 30 seconds before each point. The same load test on one trunk averaged {ONE_TRUNK_RATE.toFixed(2)}.
 				</div>
-				<button class="rc-toggle" onClick={() => setTable(!table)} aria-pressed={table}>
-					{table ? "Chart" : "Table"}
+				<button class="rc-toggle" onClick={() => setTable(!table)}>
+					{table ? "Show Chart" : "Show Table"}
 				</button>
 			</figcaption>
 			{table ? (

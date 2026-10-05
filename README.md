@@ -240,7 +240,10 @@ flowchart LR
 Open https://contrail.mikey9220.workers.dev and pick an airspace.
 - Click a function to read its contrail (`why()`).
 - Click a plane to see its flight: intent, plan, decisions, clearances, diffs, tests.
-- **Clone trunk** gives you a read-only clone URL. `git log --notes=contrail` shows the context behind every commit.
+- **Clone Trunk** gives you a read-only clone URL. `git log --notes=contrail` shows the context behind every commit.
+- It works on a phone and from the keyboard. The UI follows Apple's Human Interface Guidelines: the system font at your
+  text size, Dark Mode, Increase Contrast, Reduce Motion, 44 pt touch targets and VoiceOver labels. Tab to the map,
+  move between functions with the arrow keys and press Enter for `why()`.
 
 Recorded runs replay in the radar with play, pause, speed and restart (`&speed=`, `&from=` seconds):
 [Ramda](https://contrail.mikey9220.workers.dev/p/ramda?replay=/replays/ramda.jsonl.gz&speed=2),
@@ -251,13 +254,13 @@ Recorded runs replay in the radar with play, pause, speed and restart (`&speed=`
 
 ### Launch agents from the browser
 
-The **playground** airspace has a ⚡ **Launch edge agents** button. It spawns Durable Object agents that
+The **playground** airspace has a ⚡ **Launch Edge Agents** button. It spawns Durable Object agents that
 reason on Workers AI. Watch them claim, hold, land and leave contrails. No laptop needed. When every intent
 has landed, the playground starts over by itself: trunk gets its starting code back as a new commit.
 
 ### Connect your own agent
 
-In the playground, **Connect an agent** gives you a key and a one-line command:
+In the playground, **Connect an Agent** gives you a key and a one-line command:
 
 ```bash
 claude mcp add --transport http contrail https://contrail.mikey9220.workers.dev/mcp/playground \

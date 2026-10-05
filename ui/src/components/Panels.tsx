@@ -1,5 +1,6 @@
 import { useState } from "preact/hooks";
 import type { Agent, Flight, Intent, Landing, RadarEvent } from "../../../src/shared/types";
+import { pressable } from "../a11y";
 import { ACTIVE_STATUSES, relTime, statusLabel } from "../store";
 import { KindBadge } from "./Airspace";
 import { eventIcon, Icon } from "./Icons";
@@ -61,7 +62,7 @@ export function Feed({
 	return (
 		<div class="feed">
 			<div class="feed-filter">
-				<div class="seg" role="group" aria-label="Show">
+				<div class="seg" role="group" aria-label="Events to show">
 					<button class={all ? "" : "on"} aria-pressed={!all} onClick={() => setAll(false)}>
 						Key events
 					</button>
@@ -79,8 +80,8 @@ export function Feed({
 				const flight = e.flightId ? flights[e.flightId] : null;
 				const agent = flight ? agents[flight.agentId] : e.agentId ? agents[e.agentId] : null;
 				return (
-					<div key={e.seq} class={`ev ev-${e.type.replace(/\./g, "-")} ${e.flightId ? "go" : ""}`} onClick={() => e.flightId && onSelect(e.flightId)}>
-						<span class="ev-icon">
+					<div key={e.seq} class={`ev ev-${e.type.replace(/\./g, "-")} ${e.flightId ? "go" : ""}`} {...(e.flightId ? pressable(() => onSelect(e.flightId!)) : {})}>
+						<span class="ev-icon" aria-hidden="true">
 							<Icon name={eventIcon(e.type)} />
 						</span>
 						<div class="ev-body">
@@ -106,9 +107,9 @@ export function FlightList({ flights, agents, intents, onSelect }: { flights: Re
 		const a = agents[f.agentId];
 		const i = intents[f.intentId];
 		return (
-			<div key={f.id} class={`fcard st-border-${f.status}`} onClick={() => onSelect(f.id)}>
+			<div key={f.id} class={`fcard st-border-${f.status}`} {...pressable(() => onSelect(f.id))}>
 				<div class="fcard-top">
-					<span class="dot" style={{ background: a?.color }} />
+					<span class="dot" style={{ background: a?.color }} aria-hidden="true" />
 					<KindBadge kind={a?.kind} />
 					<b>{a?.callsign}</b>
 					<span class="mono muted">{f.code}</span>
@@ -125,12 +126,12 @@ export function FlightList({ flights, agents, intents, onSelect }: { flights: Re
 	};
 	return (
 		<div class="flights">
-			<div class="section-title">
+			<h2 class="section-title">
 				In the air <span class="n">{active.length}</span>
-			</div>
+			</h2>
 			{active.map(card)}
 			{active.length === 0 && <div class="empty">No active flights.</div>}
-			<div class="section-title">Landed and closed</div>
+			<h2 class="section-title">Landed and closed</h2>
 			{done.map(card)}
 		</div>
 	);
@@ -144,18 +145,18 @@ export function IntentBoard({ intents, flights, agents, onSelect }: { intents: R
 			<div class="progress-label">
 				<b>{landed}</b> of {list.length} intents landed
 			</div>
-			<div class="progress">
+			<div class="progress" role="progressbar" aria-label="Intents landed" aria-valuemin={0} aria-valuemax={list.length} aria-valuenow={landed}>
 				<div class="bar" style={{ width: `${list.length ? (landed / list.length) * 100 : 0}%` }} />
 			</div>
 			{list.map((i) => {
 				const f = i.flightId ? flights[i.flightId] : null;
 				const a = f ? agents[f.agentId] : null;
 				return (
-					<div key={i.id} class={`irow is-${i.status} ${f ? "go" : ""}`} onClick={() => f && onSelect(f.id)}>
+					<div key={i.id} class={`irow is-${i.status} ${f ? "go" : ""}`} {...(f ? pressable(() => onSelect(f.id)) : {})}>
 						<span class="mono muted">INT-{i.seq}</span>
 						<span class="ititle">{i.title}</span>
 						<span class={`ist ist-${i.status === "assigned" && f ? f.status : i.status}`}>{i.status === "assigned" && f ? statusLabel(f.status) : i.status}</span>
-						{a && <span class="dot" title={a.callsign} style={{ background: a.color }} />}
+						{a && <span class="dot" title={a.callsign} style={{ background: a.color }} aria-hidden="true" />}
 					</div>
 				);
 			})}
@@ -168,7 +169,7 @@ export function Runway({ landings, flights, agents, intents, onSelect }: { landi
 	const approach = all.filter((l) => ["queued", "merging", "verifying", "review"].includes(l.status));
 	const landed = all.filter((l) => l.status === "landed").slice(-14);
 	return (
-		<div class="runway">
+		<section class="runway" aria-label="Runway">
 			<div class="rw-label">
 				<span>Runway</span>
 				<span class="muted">lands on main</span>
@@ -179,7 +180,7 @@ export function Runway({ landings, flights, agents, intents, onSelect }: { landi
 					const f = flights[l.flightId];
 					const a = f && agents[f.agentId];
 					return (
-						<div key={l.id} class={`rw-chip ${l.status}`} style={{ "--c": a?.color } as any} onClick={() => f && onSelect(f.id)}>
+						<div key={l.id} class={`rw-chip ${l.status}`} style={{ "--c": a?.color } as any} {...(f ? pressable(() => onSelect(f.id)) : {})}>
 							<span class="mono">{f?.code}</span> {l.status === "queued" ? "on approach" : l.status === "review" ? "awaiting review" : l.status === "verifying" ? "testing" : l.status}
 						</div>
 					);
@@ -193,7 +194,7 @@ export function Runway({ landings, flights, agents, intents, onSelect }: { landi
 					const plus = l.changes.reduce((s, c) => s + c.additions, 0);
 					const minus = l.changes.reduce((s, c) => s + c.deletions, 0);
 					return (
-						<div key={l.id} class="rw-commit" style={{ "--c": a?.color } as any} onClick={() => f && onSelect(f.id)}>
+						<div key={l.id} class="rw-commit" style={{ "--c": a?.color } as any} {...(f ? pressable(() => onSelect(f.id)) : {})}>
 							<div class="rw-dot" />
 							<div class="rw-sha mono">{l.trunkAfter?.slice(0, 7)}</div>
 							<div class="rw-title">{i ? `INT-${i.seq} ${i.title}` : f?.code}</div>
@@ -207,6 +208,6 @@ export function Runway({ landings, flights, agents, intents, onSelect }: { landi
 				})}
 				{landed.length === 0 && <div class="empty">Nothing has landed yet.</div>}
 			</div>
-		</div>
+		</section>
 	);
 }

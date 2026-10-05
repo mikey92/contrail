@@ -23,7 +23,7 @@ export function ReplayBar({ replay }: { replay: ReplayClock }) {
 	};
 	const action = ended ? "Watch again" : playing ? "Pause" : "Play";
 	return (
-		<div class="replaybar" role="group" aria-label="Replay controls">
+		<section class="replaybar" aria-label="Replay controls">
 			<button class="rb-btn" onClick={() => replay.toggle()} title={action} aria-label={action}>
 				<Icon name={playing ? "pause" : "play"} />
 			</button>
@@ -47,13 +47,13 @@ export function ReplayBar({ replay }: { replay: ReplayClock }) {
 				<div class="rb-knob" style={{ left: `${pct}%` }} />
 			</div>
 			<span class="rb-time">{duration(total)}</span>
-			<div class="seg rb-speeds" role="group" aria-label="Speed">
+			<div class="seg rb-speeds" role="group" aria-label="Playback speed">
 				{speeds.map((v) => (
-					<button key={v} class={v === replay.speed ? "on" : ""} aria-pressed={v === replay.speed} onClick={() => replay.setSpeed(v)}>
+					<button key={v} class={v === replay.speed ? "on" : ""} aria-pressed={v === replay.speed} aria-label={`${v} times speed`} onClick={() => replay.setSpeed(v)}>
 						{v}×
 					</button>
 				))}
 			</div>
-		</div>
+		</section>
 	);
 }

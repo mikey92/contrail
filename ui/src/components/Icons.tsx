@@ -24,6 +24,7 @@ const PATHS: Record<string, string> = {
 	read: "M6.9 2.4a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9zM10.2 10.2l3.6 3.6",
 	play: "M4.6 2.9v10.2c0 .5.5.8.9.5l7.6-5.1c.4-.3.4-.8 0-1.1L5.5 2.4c-.4-.3-.9 0-.9.5z",
 	pause: "M4.2 2.8h2.4v10.4H4.2zM9.4 2.8h2.4v10.4H9.4z",
+	clone: "M8 2.4v7.8M4.8 7 8 10.2 11.2 7M3 12.8h10",
 };
 
 /** Solid shapes; the other icons are drawn as lines. */
@@ -77,10 +78,10 @@ export function Logo({ size = 26 }: { size?: number }) {
 	return (
 		<svg class="logo" width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
 			<g transform="rotate(45 16 16)">
-				<path d="M12.6 19.5v10M19.4 19.5v10" stroke="#e8590c" stroke-width="2.2" stroke-linecap="round" />
+				<path class="contrails" d="M12.6 19.5v10M19.4 19.5v10" stroke-width="2.2" stroke-linecap="round" />
 				<path
+					class="mark"
 					d="M16 2.2c.9 0 1.6.8 1.6 1.8v6.9l8.4 5.1v2.3l-8.4-2.6v5.2l2.3 1.8V25L16 23.9 12.1 25v-2.1l2.3-1.8v-5.2L6 18.4v-2.3l8.4-5.1V4c0-1 .7-1.8 1.6-1.8z"
-					fill="#17191d"
 				/>
 			</g>
 		</svg>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "preact/hooks";
+import { useTitle } from "../a11y";
 import { ACTIVE_STATUSES, duration, type RadarState, type Replay, useRadar, useReplay } from "../store";
 import { Airspace } from "./Airspace";
 import { Icon, Logo } from "./Icons";
@@ -20,6 +21,7 @@ export function Radar({ slug, fixture }: { slug: string; fixture: string | null 
 	const [endCard, setEndCard] = useState(true);
 	// A recorded run (or a fixture): nothing on screen is happening now, and nothing can be decided here.
 	const recorded = fixture !== null || new URLSearchParams(location.search).has("replay");
+	useTitle(s.project ? `${s.project.name}${recorded ? " (replay)" : ""}` : null);
 
 	// Escape closes the topmost thing that is open: a dialog first, then the flight drawer.
 	useEffect(() => {
@@ -42,34 +44,36 @@ export function Radar({ slug, fixture }: { slug: string; fixture: string | null 
 
 	if (s.failed) {
 		return (
-			<div class="boot">
+			<main class="boot">
 				<Logo size={34} />
-				<div>This replay could not be loaded.</div>
+				<h1 class="boot-text">This replay could not be loaded.</h1>
 				<a class="btn ghost" href="/">
-					See all airspaces
+					See All Airspaces
 				</a>
-			</div>
+			</main>
 		);
 	}
 	if (s.missing) {
 		return (
-			<div class="boot">
+			<main class="boot">
 				<Logo size={34} />
-				<div>
+				<h1 class="boot-text">
 					There is no public airspace called <span class="mono">{slug}</span>.
-				</div>
+				</h1>
 				<a class="btn ghost" href="/">
-					See all airspaces
+					See All Airspaces
 				</a>
-			</div>
+			</main>
 		);
 	}
 	if (!s.ready) {
 		return (
-			<div class="boot">
+			<main class="boot" aria-busy="true">
 				<Logo size={34} />
-				<div>Contacting the tower…</div>
-			</div>
+				<div class="boot-text" role="status">
+					Contacting the tower…
+				</div>
+			</main>
 		);
 	}
 
@@ -82,16 +86,16 @@ export function Radar({ slug, fixture }: { slug: string; fixture: string | null 
 
 	return (
 		<div class="radar">
-			<header class="topbar">
-				<a class="brand" href="/" title="All airspaces">
+			<header class={`topbar${s.project?.playground ? " has-launch" : ""}`}>
+				<a class="brand" href="/" title="All airspaces" aria-label="Contrail: all airspaces">
 					<Logo />
 					<span>Contrail</span>
 				</a>
 				<div class="proj">
-					<div class="proj-name">
+					<h1 class="proj-name">
 						{s.project?.name}
 						{s.project?.center && <CenterLink center={s.project.center} replay={replay} />}
-					</div>
+					</h1>
 					<div class="proj-sub" title={`Trunk is at ${s.trunk.head ?? "—"}. ${s.stats.repos} Artifacts repositories (trunk and one per flight). ${s.stats.unioned} parallel inserts merged automatically.`}>
 						<span class="mono">main @ {s.trunk.head?.slice(0, 8) ?? "—"}</span> · {s.stats.repos} Artifacts repos · {s.stats.unioned} auto-merged
 					</div>
@@ -109,30 +113,38 @@ export function Radar({ slug, fixture }: { slug: string; fixture: string | null 
 					<Stat label="Planned around" value={s.stats.planned ?? 0} tone="plan" title="Take-offs the tower routed to other work because that code was already in the air." />
 				</div>
 				{recorded ? (
-					<div class="live replay" title="A recorded run, played back in your browser">
+					<div class="live replay" title="A recorded run, played back in your browser" role="status">
 						{ended ? "Replay ended" : "Replay"}
 					</div>
 				) : (
-					<div class={`live ${s.connected ? "on" : ""}`}>{s.connected ? "Live" : "Reconnecting"}</div>
+					<div class={`live ${s.connected ? "on" : ""}`} role="status">
+						{s.connected ? "Live" : "Reconnecting"}
+					</div>
 				)}
-				{s.project?.playground && <LaunchButton slug={slug} />}
-				<button class="btn ghost" onClick={() => setClone(true)} title="Clone trunk with its contrail notes">
-					Clone trunk
-				</button>
-				<button class="btn" onClick={() => setConnect(true)}>
-					Connect an agent
-				</button>
-				<button class="icon-btn" onClick={() => setOperator(true)} title="Operator">
-					<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
-						<circle cx="3.5" cy="8" r="1.3" fill="currentColor" />
-						<circle cx="8" cy="8" r="1.3" fill="currentColor" />
-						<circle cx="12.5" cy="8" r="1.3" fill="currentColor" />
-					</svg>
-				</button>
+				<div class="actions">
+					{s.project?.playground && <LaunchButton slug={slug} />}
+					<button class="btn ghost" onClick={() => setClone(true)} title="Clone trunk with its contrail notes">
+						<Icon name="clone" size={15} />
+						Clone Trunk
+					</button>
+					<button class="btn" onClick={() => setConnect(true)} aria-label="Connect an Agent">
+						<span class="long">Connect an Agent</span>
+						<span class="short" aria-hidden="true">
+							Connect
+						</span>
+					</button>
+					<button class="icon-btn" onClick={() => setOperator(true)} title="Operator" aria-label="Operator controls">
+						<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+							<circle cx="3.5" cy="8" r="1.3" fill="currentColor" />
+							<circle cx="8" cy="8" r="1.3" fill="currentColor" />
+							<circle cx="12.5" cy="8" r="1.3" fill="currentColor" />
+						</svg>
+					</button>
+				</div>
 			</header>
 			{replay && <ReplayBar replay={replay} />}
 
-			<main class="main">
+			<main class="main" id="main">
 				<section class="sky">
 					<Airspace
 						files={s.trunk.files}
@@ -148,22 +160,18 @@ export function Radar({ slug, fixture }: { slug: string; fixture: string | null 
 					<Runway landings={s.landings} flights={s.flights} agents={s.agents} intents={s.intents} onSelect={setSelected} />
 					{replay && ended && endCard && <EndCard s={s} slug={slug} onRestart={() => replay.restart()} onClose={() => setEndCard(false)} />}
 				</section>
-				<section class="side">
-					<nav class="tabs">
-						<button class={tab === "live" ? "on" : ""} onClick={() => setTab("live")}>
-							Live
-						</button>
-						<button class={tab === "flights" ? "on" : ""} onClick={() => setTab("flights")}>
-							Flights <span class="count">{airborne}</span>
-						</button>
-						<button class={tab === "intents" ? "on" : ""} onClick={() => setTab("intents")}>
-							Intents <span class="count">{intents.length - landedIntents}</span>
-						</button>
-						<button class={`${tab === "review" ? "on" : ""} ${reviews ? "attn" : ""}`} onClick={() => setTab("review")}>
-							Review <span class="count">{reviews}</span>
-						</button>
-					</nav>
-					<div class="tab-body">
+				<section class="side" aria-label="Activity">
+					<Tabs
+						tab={tab}
+						onTab={setTab}
+						tabs={[
+							{ id: "live", label: "Live" },
+							{ id: "flights", label: "Flights", count: airborne, countLabel: "in the air" },
+							{ id: "intents", label: "Intents", count: intents.length - landedIntents, countLabel: "open" },
+							{ id: "review", label: "Review", count: reviews, countLabel: "waiting", attn: reviews > 0 },
+						]}
+					/>
+					<div class="tab-body" role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} tabIndex={0}>
 						{tab === "live" && <Feed events={s.events} keyEvents={s.keyEvents} routine={s.routine} flights={s.flights} agents={s.agents} onSelect={setSelected} />}
 						{tab === "flights" && <FlightList flights={s.flights} agents={s.agents} intents={s.intents} onSelect={setSelected} />}
 						{tab === "intents" && <IntentBoard intents={s.intents} flights={s.flights} agents={s.agents} onSelect={setSelected} />}
@@ -208,7 +216,7 @@ function CenterLink({ center, replay }: { center: string; replay: Replay | null 
 	};
 	return (
 		<a class="proj-up" href={`/c/${center}`} onClick={open} title={centerReplay ? "Back to the monorepo's replay, at this moment" : "The monorepo this sector belongs to"}>
-			in {center}
+			<span class="sr-only">, a sector </span>in {center}
 		</a>
 	);
 }
@@ -216,16 +224,16 @@ function CenterLink({ center, replay }: { center: string; replay: Replay | null 
 function LaunchButton({ slug }: { slug: string }) {
 	const [msg, setMsg] = useState<string | null>(null);
 	const launch = async () => {
-		setMsg("launching…");
+		setMsg("Launching…");
 		const res = await fetch(`/api/p/${slug}/edge/launch`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ count: 3 }) });
 		const d = await res.json().catch(() => ({}));
 		setMsg(res.ok ? `${d.launched?.length ?? 0} agents airborne` : (d.error ?? "busy"));
 		setTimeout(() => setMsg(null), 6000);
 	};
 	return (
-		<button class="btn launch" onClick={launch} title="Spawn edge agents (Durable Objects reasoning on Workers AI)">
+		<button class="btn launch" onClick={launch} title="Spawn edge agents (Durable Objects reasoning on Workers AI)" aria-live="polite">
 			<Icon name="bolt" size={14} />
-			{msg ?? "Launch edge agents"}
+			{msg ?? "Launch Edge Agents"}
 		</button>
 	);
 }
@@ -248,17 +256,17 @@ function EndCard({ s, slug, onRestart, onClose }: { s: RadarState; slug: string;
 		<div class="endcard-wrap">
 			<div class="endcard" role="dialog" aria-label="Replay finished">
 				<button class="close" onClick={onClose} title="Close" aria-label="Close">
-					×
+					<Icon name="abort" size={16} />
 				</button>
-				<h3>Replay finished</h3>
+				<h2 class="endcard-title">Replay finished</h2>
 				<p>{summary}</p>
 				<div class="row">
 					<button class="btn" onClick={onRestart}>
 						<Icon name="release" size={14} />
-						Watch again
+						Watch Again
 					</button>
 					<a class="btn ghost" href={`/p/${slug}`}>
-						Open the live airspace
+						Open the Live Airspace
 					</a>
 				</div>
 			</div>
@@ -271,6 +279,51 @@ function Stat({ label, value, tone, title }: { label: string; value: string | nu
 		<div class={`stat ${tone ? `t-${tone}` : ""}`} title={title}>
 			<div class="stat-v">{value}</div>
 			<div class="stat-l">{label}</div>
+		</div>
+	);
+}
+
+interface TabSpec<T extends string> {
+	id: T;
+	label: string;
+	count?: number;
+	countLabel?: string;
+	attn?: boolean;
+}
+
+/** The side panel's tabs: a tab list whose arrow keys move between tabs (the selected one is the Tab stop). */
+function Tabs<T extends string>({ tab, onTab, tabs }: { tab: T; onTab: (t: T) => void; tabs: TabSpec<T>[] }) {
+	const key = (e: KeyboardEvent) => {
+		const i = tabs.findIndex((t) => t.id === tab);
+		const to = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: tabs.length - 1 }[e.key];
+		if (to === undefined) return;
+		e.preventDefault();
+		const next = tabs[(to + tabs.length) % tabs.length];
+		onTab(next.id);
+		(e.currentTarget as HTMLElement).querySelector<HTMLElement>(`#tab-${next.id}`)?.focus();
+	};
+	return (
+		<div class="tabs" role="tablist" aria-label="Activity" onKeyDown={key}>
+			{tabs.map((t) => (
+				<button
+					key={t.id}
+					id={`tab-${t.id}`}
+					role="tab"
+					aria-selected={tab === t.id}
+					aria-controls={`panel-${t.id}`}
+					tabIndex={tab === t.id ? 0 : -1}
+					class={`${tab === t.id ? "on" : ""} ${t.attn ? "attn" : ""}`}
+					onClick={() => onTab(t.id)}
+				>
+					{t.label}
+					{t.count !== undefined && (
+						<span class="count">
+							{t.count}
+							<span class="sr-only"> {t.countLabel}</span>
+						</span>
+					)}
+				</button>
+			))}
 		</div>
 	);
 }

@@ -2,6 +2,7 @@ import { hierarchy, treemap, treemapSquarify } from "d3-hierarchy";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { Agent, Clearance, Flight, Intent, TrunkFile } from "../../../src/shared/types";
 import { predictTargets, symbolIndex } from "../../../src/tower/planner";
+import { pressable, touch } from "../a11y";
 import { ACTIVE_STATUSES, type Flash, statusLabel } from "../store";
 
 interface Rect {
@@ -63,11 +64,13 @@ const SOURCE_DIRS = new Set(["src", "source", "lib", "app", "pkg"]);
 const FOCUS_ABOVE = 120;
 const groupOf = (path: string) => (path.includes("/") ? path.split("/")[0] : "·");
 
-const COND = `"IBM Plex Sans Condensed", "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif`;
-const LABEL_FONT = `600 12px ${COND}`;
-const LINES_FONT = `400 12px ${COND}`;
-const BAND_FONT = `400 11px ${COND}`;
-const TAG_FONT = `600 10px "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace`;
+// The map's labels are measured to fit their boxes, so these match the CSS of .file-label, .band-label, .claim-tag.
+const SANS = `-apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro", system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif`;
+const MONO = `ui-monospace, "SF Mono", SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace`;
+const LABEL_FONT = `600 12px ${SANS}`;
+const LINES_FONT = `400 12px ${SANS}`;
+const BAND_FONT = `400 11px ${SANS}`;
+const TAG_FONT = `600 11px ${MONO}`;
 
 /** Glyph widths per font, each measured once (and again when the web fonts arrive). */
 const glyphs = new Map<string, Map<string, number>>();
@@ -243,7 +246,7 @@ export function KindBadge({ kind }: { kind?: string }) {
 	const k = KIND[kind ?? ""];
 	if (!k) return null;
 	return (
-		<span class={`kind kind-${kind}`} title={k[1]}>
+		<span class={`kind kind-${kind}`} title={k[1]} aria-hidden="true">
 			{k[0]}
 		</span>
 	);
@@ -261,15 +264,45 @@ interface Props {
 	onWhy: (target: string) => void;
 }
 
-/** Directories, files and their functions: redrawn only when the code or the map's size changes. */
+/**
+ * Directories, files and their functions: redrawn only when the code or the map's size changes.
+ * The functions are one stop for Tab: the arrow keys move between them (in reading order) and Enter or
+ * Space asks why one looks the way it does. A tap or click on a file's free space picks its nearest function.
+ */
 function CodeLayer({ groups, files, rests, onHover, onWhy }: { groups: GroupBox[]; files: FileBox[]; rests: RestBox[]; onHover: (b: Band | null) => void; onWhy: (target: string) => void }) {
+	const bands = useMemo(() => files.flatMap((f) => f.bands), [files]);
+	const [active, setActive] = useState<string | null>(null);
+	const current = bands.find((b) => b.key === active) ?? bands[0];
+	const move = (e: KeyboardEvent, b: Band) => {
+		const i = bands.indexOf(b);
+		const to = { ArrowDown: i + 1, ArrowRight: i + 1, ArrowUp: i - 1, ArrowLeft: i - 1, Home: 0, End: bands.length - 1 }[e.key];
+		if (e.key === "Enter" || e.key === " ") {
+			e.preventDefault();
+			onWhy(b.target);
+			return;
+		}
+		if (to === undefined) return;
+		e.preventDefault();
+		const next = bands[Math.max(0, Math.min(bands.length - 1, to))];
+		setActive(next.key);
+		const svg = (e.currentTarget as SVGElement).ownerSVGElement;
+		(svg?.querySelector(`[data-key="${CSS.escape(next.key)}"]`) as SVGElement | null)?.focus();
+	};
+	const nearest = (e: MouseEvent, f: FileBox) => {
+		if ((e.target as Element).closest(".band-g")) return;
+		if (!f.bands.length) return onWhy(f.path);
+		const svg = (e.currentTarget as SVGGElement).ownerSVGElement!;
+		const y = e.clientY - svg.getBoundingClientRect().top - APRON;
+		const b = f.bands.reduce((best, x) => (Math.abs(x.y + x.h / 2 - y) < Math.abs(best.y + best.h / 2 - y) ? x : best));
+		onWhy(b.target);
+	};
 	return (
 		<>
 			{groups.map((g) => (
 				<g key={g.name} data-group={g.name}>
 					<rect x={g.x} y={g.y} width={g.w} height={g.h} rx={8} class="group" />
 					{g.label && (
-						<text x={g.x + 8} y={g.y + 15} class="group-label">
+						<text x={g.x + 8} y={g.y + 15} class="group-label" aria-hidden="true">
 							{g.label}
 						</text>
 					)}
@@ -289,27 +322,49 @@ function CodeLayer({ groups, files, rests, onHover, onWhy }: { groups: GroupBox[
 				</g>
 			))}
 			{files.map((f) => (
-				<g key={f.path} data-path={f.path}>
+				<g key={f.path} data-path={f.path} class="file-g" onClick={(e) => nearest(e as unknown as MouseEvent, f)}>
 					<rect x={f.x} y={f.y} width={f.w} height={f.h} rx={5} class="file" />
 					{f.label && (
-						<text x={f.x + 6} y={f.y + 13} class="file-label">
+						<text x={f.x + 6} y={f.y + 13} class="file-label" aria-hidden="true">
 							{f.label !== f.name && <title>{f.path}</title>}
 							{f.label}
 							{f.withLines && <tspan class="file-lines"> {f.lines}</tspan>}
 						</text>
 					)}
 					{f.bands.map((b) => (
-						<g key={b.key} class="band-g" data-target={b.target} onMouseEnter={() => onHover(b)} onMouseLeave={() => onHover(null)} onClick={() => onWhy(b.target)}>
+						<g
+							key={b.key}
+							class="band-g"
+							data-target={b.target}
+							data-key={b.key}
+							role="button"
+							// SVG takes the attribute as written: lowercase, or it is not a tab index.
+							{...{ tabindex: b === current ? 0 : -1 }}
+							aria-label={`${b.name}, ${b.kind} in ${f.path}`}
+							onMouseEnter={() => onHover(b)}
+							onMouseLeave={() => onHover(null)}
+							onFocus={() => (setActive(b.key), onHover(b))}
+							onBlur={() => onHover(null)}
+							onClick={() => onWhy(b.target)}
+							onKeyDown={(e) => move(e as unknown as KeyboardEvent, b)}
+						>
 							<rect x={b.x} y={b.y} width={b.w} height={b.h} rx={2} class={`band band-${b.kind}`} />
-							{b.label && (
-								<text x={b.x + 5} y={labelY(b)} class="band-label">
-									{b.label}
-								</text>
-							)}
 						</g>
 					))}
 				</g>
 			))}
+			{/* Names drawn over the functions, apart from them: a function's accessible name is its full name. */}
+			<g class="band-labels" aria-hidden="true">
+				{files.flatMap((f) =>
+					f.bands
+						.filter((b) => b.label)
+						.map((b) => (
+							<text key={b.key} x={b.x + 5} y={labelY(b)} class="band-label">
+								{b.label}
+							</text>
+						)),
+				)}
+			</g>
 		</>
 	);
 }
@@ -404,6 +459,8 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 	const showTag = new Set<string>();
 	const hidden = new Set<string>();
 	const crowded = active.length > 14;
+	// On a phone the planes' 44 pt targets would overlap at desktop spacing: spread them out.
+	const spread = size.w < 640 ? 1.6 : 1;
 	// With dozens of flights, or on a phone, the planes and their colors tell the story; tags would bury the map.
 	const tagless = active.length > 30 || size.w < 640;
 	for (const ids of buckets.values()) {
@@ -412,20 +469,43 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 		const others = ids.filter((id) => flights[id].status !== "holding");
 		others.forEach((id, i) => {
 			const p = positions.get(id)!;
-			positions.set(id, { ...p, x: p.x + i * 30, y: p.y + i * 22 });
+			positions.set(id, { ...p, x: p.x + i * 30 * spread, y: p.y + i * 22 * spread });
 			if (!crowded || i === 0) showTag.add(id);
 		});
 		// The first in line circle the spot (and the selected flight, wherever it is in the queue).
 		const circling = holders.slice(0, MAX_CIRCLING);
 		if (selected && holders.indexOf(selected) >= MAX_CIRCLING) circling[MAX_CIRCLING - 1] = selected;
 		for (const id of holders) if (!circling.includes(id)) hidden.add(id);
-		const r = Math.min(80, 24 + circling.length * 4);
+		const r = Math.min(80, 24 + circling.length * 4) * spread;
 		circling.forEach((id, i) => {
 			const p = positions.get(id)!;
 			const a = (i / Math.max(circling.length, 1)) * Math.PI * 2 - Math.PI / 2;
 			positions.set(id, { ...p, x: p.x + Math.cos(a) * r, y: p.y + Math.sin(a) * r * 0.6 });
 			if (!crowded || i < 1) showTag.add(id);
 		});
+	}
+	// Every plane stays whole on the map.
+	const inside = (p: { x: number; y: number; orbit: boolean }) => ({ ...p, x: Math.min(Math.max(p.x, 22), size.w - 22), y: Math.min(Math.max(p.y, 22), size.h - 22) });
+	for (const [id, p] of positions) positions.set(id, inside(p));
+	// Planes closer than a target are nudged apart, so each keeps its own: 44 pt for a finger, 28 pt for a pointer.
+	const reach = touch || spread > 1 ? 44 : 28;
+	const shown = [...positions.keys()].filter((id) => !hidden.has(id));
+	for (let round = 0; round < 40; round++) {
+		let moved = false;
+		for (let i = 0; i < shown.length; i++) {
+			for (let j = i + 1; j < shown.length; j++) {
+				const a = positions.get(shown[i])!;
+				const b = positions.get(shown[j])!;
+				const d = Math.hypot(b.x - a.x, b.y - a.y);
+				if (d >= reach - 0.5) continue;
+				const [ux, uy] = d > 0.5 ? [(b.x - a.x) / d, (b.y - a.y) / d] : [1, 0];
+				const push = (reach - d) / 2;
+				positions.set(shown[i], inside({ ...a, x: a.x - ux * push, y: a.y - uy * push }));
+				positions.set(shown[j], inside({ ...b, x: b.x + ux * push, y: b.y + uy * push }));
+				moved = true;
+			}
+		}
+		if (!moved) break;
 	}
 	if (tagless) showTag.clear();
 	if (selected) showTag.add(selected);
@@ -457,7 +537,7 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 					<i class="lg-band" /> Function
 				</span>
 				<span>
-					<svg viewBox="0 0 24 24" class="lg-plane">
+					<svg viewBox="0 0 24 24" class="lg-plane" aria-hidden="true">
 						<path d="M12 2c.8 0 1.4.7 1.4 1.6v6.1l7.6 4.6v2l-7.6-2.3v4.6l2.1 1.6V22L12 21l-3.5 1v-1.8l2.1-1.6V15L3 17.3v-2l7.6-4.6V3.6C10.6 2.7 11.2 2 12 2z" />
 					</svg>{" "}
 					<span class="lg-long">Agent on the code it is cleared to change</span>
@@ -468,7 +548,7 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 					<span class="lg-short">Waiting for held code</span>
 				</span>
 			</div>
-			<svg width={size.w} height={size.h} class="map">
+			<svg width={size.w} height={size.h} class="map" role="group" aria-label="Map of the codebase: a block per directory, a box per file and a row per function. Arrow keys move between functions; Enter asks why one changed.">
 				<defs>
 					<pattern id="rest-files" width="9" height="9" patternUnits="userSpaceOnUse">
 						<rect x="1" y="1" width="6" height="6" rx="1.2" class="rest-cell" />
@@ -478,7 +558,7 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 					{codeLayer}
 					{outlines.map(({ c, rect, flight }) => {
 						const agent = agents[flight.agentId];
-						const color = agent?.color ?? "#94a3b8";
+						const color = agent?.color ?? "var(--agent-none)";
 						return (
 							<g key={c.id} class={`claim ${c.status}`} onClick={() => onSelect(flight.id)}>
 								<rect
@@ -517,21 +597,28 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 						key={f.id}
 						data-flight={f.code}
 						class={`plane ${f.status} ${selected === f.id ? "selected" : ""}`}
-						style={{ transform: `translate(${p.x}px, ${p.y}px)`, "--c": agent?.color ?? "#e2e8f0" } as any}
-						onClick={() => onSelect(f.id)}
+						style={{ transform: `translate(${p.x}px, ${p.y}px)`, "--c": agent?.color ?? "var(--agent-none)" } as any}
 						title={intent ? `INT-${intent.seq} ${intent.title}` : ""}
+						{...pressable(() => onSelect(f.id))}
+						aria-pressed={selected === f.id}
 					>
 						<div class={p.orbit ? "orbit" : "steady"}>
-							<svg viewBox="0 0 24 24" class="glyph" style={{ transform: `rotate(${p.orbit ? 90 : angle}deg)` }}>
+							<svg viewBox="0 0 24 24" class="glyph" aria-hidden="true" style={{ transform: `rotate(${p.orbit ? 90 : angle}deg)` }}>
 								<path d="M12 2c.8 0 1.4.7 1.4 1.6v6.1l7.6 4.6v2l-7.6-2.3v4.6l2.1 1.6V22L12 21l-3.5 1v-1.8l2.1-1.6V15L3 17.3v-2l7.6-4.6V3.6C10.6 2.7 11.2 2 12 2z" />
 							</svg>
 						</div>
-						{showTag.has(f.id) && (
+						{showTag.has(f.id) ? (
 							<div class="tag">
 								<KindBadge kind={agent?.kind} />
 								<b>{agent?.callsign ?? "?"}</b> {f.code}
 								{f.status !== "airborne" && <span class={`st st-${f.status}`}>{statusLabel(f.status)}</span>}
+								{intent && <span class="sr-only">: INT-{intent.seq} {intent.title}</span>}
 							</div>
+						) : (
+							<span class="sr-only">
+								{agent?.callsign ?? "Agent"} {f.code}, {statusLabel(f.status)}
+								{intent ? `: INT-${intent.seq} ${intent.title}` : ""}
+							</span>
 						)}
 					</div>
 				);
@@ -546,7 +633,9 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 			{hover && (
 				<div class="hovercard" style={{ left: `${cardX}px`, top: `${Math.min(hover.y + APRON, size.h - 64)}px` }}>
 					<div class="mono">{hover.target}</div>
-					<div class="muted">{hover.kind} · click to see why it changed</div>
+					<div class="muted">
+						{hover.kind} · {touch ? "tap" : "click"} to see why it changed
+					</div>
 				</div>
 			)}
 		</div>

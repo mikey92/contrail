@@ -90,22 +90,14 @@ const KEY_EVENTS = new Set([
 ]);
 const isKeyEvent = (type: string) => KEY_EVENTS.has(type);
 
-// The Tower hands out pastel agent colors; on the light radar each maps to a deeper ink of the same hue.
-const TONES: Record<string, string> = {
-	"#4fd1c5": "#0f8a80",
-	"#f6ad55": "#c2560c",
-	"#9f7aea": "#7048c8",
-	"#68d391": "#2f8a3b",
-	"#fc8181": "#c93a3a",
-	"#63b3ed": "#2463c7",
-	"#f687b3": "#c02a6e",
-	"#faf089": "#9a7b00",
-	"#81e6d9": "#127a8a",
-	"#d6bcfa": "#5b4bb7",
-	"#fbd38d": "#a0522d",
-	"#90cdf4": "#3a6b9c",
+// The Tower hands out twelve pastel agent colors. Each becomes a CSS variable (--agent-0 … --agent-11)
+// whose value suits the appearance: a deeper ink of the same hue on paper, the pastel itself in Dark Mode.
+const PALETTE = ["#4fd1c5", "#f6ad55", "#9f7aea", "#68d391", "#fc8181", "#63b3ed", "#f687b3", "#faf089", "#81e6d9", "#d6bcfa", "#fbd38d", "#90cdf4"];
+export const tone = (color: string | undefined) => {
+	if (!color) return "var(--agent-none)";
+	const i = PALETTE.indexOf(color.toLowerCase());
+	return i >= 0 ? `var(--agent-${i})` : color;
 };
-export const tone = (color: string | undefined) => (color ? (TONES[color.toLowerCase()] ?? color) : "#6e727b");
 export const toned = <T extends { color: string }>(a: T): T => ({ ...a, color: tone(a.color) });
 let flashSeq = 0;
 

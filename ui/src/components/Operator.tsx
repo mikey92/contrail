@@ -1,5 +1,6 @@
 import { useEffect, useState } from "preact/hooks";
 import { Command } from "./Detail";
+import { Dialog } from "./Dialog";
 
 const MODELS = [
 	["@cf/zai-org/glm-5.3-flash", "GLM-5.3 Flash (fast, cheap)"],
@@ -39,58 +40,72 @@ export function OperatorPanel({ slug, onClose }: { slug: string; onClose: () => 
 	};
 
 	return (
-		<div class="why-backdrop" onClick={onClose}>
-			<div class="why operator" onClick={(e) => e.stopPropagation()}>
-				<button class="close" onClick={onClose}>
-					×
-				</button>
-				<div class="why-kicker">Operator</div>
-				<h3>Control tower</h3>
+		<Dialog kicker="Operator" title="Control tower" onClose={onClose}>
+			<div class="operator">
 				<label class="field">
 					<span>Admin key</span>
-					<input type="password" value={key} onInput={(e) => setKey((e.target as HTMLInputElement).value)} placeholder="contrail admin key" />
+					<input type="password" autocomplete="current-password" value={key} onInput={(e) => setKey((e.target as HTMLInputElement).value)} placeholder="Contrail admin key" />
 				</label>
 				<section class="op">
-					<h4>Edge agents on Workers AI</h4>
+					<h3>Edge agents on Workers AI</h3>
 					<p class="muted">Coding agents that live in Durable Objects: Artifacts workspace, tests in Dynamic Workers, reasoning on Workers AI.</p>
 					<div class="row">
-						<input type="number" min={1} max={20} value={count} onInput={(e) => setCount(Number((e.target as HTMLInputElement).value))} />
-						<select value={model} onChange={(e) => setModel((e.target as HTMLSelectElement).value)}>
-							{MODELS.map(([v, l]) => (
-								<option key={v} value={v}>
-									{l}
-								</option>
-							))}
-						</select>
+						<label class="inline">
+							<span class="sr-only">Number of edge agents</span>
+							<input type="number" min={1} max={20} value={count} onInput={(e) => setCount(Number((e.target as HTMLInputElement).value))} />
+						</label>
+						<label class="inline">
+							<span class="sr-only">Model</span>
+							<select value={model} onChange={(e) => setModel((e.target as HTMLSelectElement).value)}>
+								{MODELS.map(([v, l]) => (
+									<option key={v} value={v}>
+										{l}
+									</option>
+								))}
+							</select>
+						</label>
 						<button class="btn" onClick={() => call("/edge/launch", { count, model, maxFlights: 4 })}>
 							Launch
 						</button>
 					</div>
 				</section>
 				<section class="op">
-					<h4>Load test</h4>
+					<h3>Load test</h3>
 					<p class="muted">Scripted agents (no LLM) for intents that carry a machine-readable script.</p>
 					<div class="row">
-						<input type="number" min={1} max={300} value={load} onInput={(e) => setLoad(Number((e.target as HTMLInputElement).value))} />
+						<label class="inline">
+							<span class="sr-only">Number of scripted agents</span>
+							<input type="number" min={1} max={300} value={load} onInput={(e) => setLoad(Number((e.target as HTMLInputElement).value))} />
+						</label>
 						<button class="btn" onClick={() => call("/edge/launch", { count: load, mode: "scripted", maxFlights: 10 })}>
-							Launch scripted agents
+							Launch Scripted Agents
 						</button>
 						<button class="btn ghost" onClick={() => call("/edge/stop", {})}>
-							Stop all edge agents
+							Stop All Edge Agents
 						</button>
 					</div>
 				</section>
 				<section class="op">
-					<h4>File an intent</h4>
-					<input class="wide" value={intentTitle} onInput={(e) => setIntentTitle((e.target as HTMLInputElement).value)} placeholder="Imperative title" />
-					<textarea value={intentBody} onInput={(e) => setIntentBody((e.target as HTMLTextAreaElement).value)} placeholder="Details and acceptance criteria" />
+					<h3>File an intent</h3>
+					<label class="field">
+						<span class="sr-only">Title</span>
+						<input class="wide" value={intentTitle} onInput={(e) => setIntentTitle((e.target as HTMLInputElement).value)} placeholder="Imperative title" />
+					</label>
+					<label class="field">
+						<span class="sr-only">Details</span>
+						<textarea value={intentBody} onInput={(e) => setIntentBody((e.target as HTMLTextAreaElement).value)} placeholder="Details and acceptance criteria" />
+					</label>
 					<button class="btn" disabled={!intentTitle} onClick={() => call("/intents", { intents: [{ title: intentTitle, body: intentBody, priority: 5 }] }).then(() => setIntentTitle(""))}>
-						File intent
+						File Intent
 					</button>
 				</section>
-				{msg && <div class="op-msg mono">{msg}</div>}
+				{msg && (
+					<div class="op-msg mono" role="status">
+						{msg}
+					</div>
+				)}
 			</div>
-		</div>
+		</Dialog>
 	);
 }
 
@@ -105,17 +120,21 @@ export function ClonePanel({ slug, onClose }: { slug: string; onClose: () => voi
 			.catch((e) => setErr(String(e)));
 	}, [slug]);
 	return (
-		<div class="why-backdrop" onClick={onClose}>
-			<div class="why connect" onClick={(e) => e.stopPropagation()}>
-				<button class="close" onClick={onClose}>
-					×
-				</button>
-				<div class="why-kicker">Trunk</div>
-				<h3>Clone trunk with its contrail</h3>
+		<Dialog kicker="Trunk" title="Clone trunk with its contrail" onClose={onClose}>
+			<div class="connect">
 				<p>Trunk is an Artifacts repo. Every landed commit carries its flight's intent, plan, decisions and evidence as a git note in refs/notes/contrail. This read-only URL is valid for an hour.</p>
-				{err && <div class="muted">{err}</div>}
+				{err && (
+					<div class="muted" role="alert">
+						{err}
+					</div>
+				)}
+				{!cmds && !err && (
+					<div class="muted" role="status">
+						Asking for a read-only URL…
+					</div>
+				)}
 				{cmds && <Command text={cmds.join("\n")} />}
 			</div>
-		</div>
+		</Dialog>
 	);
 }

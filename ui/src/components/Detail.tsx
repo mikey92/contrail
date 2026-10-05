@@ -1,6 +1,8 @@
 import { useEffect, useState } from "preact/hooks";
 import type { Agent, Clearance, ContrailEntry, Flight, Intent, Landing } from "../../../src/shared/types";
 import { relTime, statusLabel, toned } from "../store";
+import { Dialog } from "./Dialog";
+import { Icon } from "./Icons";
 import { Diff } from "./Review";
 
 interface FlightDetail {
@@ -68,15 +70,18 @@ export function FlightDrawer({
 
 	if (error && !detail) {
 		return (
-			<aside class="drawer">
-				<button class="close" onClick={onClose}>
-					×
-				</button>
+			<aside class="drawer" aria-label="Flight">
+				<CloseButton onClose={onClose} />
 				<div class="empty">{error}</div>
 			</aside>
 		);
 	}
-	if (!detail) return <aside class="drawer loading">Loading flight…</aside>;
+	if (!detail)
+		return (
+			<aside class="drawer loading" aria-label="Flight" aria-busy="true">
+				<span role="status">Loading flight…</span>
+			</aside>
+		);
 	const { agent, intent, clearances, contrail } = detail;
 	const f = flight ?? detail.flight;
 	const flightLandings = Object.values(landings)
@@ -85,16 +90,14 @@ export function FlightDrawer({
 	const allLandings = flightLandings.length ? flightLandings : detail.landings;
 
 	return (
-		<aside class="drawer">
-			<button class="close" onClick={onClose}>
-				×
-			</button>
+		<aside class="drawer" aria-label={`Flight ${f.code}`}>
+			<CloseButton onClose={onClose} />
 			<div class="d-head" style={{ "--c": agent.color } as any}>
-				<div class="d-callsign">
-					<span class="dot big" style={{ background: agent.color }} />
+				<h2 class="d-callsign">
+					<span class="dot big" style={{ background: agent.color }} aria-hidden="true" />
 					{agent.callsign} <span class="mono muted">{f.code}</span>
 					<span class={`st st-${f.status}`}>{statusLabel(f.status)}</span>
-				</div>
+				</h2>
 				<div class="d-model muted">
 					{agent.model ?? agent.kind} · workspace <span class="mono">{f.repo}</span>
 					{f.retiredAt ? " (deleted an hour after the flight ended)" : ""}
@@ -107,13 +110,18 @@ export function FlightDrawer({
 
 			{clearances.length > 0 && (
 				<section>
-					<h4>Clearances</h4>
+					<h3 class="d-h">Clearances</h3>
 					<div class="chips">
 						{clearances.map((c) => (
-							<span key={c.id} class={`chip ${c.status}`} onClick={() => onWhy(c.target)}>
-								{c.status === "holding" ? "⏳ " : "✓ "}
+							<button
+								key={c.id}
+								class={`chip ${c.status}`}
+								onClick={() => onWhy(c.target)}
+								aria-label={`${c.target}, ${c.status === "holding" ? "waiting for it" : "cleared"}. Why it looks the way it does`}
+							>
+								<span aria-hidden="true">{c.status === "holding" ? "⏳ " : "✓ "}</span>
 								{c.target}
-							</span>
+							</button>
 						))}
 					</div>
 				</section>
@@ -121,24 +129,32 @@ export function FlightDrawer({
 
 			{allLandings.map((l) => (
 				<section key={l.id} class={`landing ${l.status}`}>
-					<h4>
+					<h3 class="d-h">
 						Landing #{l.seq} · <span class={`lst lst-${l.status}`}>{l.status}</span>
 						{l.trunkAfter && <span class="mono muted"> {l.trunkAfter.slice(0, 8)}</span>}
-					</h4>
+					</h3>
 					<div class="summary">{l.summary}</div>
 					{l.changes.length > 0 && (
 						<div class="changes">
 							{l.changes.map((c) => (
 								<div key={c.path} class="change">
-									<span class={`cst cst-${c.status}`}>{c.status[0].toUpperCase()}</span>
+									<span class={`cst cst-${c.status}`} title={c.status} aria-label={c.status}>
+										{c.status[0].toUpperCase()}
+									</span>
 									<span class="mono">{c.path}</span>
-									<span class="syms">{c.symbols.map((s) => <span key={s} class="sym" onClick={() => onWhy(`${c.path}#${s}`)}>{s}</span>)}</span>
+									<span class="syms">
+										{c.symbols.map((s) => (
+											<button key={s} class="sym" onClick={() => onWhy(`${c.path}#${s}`)} aria-label={`${s}: why it looks the way it does`}>
+												{s}
+											</button>
+										))}
+									</span>
 									<span class="plus">+{c.additions}</span>
 									<span class="minus">−{c.deletions}</span>
 								</div>
 							))}
 							<details class="diffs">
-								<summary>Show diff</summary>
+								<summary>Show Diff</summary>
 								{l.changes.map((c) => (
 									<div key={c.path}>
 										<div class="mono muted diff-file">{c.path}</div>
@@ -195,7 +211,7 @@ export function FlightDrawer({
 			))}
 
 			<section>
-				<h4>Contrail</h4>
+				<h3 class="d-h">Contrail</h3>
 				<div class="timeline">
 					{contrail.map((e) => (
 						<div key={e.id} class={`tl tl-${e.kind}`}>
@@ -238,40 +254,41 @@ export function WhyPanel({ slug, fixture, target, onClose }: { slug: string; fix
 		};
 	}, [target]);
 	return (
-		<div class="why-backdrop" onClick={onClose}>
-			<div class="why" onClick={(e) => e.stopPropagation()}>
-				<button class="close" onClick={onClose}>
-					×
-				</button>
-				<div class="why-kicker">Why this code looks the way it does</div>
-				<h3 class="mono">{target}</h3>
-				{!data && !error && <div class="muted">Reading the contrail…</div>}
-				{error && <div class="why-error">Couldn't read the contrail: {error}</div>}
-				{data?.note && <div class="muted">{data.note}</div>}
-				{data?.history.map((h) => (
-					<div key={h.commit} class="why-item">
-						<div class="why-top">
-							<span class="mono sha">{h.commit}</span>
-							<b>{h.intent}</b>
-						</div>
-						<div class="muted">
-							{h.agent} {h.model ? `(${h.model})` : ""} · {h.flight} · {new Date(h.when).toLocaleString()}
-						</div>
-						<div class="why-summary">{h.summary}</div>
-						{h.plan && (
-							<div class="why-plan">
-								<span class="lbl">Plan</span> {h.plan}
-							</div>
-						)}
-						{h.decisions.map((d, i) => (
-							<div key={i} class="why-dec">
-								<span class="lbl">Decision</span> {d}
-							</div>
-						))}
+		<Dialog kicker="Why this code looks the way it does" title={target} titleMono wide onClose={onClose}>
+			{!data && !error && (
+				<div class="muted" role="status">
+					Reading the contrail…
+				</div>
+			)}
+			{error && (
+				<div class="why-error" role="alert">
+					Couldn't read the contrail: {error}
+				</div>
+			)}
+			{data?.note && <div class="muted">{data.note}</div>}
+			{data?.history.map((h) => (
+				<div key={h.commit} class="why-item">
+					<div class="why-top">
+						<span class="mono sha">{h.commit}</span>
+						<b>{h.intent}</b>
 					</div>
-				))}
-			</div>
-		</div>
+					<div class="muted">
+						{h.agent} {h.model ? `(${h.model})` : ""} · {h.flight} · {new Date(h.when).toLocaleString()}
+					</div>
+					<div class="why-summary">{h.summary}</div>
+					{h.plan && (
+						<div class="why-plan">
+							<span class="lbl">Plan</span> {h.plan}
+						</div>
+					)}
+					{h.decisions.map((d, i) => (
+						<div key={i} class="why-dec">
+							<span class="lbl">Decision</span> {d}
+						</div>
+					))}
+				</div>
+			))}
+		</Dialog>
 	);
 }
 
@@ -288,10 +305,15 @@ export function Command({ text }: { text: string }) {
 			.catch(() => {});
 	return (
 		<div class="cmd">
-			<pre class="code">{text}</pre>
-			<button class="copy" onClick={copy}>
+			<pre class="code" tabIndex={0} aria-label="Command">
+				{text}
+			</pre>
+			<button class="copy" onClick={copy} aria-label={copied ? "Copied" : "Copy the command"}>
 				{copied ? "Copied" : "Copy"}
 			</button>
+			<span class="sr-only" role="status">
+				{copied ? "Copied to the clipboard" : ""}
+			</span>
 		</div>
 	);
 }
@@ -315,16 +337,13 @@ export function ConnectModal({ slug, onClose }: { slug: string; onClose: () => v
 		setKey({ key: d.key, callsign: d.agent.callsign });
 	};
 	return (
-		<div class="why-backdrop" onClick={onClose}>
-			<div class="why connect" onClick={(e) => e.stopPropagation()}>
-				<button class="close" onClick={onClose}>
-					×
-				</button>
-				<div class="why-kicker">Join the airspace</div>
-				<h3>Connect a coding agent</h3>
+		<Dialog kicker="Join the airspace" title="Connect a coding agent" onClose={onClose}>
+			<div class="connect">
 				<p>Any MCP-capable agent can fly here. It gets its own Artifacts workspace, claims functions before editing, and lands through the runway.</p>
 				{joinCode === undefined ? (
-					<p class="muted">Asking the tower…</p>
+					<p class="muted" role="status">
+						Asking the tower…
+					</p>
 				) : joinCode ? (
 					key ? (
 						<>
@@ -338,7 +357,7 @@ export function ConnectModal({ slug, onClose }: { slug: string; onClose: () => v
 						</>
 					) : (
 						<button class="btn" onClick={mint}>
-							Get an agent key
+							Get an Agent Key
 						</button>
 					)
 				) : (
@@ -353,14 +372,27 @@ export function ConnectModal({ slug, onClose }: { slug: string; onClose: () => v
 								</a>
 							)}
 						</div>
-						<h4 class="connect-sub">Have the join code?</h4>
+						<h3 class="connect-sub">Have the join code?</h3>
 						<p>Operators of this airspace can connect an agent with its join code:</p>
 						<Command text={`curl -s ${origin}/api/p/${slug}/join -H 'content-type: application/json' \\\n  -d '{"joinCode":"<join code>","kind":"claude-code"}'`} />
 						<Command text={`claude mcp add --transport http contrail ${origin}/mcp/${slug} \\\n  --header "Authorization: Bearer <agent key>"`} />
 					</>
 				)}
-				{err && <div class="fail mono">{err}</div>}
+				{err && (
+					<div class="fail mono" role="alert">
+						{err}
+					</div>
+				)}
 			</div>
-		</div>
+		</Dialog>
+	);
+}
+
+/** The drawer's close button: an icon with a name, 44 pt on touch screens. */
+function CloseButton({ onClose }: { onClose: () => void }) {
+	return (
+		<button class="close" onClick={onClose} aria-label="Close">
+			<Icon name="abort" size={16} />
+		</button>
 	);
 }
