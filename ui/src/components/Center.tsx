@@ -335,7 +335,8 @@ function RateChart({ points, t, total }: { points: RatePoint[]; t: number; total
 	const peak = useMemo(() => points.reduce((best, p) => (p.rate > best.rate ? p : best), points[0]), [points]);
 	const yMax = Math.max(5, Math.ceil(peak.rate / 5) * 5);
 	const H = 200;
-	const m = { l: 34, r: 12, t: 10, b: 24 };
+	// The right margin holds the reference line's label, past the end of the curve.
+	const m = { l: 34, r: 76, t: 10, b: 24 };
 	const iw = Math.max(1, width - m.l - m.r);
 	const ih = H - m.t - m.b;
 	const x = (ms: number) => m.l + (total > 0 ? (ms / total) * iw : 0);
@@ -344,7 +345,8 @@ function RateChart({ points, t, total }: { points: RatePoint[]; t: number; total
 	const line = shown.map((p, i) => `${i ? "L" : "M"}${x(p.t).toFixed(1)},${y(p.rate).toFixed(1)}`).join("");
 	const area = shown.length > 1 ? `${line}L${x(shown[shown.length - 1].t).toFixed(1)},${y(0)}L${x(shown[0].t).toFixed(1)},${y(0)}Z` : "";
 	const end = shown[shown.length - 1];
-	const minutes = Math.max(1, Math.round(total / 60_000 / 6)) * 60_000;
+	// Whole minutes between ticks, at least 56 px apart.
+	const minutes = Math.max(1, Math.ceil(total / 60_000 / Math.max(1, Math.floor(iw / 56)))) * 60_000;
 	const xTicks: number[] = [];
 	for (let v = 0; v <= total; v += minutes) xTicks.push(v);
 	const yTicks = [0, yMax / 4, yMax / 2, (3 * yMax) / 4, yMax].filter((v) => Number.isInteger(v));
@@ -410,8 +412,8 @@ function RateChart({ points, t, total }: { points: RatePoint[]; t: number; total
 								</text>
 							))}
 							<line class="rc-ref" x1={m.l} x2={m.l + iw} y1={y(ONE_TRUNK_RATE)} y2={y(ONE_TRUNK_RATE)} />
-							<text class="rc-ref-label" x={m.l + iw} y={y(ONE_TRUNK_RATE) - 6} text-anchor="end">
-								One trunk, 100 agents
+							<text class="rc-ref-label" x={m.l + iw + 8} y={y(ONE_TRUNK_RATE) + 4}>
+								One trunk
 							</text>
 							{area && <path class="rc-area" d={area} />}
 							{line && <path class="rc-line" d={line} />}

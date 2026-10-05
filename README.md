@@ -9,7 +9,7 @@ Workers and Workers AI.
 [Bookshop](https://contrail.mikey9220.workers.dev/p/bookshop?replay=/replays/bookshop.jsonl.gz&speed=2),
 [incident](https://contrail.mikey9220.workers.dev/p/incident?replay=/replays/incident.jsonl.gz),
 [100 scripted agents](https://contrail.mikey9220.workers.dev/p/stress?replay=/replays/stress.jsonl.gz&speed=6) ·
-**Scale:** [1,000 agents in one monorepo of 10 sectors](https://contrail.mikey9220.workers.dev/c/monorepo)
+**Scale:** [1,000 agents in one monorepo of 10 sectors](https://contrail.mikey9220.workers.dev/c/monorepo?replay=/replays/monorepo.jsonl.gz&speed=4)
 
 ![The Contrail radar: each block is a file and each row a function; planes are agents on the code they are cleared to change, with the activity feed on the right and the runway below](docs/radar.png)
 
@@ -121,7 +121,7 @@ landed ISBN-13 validation, and CODEX-7's new test used a made-up ISBN.
 | Load test: hot shared functions ([replay](https://contrail.mikey9220.workers.dev/p/stress?replay=/replays/stress.jsonl.gz&speed=6)) | 100 scripted agents (no LLM), 300 intents: 236 increments of 24 Zipf-skewed shared counters and 64 new functions | 300/300 landed in 6:37 with **no lost or doubled updates**: rebuilt from the landed diffs, every counter equals its increments. 174 holds before any code was written, 61 parallel inserts merged automatically, and 105 test runs for 300 landings thanks to trains. |
 | Flight planning, off vs on (snapshots: [off](https://contrail.mikey9220.workers.dev/api/p/stress-a/snapshot), [on](https://contrail.mikey9220.workers.dev/api/p/stress-b/snapshot); [replay with planning](https://contrail.mikey9220.workers.dev/p/stress-b?replay=/replays/stress-planned.jsonl.gz&speed=4)) | The same 100 scripted agents and 300 intents, one run each way on the same deployment | Time agents spent holding a claim fell from 5.8 h to 18 min. They waited on the ground instead, without a workspace (2.7 h in total), so all waiting fell by half (5.9 h → 3.0 h). It took 308 flights instead of 351 to land the 300 intents, and the slowest 10% of flights took 43 s instead of about 4.8 min. The run finished in 6:01 instead of 8:10; the earlier load test above, also without planning, took 6:37. Both runs: no lost updates. |
 | Load test + redeploy mid-flight | 60 scripted agents, 180 intents | Exactly-once landings across the restart: no lost or doubled updates |
-| Sectors: the load test ×10 in one monorepo ([live](https://contrail.mikey9220.workers.dev/c/monorepo)) | 1,000 scripted agents, 100 per sector | 3,000/3,000 landed in 8:17, 6.0 landings per second, with no lost or doubled updates in any sector or in the composed monorepo trunk. See [Scaling](#scaling-to-100000-agents). |
+| Sectors: the load test ×10 in one monorepo ([replay](https://contrail.mikey9220.workers.dev/c/monorepo?replay=/replays/monorepo.jsonl.gz&speed=4)) | 1,000 scripted agents, 100 per sector | 3,000/3,000 landed in 8:42, 5.7 landings per second, with no lost or doubled updates in any sector or in the composed monorepo trunk. See [Scaling](#scaling-to-100000-agents). |
 | End-to-end protocol test ([`scripts/smoke.mjs`](scripts/smoke.mjs)) | Scripted git agents | Sibling methods merged in parallel, a hold, a landing turned away for touching code another flight holds, a real conflict with its cause, a semantic conflict caught by tests, resolution, `why()`, review by exception, a train with a culprit, and a playground starting over |
 
 From request to trunk, a landing takes about 1 s on the Bookshop and 2–3 s on Ramda: fetch the fork,
@@ -148,7 +148,7 @@ lands, it fetches every sector trunk that moved and commits one composed tree wh
 sector heads it folded in. Sectors own disjoint paths, so composing cannot conflict and needs no tests
 of its own.
 
-Measured on the live deployment ([open the monorepo](https://contrail.mikey9220.workers.dev/c/monorepo)):
+Measured on the live deployment ([watch the replay](https://contrail.mikey9220.workers.dev/c/monorepo?replay=/replays/monorepo.jsonl.gz&speed=4)):
 the load test above, copied into 10 directories of one monorepo, each a sector with its own 100 scripted
 agents and 300 intents.
 
@@ -156,20 +156,20 @@ agents and 300 intents.
 | --- | --- | --- |
 | Agents | 100 | 1,000 |
 | Changes landed | 300 / 300 | 3,000 / 3,000 |
-| Time | 6:37 | 8:17 (each sector 6:24 to 8:17) |
-| Landings per second | 0.76 | 6.0 on average, 15.9 at peak |
+| Time | 6:37 | 8:42 (each sector 6:38 to 8:42) |
+| Landings per second | 0.76 | 5.7 on average, 17.6 at peak (over 30 s) |
 | Lost or doubled updates | None | None, in every sector and in the composed monorepo |
 
-The Center composed the monorepo trunk 195 times and caught up 2.5 s after the last landing.
+The Center composed the monorepo trunk 197 times and caught up 2.2 s after the last landing.
 [`scripts/run-sectors.mjs`](scripts/run-sectors.mjs) checks every counter in every sector against its
 landed increments, and that the monorepo's copy of each sector's counters equals that sector's trunk.
 
 100,000 agents each landing a change every half hour is about 55 landings per second. Sectors in this
-run landed about 1.6 changes per second each while their work was spread out, and 0.6 averaged over the
-whole run, crowded tail included, so that is roughly 35 to 90 sectors. However many sectors move, the
+run landed about 1.8 changes per second each while their work was spread out, and 0.6 averaged over the
+whole run, crowded tail included, so that is roughly 30 to 100 sectors. However many sectors move, the
 Center commits at most about once a second, so the monorepo's history stays readable.
 
-![The monorepo page after the run: 1,000 agents, 3,000 of 3,000 changes landed across 10 sectors, 6.0 landings per second](docs/center.png)
+![The monorepo replay at its end: 1,000 agents, 3,000 of 3,000 changes landed across 10 sectors, and landings per second over the run](docs/center.png)
 
 ## Built on Cloudflare
 
@@ -302,11 +302,13 @@ node scripts/verify-stress.mjs stress                          # checks for lost
 
 ```bash
 node scripts/create-sectors.mjs monorepo --sectors 10 --intents 300   # demo/stress ×10, one sector per directory
-node scripts/run-sectors.mjs monorepo --agents 100                    # 100 scripted agents per sector, then checks every counter
+node scripts/run-sectors.mjs monorepo --agents 100 --record replays  # 100 scripted agents per sector; checks every counter, records a replay
 ```
 
 A sector is a project created with `center` and `prefix` and only files under its prefix. `POST /api/centers`
 with the sector slugs and the monorepo's full `files` creates the Center, and `/c/<slug>` shows it.
+`/c/<slug>?replay=/replays/<slug>.jsonl.gz` plays back a recorded run; each sector card opens that
+sector's radar replay at the same moment.
 
 ### Test
 
