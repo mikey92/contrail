@@ -71,6 +71,18 @@ export async function fetchUnrelated(repo: Repo, sources: { name: string; url: s
 	);
 }
 
+/** Pushes `oid` as `main` of another repo (a crossing's leg fork), replacing whatever its main was. */
+export async function pushTo(repo: Repo, url: string, token: string, oid: string) {
+	const ref = `refs/heads/push-${oid}`;
+	await git.writeRef({ fs: repo.fs, dir: repo.dir, ref, value: oid, force: true });
+	try {
+		const res = await git.push({ fs: repo.fs, http, dir: repo.dir, url, ref, remoteRef: "refs/heads/main", force: true, headers: headers(token), cache: repo.cache });
+		if (!res.ok) throw new Error(`push rejected: ${JSON.stringify(res.refs)}`);
+	} finally {
+		await git.deleteRef({ fs: repo.fs, dir: repo.dir, ref }).catch(() => {});
+	}
+}
+
 export async function setMain(repo: Repo, oid: string) {
 	await git.writeRef({ fs: repo.fs, dir: repo.dir, ref: "refs/heads/main", value: oid, force: true });
 }
@@ -111,6 +123,30 @@ export async function mergeBase(repo: Repo, a: string, b: string): Promise<strin
 export async function commitTreeOid(repo: Repo, commit: string): Promise<string> {
 	const { commit: c } = await git.readCommit({ fs: repo.fs, dir: repo.dir, oid: commit, cache: repo.cache });
 	return c.tree;
+}
+
+/** The tree oid of directory `dir` ("services/payments/") in a commit, or null when it has none. */
+export async function subtreeOid(repo: Repo, commitOid: string, dir: string): Promise<string | null> {
+	try {
+		const { oid } = await git.readTree({ fs: repo.fs, dir: repo.dir, oid: commitOid, filepath: dir.replace(/\/$/, ""), cache: repo.cache });
+		return oid;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * The newest commit at or behind `head` (following first parents) whose directory `dir` is the tree `want`:
+ * where a sector's own history stood when the monorepo had that tree. Null if not within `limit` commits.
+ */
+export async function findSubtree(repo: Repo, head: string, dir: string, want: string | null, limit = 5000): Promise<string | null> {
+	let oid: string | undefined = head;
+	for (let i = 0; oid && i < limit; i++) {
+		if ((await subtreeOid(repo, oid, dir)) === want) return oid;
+		const { commit: c } = await git.readCommit({ fs: repo.fs, dir: repo.dir, oid, cache: repo.cache });
+		oid = c.parent[0];
+	}
+	return null;
 }
 
 /** All blobs of a commit's tree, keyed by path. */

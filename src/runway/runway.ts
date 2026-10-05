@@ -84,6 +84,11 @@ interface TrainOptions {
 	oneByOne: boolean;
 	/** Fork heads already fetched in this train, by landing id. */
 	heads: Map<string, string>;
+	/**
+	 * A crossing's phase one: called with the outcomes once the train is merged and green, before
+	 * anything is pushed. Resolves true to push (phase two), false to leave trunk as it was.
+	 */
+	hold?: (outcomes: LandingOutcome[]) => Promise<boolean>;
 }
 
 /** The protected targets (from the project's review policy) that a change touches. */
@@ -117,6 +122,8 @@ export class Runway extends DurableObject<Env> {
 	private queue: Promise<unknown> = Promise.resolve();
 	private symbolCache = new Map<string, TrunkFile["symbols"]>();
 	private lineCache = new Map<string, number>();
+	/** A crossing's landing that is merged and green and waits for decide(); the runway is held meanwhile. */
+	private held: { landingId: string; decide: (commit: boolean) => void; result: Promise<BatchResult> } | null = null;
 
 	/** Serializes all git work on the in-memory clone. */
 	private exclusive<T>(fn: () => Promise<T>): Promise<T> {
@@ -177,6 +184,63 @@ export class Runway extends DurableObject<Env> {
 
 	async land(trunk: string, jobs: LandingJob[]): Promise<BatchResult> {
 		return this.exclusive(() => this.landTrain(trunk, jobs, { retry: 0, oneByOne: false, heads: new Map() }));
+	}
+
+	/**
+	 * Phase one of a crossing (a change that lands in several sectors or in none): merges, checks and tests
+	 * `job` like any landing, then stops short of the push and holds this runway, so trunk cannot move
+	 * under it, until decide() or `holdMs`. Answers with the outcome: "landed" here means ready to land.
+	 */
+	async prepare(trunk: string, job: LandingJob, holdMs: number): Promise<LandingOutcome> {
+		return new Promise<LandingOutcome>((answer, fail) => {
+			let answered = false;
+			let decision: Promise<boolean> | null = null;
+			const result: Promise<BatchResult> = this.exclusive(() =>
+				this.landTrain(trunk, [job], {
+					retry: 0,
+					oneByOne: false,
+					heads: new Map(),
+					hold: (outcomes) => {
+						// A train replayed after a failed push asks again: the decision stands.
+						if (decision) return decision;
+						answered = true;
+						answer(outcomes[0]);
+						decision = new Promise<boolean>((decide) => {
+							const timer = setTimeout(() => {
+								if (this.held?.landingId === job.landingId) this.held = null;
+								decide(false);
+							}, holdMs);
+							this.held = {
+								landingId: job.landingId,
+								decide: (commit) => {
+									clearTimeout(timer);
+									decide(commit);
+								},
+								result,
+							};
+						});
+						return decision;
+					},
+				}),
+			);
+			result.then(
+				(r) => !answered && answer(r.outcomes[0]),
+				(err) => !answered && fail(err),
+			);
+		});
+	}
+
+	/** Phase two of a crossing: pushes the prepared landing (or drops it) and returns the train's result. */
+	async decide(landingId: string, commit: boolean): Promise<BatchResult | null> {
+		const held = this.held;
+		if (!held || held.landingId !== landingId) {
+			if (!commit) return null;
+			throw new Error("the prepared landing is gone (it waited too long, or the runway restarted)");
+		}
+		this.held = null;
+		held.decide(commit);
+		const result = await held.result;
+		return commit ? result : null;
 	}
 
 	/**
@@ -316,6 +380,16 @@ export class Runway extends DurableObject<Env> {
 			} else {
 				for (const b of boarded) b.outcome.tests = boarded.length > 1 ? { ...report, train: boarded.length } : report;
 			}
+		}
+
+		// A crossing waits here, merged and green, until every sector it touches is ready too.
+		if (tip !== start && opts.hold && !(await opts.hold(outcomes))) {
+			for (const b of boarded) {
+				b.outcome.status = "failed";
+				b.outcome.trunkAfter = null;
+				b.outcome.error = "held back: the crossing did not land in every sector";
+			}
+			return { outcomes, head: start, trunk: null };
 		}
 
 		for (const { job, outcome, head } of boarded) {

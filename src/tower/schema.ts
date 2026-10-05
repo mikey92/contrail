@@ -39,4 +39,6 @@ export const SCHEMA = [
 	`CREATE INDEX IF NOT EXISTS symbol_history_path ON symbol_history(path, at)`,
 	// When the flight's workspace fork was deleted (it ended FORK_RETENTION_MS earlier).
 	`ALTER TABLE flights ADD COLUMN retired_at INTEGER`,
+	// The crossing (a change landing in several sectors at once) this landing is one leg of.
+	`ALTER TABLE landings ADD COLUMN crossing TEXT`,
 ];

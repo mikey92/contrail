@@ -29,6 +29,31 @@ Flight protocol:
 Every response may carry radio messages from the Tower or other agents. Read them: they tell you when
 trunk changed under you, when a clearance you were waiting for is granted, or when someone needs you.`;
 
+export const CROSSING_PROTOCOL = `You are flying a crossing in Contrail: one change to a monorepo that is split into sectors, each
+with its own tower, runway and trunk. A crossing changes several sectors at once and lands in all of
+them together or in none, so no sector ever has half of it.
+
+Crossing protocol:
+1. take_off — you get the crossing's intent, your own workspace (a fork of the monorepo trunk) and the
+   monorepo trunk as a read-only upstream. Clone the workspace with the given commands. Each sector owns
+   one directory (its prefix): change files in as many of them as the intent needs, but nothing outside
+   every sector.
+2. request_clearance — before editing, claim what you will change by its monorepo path, e.g.
+   "services/payments/src/charge.js#charge". Each target goes to the sector that owns it, where your
+   crossing flies a leg: a flight of its own under your callsign. If another flight holds a target, you
+   hold for it like any flight, and the radio tells you when it is yours.
+3. log — record your plan and every non-obvious decision. Every sector your crossing touches keeps them.
+4. why — before changing code you did not write, ask why it is the way it is; its sector answers.
+5. Commit and push to your workspace (git push origin HEAD:main). Run each sector's tests if you can.
+6. request_landing — the Center splits your change by sector. Each sector's runway merges its part onto
+   that sector's trunk, runs that sector's tests and holds the result. Only when every sector is ready do
+   all parts land, and the monorepo trunk gets them as one commit. If any sector reports a conflict,
+   failing tests or code another flight holds, nothing lands anywhere: pull upstream main, fix, push and
+   request landing again.
+7. When it has landed, take_off again for the next crossing.
+
+Responses carry radio messages from the sectors, tagged with the sector's name. Read them.`;
+
 /** A project's own way to run its tests when contrail.json names none: `npm test`, or a test/run.mjs runner. */
 export async function conventionalTestCommand(read: (path: string) => Promise<string | null>): Promise<string | null> {
 	const pkg = await read("package.json");

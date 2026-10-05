@@ -1,10 +1,11 @@
 // Contrail — air traffic control for coding agents.
 // Worker entry: REST API, MCP endpoint, live WebSocket feed, and the Radar UI (static assets).
 import { Hono } from "hono";
-import { TOOL_BY_NAME, TOOLS } from "./agent-api";
+import { CENTER_TOOL_BY_NAME, CENTER_TOOLS, TOOL_BY_NAME, TOOLS } from "./agent-api";
 import type { Env } from "./env";
 import { checkPrefixes } from "./center/compose";
 import { handleMcp } from "./mcp";
+import { CROSSING_PROTOCOL, PROTOCOL } from "./tower/briefing";
 import type { ProjectSource } from "./tower/tower";
 import { errorMessage, randomToken, safeEqual } from "./util";
 
@@ -117,14 +118,21 @@ app.delete("/api/projects/:slug", async (c) => {
 	return c.json({ deleted: slug, ...result });
 });
 
-// Workspace forks no project still needs: those of deleted projects, and of playground rounds that ended
-// before forks were retired. Towers retire their own forks an hour after each flight; this sweeps the rest,
-// at most `limit` per call (run it again until `remaining` is 0).
+// Workspace forks nothing still needs: those of deleted projects and centers, and of playground rounds that
+// ended before forks were retired. Towers and Centers retire their own forks an hour after each flight or
+// crossing; this sweeps the rest, at most `limit` per call (run it again until `remaining` is 0).
 app.post("/api/admin/sweep-forks", async (c) => {
 	if (!isAdmin(c)) return c.json({ error: "admin key required" }, 401);
 	const limit = Math.max(1, Math.min(Number(c.req.query("limit") ?? 300) || 300, 1000));
-	const projects = await registry(c.env).list();
-	const live = new Set((await Promise.all(projects.map((p) => tower(c.env, p.slug).liveForks().catch(() => [] as string[])))).flat());
+	const [projects, centers] = await Promise.all([registry(c.env).list(), registry(c.env).listCenters()]);
+	const live = new Set(
+		(
+			await Promise.all([
+				...projects.map((p) => tower(c.env, p.slug).liveForks().catch(() => [] as string[])),
+				...centers.map((x) => center(c.env, x.slug).liveForks().catch(() => [] as string[])),
+			])
+		).flat(),
+	);
 	const cutoff = Date.now() - 60 * 60_000;
 	const orphans: string[] = [];
 	let total = 0;
@@ -133,7 +141,7 @@ app.post("/api/admin/sweep-forks", async (c) => {
 		const page = await c.env.ARTIFACTS.list({ limit: 200, cursor });
 		total = page.total;
 		for (const repo of page.repos)
-			if (/--fl-\d+-[a-z0-9]{4}$/.test(repo.name) && !live.has(repo.name) && Date.parse(repo.updatedAt) < cutoff) orphans.push(repo.name);
+			if (/--(fl|cx)-\d+-[a-z0-9]{4}$/.test(repo.name) && !live.has(repo.name) && Date.parse(repo.updatedAt) < cutoff) orphans.push(repo.name);
 		cursor = page.cursor;
 	} while (cursor);
 	let deleted = 0;
@@ -337,7 +345,7 @@ app.all("/mcp/:slug", async (c) => {
 	const t = tower(c.env, slug);
 	const key = bearer(c.req.raw);
 	const agent = key ? await t.authenticate(key) : null;
-	return handleMcp(c.req.raw, { tower: t, agentId: agent?.id ?? null, projectName: entry.info.name });
+	return handleMcp(c.req.raw, { tools: TOOLS, target: t, agentId: agent?.id ?? null, projectName: entry.info.name, instructions: PROTOCOL });
 });
 
 // ── centers: a monorepo split into sectors ─────────────────
@@ -421,6 +429,70 @@ app.get("/api/c/:slug/clone", async (c) => {
 	} finally {
 		repo[Symbol.dispose]?.();
 	}
+});
+
+app.get("/api/c/:slug/crossings/:code", async (c) => {
+	if (!(await canViewCenter(c, c.req.param("slug")))) return c.json({ error: "not found" }, 404);
+	const crossing = await center(c.env, c.req.param("slug")).crossing(c.req.param("code"));
+	return crossing ? c.json({ crossing }) : c.json({ error: "no such crossing" }, 404);
+});
+
+// ── crossings: changes across sectors, flown through the Center ──
+
+app.post("/api/c/:slug/intents", async (c) => {
+	if (!isAdmin(c)) return c.json({ error: "admin key required" }, 401);
+	if (!(await registry(c.env).getCenter(c.req.param("slug")))) return c.json({ error: "not found" }, 404);
+	const body = await c.req.json<{ intents: { title: string; body?: string }[] }>();
+	return c.json({ intents: await center(c.env, c.req.param("slug")).addIntents(body.intents ?? []) });
+});
+
+// Crossing agents join with the admin key and receive a personal agent key for this Center.
+app.post("/api/c/:slug/join", async (c) => {
+	if (!isAdmin(c)) return c.json({ error: "admin key required" }, 401);
+	const slug = c.req.param("slug");
+	if (!(await registry(c.env).getCenter(slug))) return c.json({ error: "not found" }, 404);
+	const body = await c.req.json<{ callsign?: string; kind?: any; model?: string }>().catch(() => ({}) as any);
+	const { agent, key } = await center(c.env, slug).join({ callsign: body.callsign, kind: body.kind, model: body.model });
+	const origin = c.env.PUBLIC_ORIGIN ?? new URL(c.req.url).origin;
+	const mcpUrl = `${origin}/mcp/c/${slug}`;
+	return c.json({
+		agent,
+		key,
+		mcp: {
+			url: mcpUrl,
+			claudeCode: `claude mcp add --transport http contrail-${slug} ${mcpUrl} --header "Authorization: Bearer ${key}"`,
+			codex: `export CONTRAIL_KEY=${key} && codex mcp add contrail-${slug} --url ${mcpUrl} --bearer-token-env-var CONTRAIL_KEY`,
+		},
+	});
+});
+
+app.use("/api/c/:slug/agent/*", async (c, next) => {
+	const slug = c.req.param("slug");
+	if (!(await registry(c.env).getCenter(slug))) return c.json({ error: "not found" }, 404);
+	const key = bearer(c.req.raw);
+	const agent = key ? await center(c.env, slug).authenticate(key) : null;
+	if (!agent) return c.json({ error: "agent key required (Authorization: Bearer ct_…)" }, 401);
+	c.set("agentId", agent.id);
+	await next();
+});
+
+app.get("/api/c/:slug/agent/tools", (c) => c.json({ tools: CENTER_TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) }));
+
+app.post("/api/c/:slug/agent/:tool", async (c) => {
+	const tool = CENTER_TOOL_BY_NAME.get(c.req.param("tool"));
+	if (!tool) return c.json({ error: "unknown tool" }, 404);
+	const args = await c.req.json<Record<string, unknown>>().catch(() => ({}));
+	return c.json(await tool.run(center(c.env, c.req.param("slug")), c.get("agentId")!, args));
+});
+
+app.all("/mcp/c/:slug", async (c) => {
+	const slug = c.req.param("slug");
+	const info = await registry(c.env).getCenter(slug);
+	if (!info) return c.json({ error: "not found" }, 404);
+	const target = center(c.env, slug);
+	const key = bearer(c.req.raw);
+	const agent = key ? await target.authenticate(key) : null;
+	return handleMcp(c.req.raw, { tools: CENTER_TOOLS, target, agentId: agent?.id ?? null, projectName: info.name, instructions: CROSSING_PROTOCOL });
 });
 
 app.all("/api/*", (c) => c.json({ error: "not found" }, 404));

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import type { CenterInfo, CenterSnapshot, SectorSummary } from "../../../src/shared/types";
+import type { CenterInfo, CenterSnapshot, Crossing, CrossingLeg, SectorSummary } from "../../../src/shared/types";
 import { duration, fetchRecording, relTime, SampleReplay, useReplay } from "../store";
 import { Command } from "./Detail";
 import { Logo } from "./Icons";
@@ -42,6 +42,8 @@ function toSnapshot(header: Header, x: Sample): CenterSnapshot {
 			const row = x.s[i];
 			return { ...sector, summary: row ? (Object.fromEntries(header.fields.map((f, j) => [f, row[j]])) as unknown as SectorSummary) : null };
 		}),
+		crossings: [],
+		openIntents: 0,
 	};
 }
 
@@ -292,6 +294,7 @@ function CenterView({
 					})}
 				</div>
 				{children}
+				{!replay && snap.crossings?.length > 0 && <Crossings crossings={snap.crossings} now={now} />}
 			</main>
 
 			{clone && (
@@ -308,6 +311,75 @@ function CenterView({
 				</div>
 			)}
 		</div>
+	);
+}
+
+/** A crossing's state in a few words, with the status chip's tone. */
+function crossingState(cx: Crossing): { label: string; tone: string } {
+	if (cx.status === "landed") return { label: `Landed in ${cx.legs.filter((l) => l.landing?.status === "landed").length} sectors at once`, tone: "landed" };
+	if (cx.status === "aborted") return { label: "Aborted", tone: "aborted" };
+	if (cx.landing?.status === "landing") return { label: "Landing", tone: "approach" };
+	if (cx.status === "diverted") return { label: "Landed nowhere", tone: "diverted" };
+	return { label: "In the air", tone: "airborne" };
+}
+
+function legState(leg: CrossingLeg): { label: string; tone: string } {
+	const l = leg.landing;
+	if (!l) return { label: "flying", tone: "airborne" };
+	if (l.status === "landed") return { label: `landed ${l.commit?.slice(0, 8) ?? ""}`, tone: "landed" };
+	if (l.status === "verifying") return { label: "ready, held", tone: "approach" };
+	if (l.status === "merging" || l.status === "queued") return { label: "merging and testing", tone: "approach" };
+	if (l.status === "conflict") return { label: "conflict", tone: "diverted" };
+	if (l.error === "held back") return { label: "ready, held back", tone: "aborted" };
+	if (l.tests && l.tests.failed > 0) return { label: `${l.tests.failed} test${l.tests.failed > 1 ? "s" : ""} failed`, tone: "diverted" };
+	return { label: "turned away", tone: "diverted" };
+}
+
+/** Changes that span sectors: each flies a leg in every sector it touches and lands in all of them, or in none. */
+function Crossings({ crossings, now }: { crossings: Crossing[]; now: number }) {
+	return (
+		<section class="crossings">
+			<h2 class="crossings-title">Crossings</h2>
+			<p class="crossings-lede">
+				A crossing is one change across several sectors. It flies a leg in each sector it touches; every sector's runway merges and tests its part and
+				holds it until all of them are ready, then all of them land and the monorepo gets one commit. If one sector turns its part away, none lands.
+			</p>
+			<div class="crossing-list">
+				{crossings.map((cx) => {
+					const state = crossingState(cx);
+					return (
+						<article key={cx.code} class="crossing">
+							<div class="crossing-top">
+								<span class="mono crossing-code">{cx.code}</span>
+								<span class="crossing-title">{cx.intent.title}</span>
+								<span class={`st st-${state.tone}`}>{state.label}</span>
+							</div>
+							<div class="crossing-sub">
+								{cx.callsign}
+								{cx.model ? ` · ${cx.model}` : ""} · {relTime(cx.landing?.finishedAt ?? cx.updatedAt, now)}
+								{cx.attempts > 1 ? ` · ${cx.attempts} landing attempts` : ""}
+							</div>
+							{cx.legs.length > 0 && (
+								<div class="crossing-legs">
+									{cx.legs.map((leg) => {
+										const ls = legState(leg);
+										return (
+											<a key={leg.sector} class="crossing-leg" href={`/p/${leg.sector}`} title={leg.landing?.error ?? `Open ${leg.name}'s radar`}>
+												<span class="crossing-leg-name">{leg.name}</span>
+												<span class="mono muted">{leg.flight}</span>
+												<span class={`st st-${ls.tone}`}>{ls.label}</span>
+											</a>
+										);
+									})}
+								</div>
+							)}
+							{cx.landing?.status === "failed" && cx.landing.error && <p class="crossing-error">{cx.landing.error}</p>}
+							{cx.landing?.status === "landed" && cx.landing.commit && <div class="crossing-foot mono">monorepo {cx.landing.commit.slice(0, 8)}</div>}
+						</article>
+					);
+				})}
+			</div>
+		</section>
 	);
 }
 

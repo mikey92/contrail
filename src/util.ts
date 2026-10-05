@@ -55,6 +55,12 @@ export function repoSafe(s: string): string {
 	return s.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^[^a-z0-9]+/, "").slice(0, 60);
 }
 
+/** A git URL with an Artifacts repo token in it, for an agent's remotes. */
+export function cloneUrl(remote: string, token: string): string {
+	const secret = token.split("?expires=")[0];
+	return `https://x:${secret}@${remote.replace(/^https:\/\//, "")}`;
+}
+
 export function errorMessage(err: unknown): string {
 	if (err instanceof Error) return err.message;
 	return String(err);

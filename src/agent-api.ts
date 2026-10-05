@@ -1,16 +1,19 @@
 // The agent-facing operations. The same table drives the MCP server and the REST API, so an agent
 // gets identical behaviour whether it speaks MCP (Claude Code, Codex, Cursor…) or plain HTTP.
+// TOOLS fly flights in one project; CENTER_TOOLS fly crossings, changes across a monorepo's sectors.
+import type { Center } from "./center/center";
 import type { Tower } from "./tower/tower";
 
 type TowerStub = DurableObjectStub<Tower>;
+type CenterStub = DurableObjectStub<Center>;
 
-export interface ToolDef {
+export interface ToolDef<T = TowerStub> {
 	name: string;
 	description: string;
 	inputSchema: Record<string, unknown>;
 	/** MCP tool annotations; clients use them to decide what needs approval. */
 	annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean; idempotentHint?: boolean; openWorldHint?: boolean };
-	run: (tower: TowerStub, agentId: string, args: Record<string, any>) => Promise<unknown>;
+	run: (target: T, agentId: string, args: Record<string, any>) => Promise<unknown>;
 	/** One-line human summary placed before the JSON payload. */
 	summarize?: (result: any) => string;
 }
@@ -145,3 +148,111 @@ export const TOOLS: ToolDef[] = [
 ];
 
 export const TOOL_BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));
+
+const legs = (cx: any) => (cx.legs as { name: string; flight: string }[]).map((l) => `${l.name} ${l.flight}`).join(", ");
+
+export const CENTER_TOOLS: ToolDef<CenterStub>[] = [
+	{
+		name: "take_off",
+		description:
+			"Start a crossing: the Center assigns you an open intent that spans several sectors and creates your own workspace repo, an Artifacts fork of the monorepo trunk, plus the monorepo trunk as a read-only upstream. Returns clone commands and the sectors with the directory each owns. Optionally pass an intent number.",
+		inputSchema: { type: "object", properties: { intent: str("Optional intent number like 'INT-2' or '2'.") } },
+		run: (c, a, args) => c.takeOff(a, { intent: args.intent ?? null }),
+		summarize: (r) =>
+			r.idle
+				? `Nothing assigned: ${r.message}`
+				: `✈ ${r.crossing.code} airborne for INT-${r.intent.seq} "${r.intent.title}". Clone your workspace with the setup commands, then request_clearance for what you will change (monorepo paths) and log your plan. Sectors: ${r.sectors.map((s: any) => `${s.name} ${s.prefix}`).join(", ")}.`,
+	},
+	{
+		name: "request_clearance",
+		description:
+			"Before editing, claim the code you will change, by monorepo path: 'path#symbol' (a function, class or Class.method), a file or a directory. Each target goes to the sector that owns it, where your crossing flies a leg. Targets another flight holds put you in a holding pattern for them; the radio tells you when they are yours.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				targets: { type: "array", items: { type: "string" }, description: "e.g. ['services/api/src/orders.js#orderJson', 'web/src/receipt.js#receiptLine']" },
+				reason: str("What you are going to do to them."),
+			},
+			required: ["targets"],
+		},
+		run: (c, a, args) => c.requestClearance(a, { targets: args.targets ?? [], reason: args.reason }),
+		summarize: (r) =>
+			r.holding.length
+				? `Cleared: ${r.granted.join(", ") || "nothing"}. HOLDING for ${r.holding.map((h: any) => `${h.target} in ${h.sector} (held by ${h.heldBy.callsign} ${h.heldBy.flight}: ${h.heldBy.intent})`).join("; ")}.`
+				: `Cleared for ${r.granted.join(", ")}.`,
+	},
+	{
+		name: "release_clearance",
+		description: "Give back clearances you no longer need (all of them, in every sector, if no targets are given).",
+		inputSchema: { type: "object", properties: { targets: { type: "array", items: { type: "string" } } } },
+		run: (c, a, args) => c.releaseClearance(a, { targets: args.targets }),
+		summarize: (r) => `Released ${r.released.join(", ") || "nothing"}.`,
+	},
+	{
+		name: "log",
+		description: "Write to your crossing's contrail: its plan (kind 'plan') and each non-obvious choice (kind 'decision'). Every sector your crossing touches keeps them with the code it lands there.",
+		inputSchema: {
+			type: "object",
+			properties: { kind: { type: "string", enum: ["plan", "decision", "note", "handoff"] }, text: str("Plain language, specific."), refs: { type: "array", items: { type: "string" } } },
+			required: ["kind", "text"],
+		},
+		run: (c, a, args) => c.log(a, { kind: args.kind, text: String(args.text ?? ""), refs: args.refs }),
+		summarize: (r) => `Logged${r.sectors.length ? ` in ${r.sectors.join(", ")}` : ""}.`,
+	},
+	{
+		name: "request_landing",
+		description:
+			"After committing and pushing to your workspace (git push origin HEAD:main), land the crossing. The Center splits your change by sector; each sector's runway merges its part onto that sector's trunk and runs its tests, then holds it. Only when every sector is ready do all parts land, and the monorepo trunk gets one commit. Otherwise nothing lands anywhere and you get each sector's reason.",
+		inputSchema: { type: "object", properties: { summary: str("What changed and why, 1-5 sentences. Becomes the commit body in every sector.") }, required: ["summary"] },
+		run: (c, a, args) => c.requestLanding(a, { summary: String(args.summary ?? "") }),
+		summarize: (r) => {
+			const l = r.crossing.landing;
+			if (l?.status === "landed") return `🛬 ${r.crossing.code} landed in ${legs(r.crossing)} at once. ${r.next}`;
+			return `✖ Not landed. ${r.next}`;
+		},
+	},
+	{
+		name: "landing_status",
+		annotations: { readOnlyHint: true, openWorldHint: false },
+		description: "Check your crossing and its latest landing, sector by sector.",
+		inputSchema: { type: "object", properties: {} },
+		run: (c, a) => c.landingStatus(a),
+		summarize: (r) => `${r.crossing.code} ${r.crossing.status}. ${r.next}`,
+	},
+	{
+		name: "radar",
+		annotations: { readOnlyHint: true, openWorldHint: false },
+		description: "See every sector's airspace: active flights, what they are cleared for or holding for, your legs, open crossing intents, and your radio messages.",
+		inputSchema: { type: "object", properties: {} },
+		run: (c, a) => c.radar(a),
+		summarize: (r) => `${r.sectors.length} sector(s), ${r.openIntents.length} open crossing intent(s).`,
+	},
+	{
+		name: "why",
+		annotations: { readOnlyHint: true, openWorldHint: false },
+		description: "Ask why code is the way it is. Give a monorepo path and a line or symbol; the sector that owns it answers with the intents, agents, plans and decisions that shaped it.",
+		inputSchema: {
+			type: "object",
+			properties: { path: str("File path, or 'path#symbol'."), line: { type: "number" }, symbol: str("Function/class/method name.") },
+			required: ["path"],
+		},
+		run: (c, a, args) => c.why({ path: String(args.path ?? ""), line: args.line, symbol: args.symbol }, a),
+		summarize: (r) => (r.history.length ? `${r.target}: ${r.history.length} landed change(s) on record in ${r.sector}.` : `${r.target}: no recorded history.`),
+	},
+	{
+		name: "abort",
+		description: "Abandon your crossing. Its intent goes back to the queue and its legs release their clearances in every sector.",
+		inputSchema: { type: "object", properties: { reason: str("Why.") } },
+		run: (c, a, args) => c.abort(a, args.reason),
+		summarize: () => "Crossing aborted; intent returned to the queue.",
+	},
+	{
+		name: "refresh_workspace",
+		description: "Get fresh clone URLs (tokens) for your workspace and the monorepo upstream if git reports authentication errors.",
+		inputSchema: { type: "object", properties: {} },
+		run: (c, a) => c.refreshWorkspace(a),
+		summarize: () => "Fresh workspace credentials issued. Update your remotes with `git remote set-url`.",
+	},
+];
+
+export const CENTER_TOOL_BY_NAME = new Map(CENTER_TOOLS.map((t) => [t.name, t]));

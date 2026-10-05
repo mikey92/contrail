@@ -150,6 +150,8 @@ export interface Landing {
 	review: ReviewState | null;
 	createdAt: number;
 	finishedAt: number | null;
+	/** The crossing (e.g. "CX-003") this landing is one sector's part of: it lands with the others or not at all. */
+	crossing?: string | null;
 }
 
 export type ContrailKind = "intent" | "plan" | "decision" | "note" | "radio" | "clearance" | "landing" | "conflict" | "test" | "handoff";
@@ -232,6 +234,78 @@ export interface CenterSnapshot {
 	behind: number;
 	compositions: number;
 	sectors: (SectorInfo & { summary: SectorSummary | null })[];
+	/** The latest crossings, newest first, and how many crossing intents wait for an agent. */
+	crossings: Crossing[];
+	openIntents: number;
+}
+
+/** An agent that flies crossings. In each sector, its legs fly under a callsign of their own there. */
+export interface CenterAgent {
+	id: string;
+	callsign: string;
+	kind: AgentKind;
+	model: string | null;
+	joinedAt: number;
+	lastSeenAt: number;
+}
+
+/** Work for a crossing: a change across sectors. */
+export interface CenterIntent {
+	seq: number;
+	title: string;
+	body: string;
+	status: "open" | "assigned" | "landed";
+	crossing: string | null;
+	createdBy: string;
+	createdAt: number;
+	landedCommit: string | null;
+}
+
+/** One sector's part of a crossing: a flight in that sector, whose landing lands with the others or not at all. */
+export interface CrossingLeg {
+	sector: string;
+	name: string;
+	prefix: string;
+	agentId: string;
+	flightId: string;
+	flight: string;
+	repo: string;
+	/** Its part of the latest landing attempt. */
+	landing: {
+		status: LandingStatus;
+		commit: string | null;
+		error: string | null;
+		tests: { passed: number; failed: number } | null;
+		conflicts: ConflictReport[];
+		changes: number;
+	} | null;
+}
+
+export type CrossingStatus = "airborne" | "approach" | "landed" | "diverted" | "aborted";
+
+/** One change to a sectored monorepo that spans several sectors and lands in all of them at once, or in none. */
+export interface Crossing {
+	code: string;
+	seq: number;
+	agentId: string;
+	callsign: string;
+	model: string | null;
+	intent: { seq: number; title: string; body: string };
+	status: CrossingStatus;
+	/** Its workspace: a fork of the monorepo trunk. */
+	repo: string;
+	base: string;
+	plan: string | null;
+	/** Its plan, decisions and notes; every leg's contrail gets them too. */
+	contrail: { kind: ContrailKind; text: string; at: number }[];
+	legs: CrossingLeg[];
+	attempts: number;
+	/** The latest landing attempt: `commit` is the monorepo commit it became. */
+	landing: { status: "landing" | "landed" | "failed"; summary: string; at: number; finishedAt: number | null; commit: string | null; error: string | null } | null;
+	createdAt: number;
+	updatedAt: number;
+	landedAt: number | null;
+	retiredAt: number | null;
 }
 
 /** Everything the Radar UI needs to render a project. */

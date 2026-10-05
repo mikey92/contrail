@@ -28,7 +28,7 @@ import type {
 	SectorSummary,
 	TrunkState,
 } from "../shared/types";
-import { callsignFor, colorFor, errorMessage, json, now, randomId, randomToken, repoSafe, sha256, sleep } from "../util";
+import { callsignFor, cloneUrl, colorFor, errorMessage, json, now, randomId, randomToken, repoSafe, sha256, sleep } from "../util";
 import { conventionalTestCommand, PROTOCOL, workspaceInstructions } from "./briefing";
 import { findCollisions, normalizeTarget, parseTarget, targetsOverlap } from "./clearance";
 import { type AirTarget, crowding, firstCollision, predictTargets, type SymbolIndex, symbolIndex } from "./planner";
@@ -47,6 +47,8 @@ const TEST_COMMAND_CHECK = 2;
 const FORK_RETENTION_MS = 60 * 60_000;
 /** Forks deleted per alarm (once a minute), so a backlog drains without a burst of Artifacts calls. */
 const RETIRE_BATCH = 20;
+/** A crossing's leg that is ready this long without word from its Center is let go (the Center restarted). */
+const LEG_TIMEOUT_MS = 2 * 60_000;
 const ACTIVE: FlightStatus[] = ["taxiing", "airborne", "holding", "approach", "diverted"];
 
 export interface ProjectSource {
@@ -124,8 +126,11 @@ export class Tower extends DurableObject<Env> {
 		ctx.blockConcurrencyWhile(async () => {
 			this.migrate();
 			// A restart (deploy, eviction) can interrupt a train: put its landings back in the queue.
-			const stale = this.sql.exec("UPDATE landings SET status = 'queued' WHERE status IN ('merging', 'verifying') RETURNING id").toArray();
+			const stale = this.sql.exec("UPDATE landings SET status = 'queued' WHERE status IN ('merging', 'verifying') AND crossing IS NULL RETURNING id").toArray();
 			if (stale.length) await ctx.storage.setAlarm(Date.now() + 500);
+			// A crossing's leg cannot be replayed on its own: it lands with the other sectors or not at all.
+			for (const r of this.sql.exec("UPDATE landings SET status = 'failed', error = 'interrupted by a restart: request landing again', finished_at = ? WHERE status IN ('merging', 'verifying') AND crossing IS NOT NULL RETURNING flight_id", Date.now()).toArray())
+				this.sql.exec("UPDATE flights SET status = 'diverted' WHERE id = ? AND status = 'approach'", r.flight_id as string);
 		});
 	}
 
@@ -254,6 +259,7 @@ export class Tower extends DurableObject<Env> {
 			review: json(r.review as string, null),
 			createdAt: r.created_at as number,
 			finishedAt: (r.finished_at as number) ?? null,
+			crossing: (r.crossing as string) ?? null,
 		};
 	}
 
@@ -273,6 +279,12 @@ export class Tower extends DurableObject<Env> {
 		const r = this.row("SELECT * FROM intents WHERE id = ?", id);
 		if (!r) throw new Error(`unknown intent ${id}`);
 		return this.toIntent(r);
+	}
+
+	private landingById(id: string): Landing {
+		const r = this.row("SELECT * FROM landings WHERE id = ?", id);
+		if (!r) throw new Error(`unknown landing ${id}`);
+		return this.toLanding(r);
 	}
 
 	/** Resolves a flight reference (id or code) owned by `agentId`; defaults to the agent's active flight. */
@@ -345,6 +357,12 @@ export class Tower extends DurableObject<Env> {
 		this.sql.exec("INSERT INTO inbox (flight_id, kind, text, at) VALUES (?, ?, ?, ?)", flightId, kind, text, now());
 	}
 
+	/** Radio waiting for an agent's active flight: the Center relays a crossing's leg radio to the crossing's agent. */
+	async radioFor(agentId: string): Promise<RadioMessage[]> {
+		const r = this.row<{ id: string }>(`SELECT id FROM flights WHERE agent_id = ? AND status IN (${ACTIVE.map(() => "?").join(",")})`, agentId, ...ACTIVE);
+		return this.drainRadio(r?.id ?? null);
+	}
+
 	/** Undelivered radio messages for a flight; marks them delivered. */
 	private drainRadio(flightId: string | null): RadioMessage[] {
 		if (!flightId) return [];
@@ -356,16 +374,11 @@ export class Tower extends DurableObject<Env> {
 		return rows.map((r) => ({ kind: r.kind, text: r.text, at: r.at }));
 	}
 
-	private workspaceUrl(remote: string, token: string): string {
-		const secret = token.split("?expires=")[0];
-		return `https://x:${secret}@${remote.replace(/^https:\/\//, "")}`;
-	}
-
 	private async mintWorkspace(repoName: string, scope: "read" | "write"): Promise<Workspace> {
 		const repo = await this.env.ARTIFACTS.get(repoName);
 		try {
 			const [info, token] = await Promise.all([repo.info(), repo.createToken(scope, WORKSPACE_TOKEN_TTL_S)]);
-			return { repo: repoName, remote: info.remote, cloneUrl: this.workspaceUrl(info.remote, token.plaintext), expiresAt: token.expiresAt };
+			return { repo: repoName, remote: info.remote, cloneUrl: cloneUrl(info.remote, token.plaintext), expiresAt: token.expiresAt };
 		} finally {
 			repo[Symbol.dispose]?.();
 		}
@@ -443,7 +456,6 @@ export class Tower extends DurableObject<Env> {
 		return info;
 	}
 
-	/** The project's own way to run its tests (contrail.json), told to agents when they take off. */
 	/**
 	 * The command agents are told to run their tests with: contrail.json's `tests.command`, else the
 	 * project's own convention (`npm test` when package.json defines it, a test/run.mjs runner).
@@ -579,7 +591,8 @@ export class Tower extends DurableObject<Env> {
 		const air = planning ? this.airspace(index) : [];
 		const deferred: Dispatch["deferred"] = [];
 		let lineUp: Dispatch | null = null;
-		for (const r of this.rows("SELECT * FROM intents WHERE status = 'open' ORDER BY priority DESC, seq ASC")) {
+		// A crossing's intents belong to its legs: they are only flown by name.
+		for (const r of this.rows("SELECT * FROM intents WHERE status = 'open' AND created_by NOT LIKE 'center:%' ORDER BY priority DESC, seq ASC")) {
 			const intent = this.toIntent(r);
 			const blocked = intent.dependsOn.some((id) => this.row<{ status: string }>("SELECT status FROM intents WHERE id = ?", id)?.status !== "landed");
 			if (blocked) continue;
@@ -1081,60 +1094,67 @@ export class Tower extends DurableObject<Env> {
 		}
 	}
 
+	/** What the runway needs to land `l`: the fork, the commit message and note, and the code others hold. */
+	private landingJob(l: Landing, granted: Clearance[]): LandingJob {
+		const flight = this.flightById(l.flightId);
+		const agent = this.agentById(flight.agentId);
+		const intent = this.intentById(flight.intentId);
+		const contrail = this.rows<{ kind: string; text: string }>(
+			"SELECT kind, text FROM contrail WHERE flight_id = ? AND kind IN ('plan', 'decision', 'handoff') ORDER BY id",
+			flight.id,
+		);
+		return {
+			landingId: l.id,
+			flightId: flight.id,
+			repo: flight.repo,
+			review: this.meta<{ review?: string[] }>("policy", {}).review ?? [],
+			approved: l.review?.decision === "approved",
+			heldByOthers: granted
+				.filter((c) => c.flightId !== flight.id)
+				.map((c) => {
+					const holder = this.flightById(c.flightId);
+					return { target: c.target, flight: holder.code, callsign: this.agentById(holder.agentId).callsign };
+				}),
+			author: { name: agent.callsign, email: `${agent.callsign.toLowerCase()}@agents.contrail.dev` },
+			message: [
+				`${intent.title} (INT-${intent.seq})`,
+				"",
+				// Trailer lines are the Tower's to write: drop look-alikes from the agent's summary.
+				l.summary.replace(/^Contrail-[\w-]+:.*$/gim, "").trim(),
+				"",
+				`Contrail-Flight: ${flight.code}`,
+				`Contrail-Landing: ${l.id}`,
+				`Contrail-Intent: INT-${intent.seq}`,
+				`Contrail-Agent: ${agent.callsign}${agent.model ? ` (${agent.model})` : ""}`,
+				...(l.crossing ? [`Contrail-Crossing: ${l.crossing}`] : []),
+			].join("\n"),
+			note: {
+				flight: flight.code,
+				agent: agent.callsign,
+				model: agent.model,
+				intent: { seq: intent.seq, title: intent.title, body: intent.body },
+				summary: l.summary,
+				plan: flight.plan,
+				decisions: contrail.filter((c) => c.kind !== "plan").map((c) => c.text),
+				...(l.crossing ? { crossing: l.crossing } : {}),
+			},
+		};
+	}
+
 	/** Drains the landing queue in trains. Exactly one train is on the runway at a time. */
 	private async processQueue(): Promise<void> {
 		if (this.processing) return;
 		this.processing = true;
 		try {
 			for (;;) {
-				const queued = this.rows("SELECT * FROM landings WHERE status = 'queued' ORDER BY seq LIMIT ?", TRAIN_SIZE).map((r) => this.toLanding(r));
+				const queued = this.rows("SELECT * FROM landings WHERE status = 'queued' AND crossing IS NULL ORDER BY seq LIMIT ?", TRAIN_SIZE).map((r) => this.toLanding(r));
 				if (queued.length === 0) return;
 				const project = this.project();
 				const jobs: LandingJob[] = [];
 				// Clearances are enforced at landing too: a change to code another flight is cleared for is turned away.
 				const granted = this.activeClearances().filter((c) => c.status === "granted");
 				for (const l of queued) {
-					const flight = this.flightById(l.flightId);
-					const agent = this.agentById(flight.agentId);
-					const intent = this.intentById(flight.intentId);
-					const contrail = this.rows<{ kind: string; text: string }>(
-						"SELECT kind, text FROM contrail WHERE flight_id = ? AND kind IN ('plan', 'decision', 'handoff') ORDER BY id",
-						flight.id,
-					);
-					jobs.push({
-						landingId: l.id,
-						flightId: flight.id,
-						repo: flight.repo,
-						review: this.meta<{ review?: string[] }>("policy", {}).review ?? [],
-						approved: l.review?.decision === "approved",
-						heldByOthers: granted
-							.filter((c) => c.flightId !== flight.id)
-							.map((c) => {
-								const holder = this.flightById(c.flightId);
-								return { target: c.target, flight: holder.code, callsign: this.agentById(holder.agentId).callsign };
-							}),
-						author: { name: agent.callsign, email: `${agent.callsign.toLowerCase()}@agents.contrail.dev` },
-						message: [
-							`${intent.title} (INT-${intent.seq})`,
-							"",
-							// Trailer lines are the Tower's to write: drop look-alikes from the agent's summary.
-							l.summary.replace(/^Contrail-[\w-]+:.*$/gim, "").trim(),
-							"",
-							`Contrail-Flight: ${flight.code}`,
-							`Contrail-Landing: ${l.id}`,
-							`Contrail-Intent: INT-${intent.seq}`,
-							`Contrail-Agent: ${agent.callsign}${agent.model ? ` (${agent.model})` : ""}`,
-						].join("\n"),
-						note: {
-							flight: flight.code,
-							agent: agent.callsign,
-							model: agent.model,
-							intent: { seq: intent.seq, title: intent.title, body: intent.body },
-							summary: l.summary,
-							plan: flight.plan,
-							decisions: contrail.filter((c) => c.kind !== "plan").map((c) => c.text),
-						},
-					});
+					jobs.push(this.landingJob(l, granted));
 					this.sql.exec("UPDATE landings SET status = 'merging' WHERE id = ?", l.id);
 					this.patch("landing", { ...l, status: "merging" });
 				}
@@ -1153,19 +1173,23 @@ export class Tower extends DurableObject<Env> {
 					const l = queued.find((q) => q.id === outcome.landingId)!;
 					this.applyOutcome(l, outcome);
 				}
-				if (result.outcomes.some((o) => o.status === "landed" && o.changes.some((c) => c.path === CONFIG_FILE))) await this.readTestCommand();
-				if (result.trunk) {
-					const stats = this.meta<Record<string, number>>("stats", {});
-					const state: TrunkState = { head: result.head, files: result.trunk, landedCount: stats.landings ?? 0 };
-					this.setMeta("trunk", state);
-					this.patch("trunk", state);
-					// A sector tells its Center, which folds the new trunk into the monorepo.
-					if (project.center) this.ctx.waitUntil(this.env.CENTER.get(this.env.CENTER.idFromName(project.center)).sectorMoved(project.slug).catch(() => {}));
-				}
+				await this.trunkMoved(result);
 			}
 		} finally {
 			this.processing = false;
 		}
+	}
+
+	/** Records what a train left on trunk; a sector tells its Center, which folds the new trunk into the monorepo. */
+	private async trunkMoved(result: BatchResult) {
+		if (result.outcomes.some((o) => o.status === "landed" && o.changes.some((c) => c.path === CONFIG_FILE))) await this.readTestCommand();
+		if (!result.trunk) return;
+		const project = this.project();
+		const stats = this.meta<Record<string, number>>("stats", {});
+		const state: TrunkState = { head: result.head, files: result.trunk, landedCount: stats.landings ?? 0 };
+		this.setMeta("trunk", state);
+		this.patch("trunk", state);
+		if (project.center) this.ctx.waitUntil(this.env.CENTER.get(this.env.CENTER.idFromName(project.center)).sectorMoved(project.slug).catch(() => {}));
 	}
 
 	private finishLanding(l: Landing, patch: Partial<Landing>) {
@@ -1365,7 +1389,6 @@ export class Tower extends DurableObject<Env> {
 		};
 	}
 
-	/** The story behind a line or symbol of trunk: which intents changed it, by whom, and why. */
 	/** The landed intents, plans and decisions behind a piece of code. `askedBy` is set when an agent asks. */
 	async why(input: { path: string; line?: number; symbol?: string }, askedBy?: string): Promise<Record<string, unknown>> {
 		const path = normalizeTarget(input.path).split("#")[0];
@@ -1489,7 +1512,8 @@ export class Tower extends DurableObject<Env> {
 			inAir: count(`SELECT COUNT(*) AS c FROM flights WHERE status IN (${ACTIVE.map(() => "?").join(",")})`, ...ACTIVE),
 			holding: count("SELECT COUNT(*) AS c FROM flights WHERE status = 'holding'"),
 			landed: count("SELECT COUNT(*) AS c FROM intents WHERE status = 'landed'"),
-			intents: count("SELECT COUNT(*) AS c FROM intents"),
+			// A crossing's leg that closed without landing leaves a cancelled intent behind: it is not work.
+			intents: count("SELECT COUNT(*) AS c FROM intents WHERE status != 'cancelled'"),
 			landings: stats.landings ?? 0,
 			conflictsPrevented: stats.conflictsPrevented ?? 0,
 			agents: count("SELECT COUNT(*) AS c FROM agents"),
@@ -1711,6 +1735,190 @@ export class Tower extends DurableObject<Env> {
 		}
 	}
 
+	// ───────────────────────── crossings ─────────────────────────
+	// A crossing is one change to a sectored monorepo that spans several sectors. The Center flies it as one
+	// leg per sector it touches: a flight here like any other (clearances, contrail, why) on an intent of its
+	// own. A leg's landing is merged and tested by this sector's runway, which then holds it, unpushed, until
+	// the Center has heard from every sector: then every leg lands, or none does.
+
+	/** Opens this sector's leg of a crossing (or returns the open one), flown by the crossing's agent. */
+	async openLeg(input: { crossing: string; agentId?: string | null; callsign: string; kind: AgentKind; model?: string | null; title: string; body: string }): Promise<{ agentId: string; flight: Flight }> {
+		let agentId = input.agentId && this.row("SELECT id FROM agents WHERE id = ?", input.agentId) ? input.agentId : null;
+		if (!agentId) agentId = (await this.join({ callsign: input.callsign, kind: input.kind, model: input.model ?? undefined })).agent.id;
+		const active = this.row(`SELECT * FROM flights WHERE agent_id = ? AND status IN (${ACTIVE.map(() => "?").join(",")})`, agentId, ...ACTIVE);
+		if (active) {
+			const flight = this.toFlight(active);
+			if (this.intentById(flight.intentId).createdBy === `center:${input.crossing}`) return { agentId, flight };
+			await this.closeLeg(agentId, "its crossing ended");
+		}
+		const [intent] = await this.addIntents([{ title: input.title, body: input.body }], `center:${input.crossing}`);
+		try {
+			const res = await this.takeOff(agentId, { intent: intent.seq });
+			if ("idle" in res) throw new Error(res.message);
+			return { agentId, flight: res.flight };
+		} catch (err) {
+			this.sql.exec("UPDATE intents SET status = 'cancelled' WHERE id = ?", intent.id);
+			this.patch("intent", this.intentById(intent.id));
+			throw err;
+		}
+	}
+
+	/** Ends a leg whose crossing was abandoned: the flight aborts and its intent, which only the crossing flies, is cancelled. */
+	async closeLeg(agentId: string, reason: string): Promise<void> {
+		const r = this.row(`SELECT * FROM flights WHERE agent_id = ? AND status IN (${ACTIVE.map(() => "?").join(",")})`, agentId, ...ACTIVE);
+		if (!r) return;
+		const flight = this.toFlight(r);
+		await this.abortLeg(agentId, reason);
+		await this.abort(agentId, flight.id, reason);
+		this.sql.exec("UPDATE intents SET status = 'cancelled' WHERE id = ? AND status = 'open'", flight.intentId);
+		this.patch("intent", this.intentById(flight.intentId));
+	}
+
+	/**
+	 * Phase one of a leg's landing: the runway merges, checks and tests it like any landing, then holds it
+	 * for up to `holdMs`, unpushed, while the Center hears from the crossing's other sectors.
+	 */
+	async prepareLeg(agentId: string, input: { crossing: string; summary: string; holdMs: number }): Promise<{ ready: boolean; landing: Landing }> {
+		const flight = this.ownFlight(agentId);
+		const agent = this.agentById(agentId);
+		this.touchAgent(agentId);
+		if (this.row("SELECT id FROM landings WHERE flight_id = ? AND status IN ('queued', 'merging', 'verifying', 'review')", flight.id)) throw new Error(`${flight.code} is already landing`);
+		const seq = (this.row<{ s: number }>("SELECT COALESCE(MAX(seq), 0) + 1 AS s FROM landings")?.s ?? 1) as number;
+		const landing: Landing = {
+			id: randomId(),
+			seq,
+			flightId: flight.id,
+			status: "merging",
+			summary: input.summary.slice(0, 4000),
+			forkHead: null,
+			trunkBefore: null,
+			trunkAfter: null,
+			changes: [],
+			conflicts: [],
+			tests: null,
+			error: null,
+			unioned: 0,
+			review: null,
+			createdAt: now(),
+			finishedAt: null,
+			crossing: input.crossing,
+		};
+		this.sql.exec(
+			"INSERT INTO landings (id, seq, flight_id, status, summary, created_at, crossing) VALUES (?, ?, ?, 'merging', ?, ?, ?)",
+			landing.id,
+			seq,
+			flight.id,
+			landing.summary,
+			landing.createdAt,
+			input.crossing,
+		);
+		this.sql.exec("UPDATE flights SET attempts = attempts + 1 WHERE id = ?", flight.id);
+		this.setFlightStatus(flight.id, "approach");
+		this.patch("landing", landing);
+		this.patch("flight", this.flightById(flight.id));
+		this.emit("landing.queued", `${flight.code} (${agent.callsign}) on final approach with crossing ${input.crossing}: ${landing.summary.split("\n")[0].slice(0, 120)}`, {
+			flightId: flight.id,
+			agentId,
+			data: { landingId: landing.id, crossing: input.crossing },
+		});
+
+		const granted = this.activeClearances().filter((c) => c.status === "granted");
+		let o: LandingOutcome | null = null;
+		let error = "";
+		try {
+			o = await this.runway().prepare(this.project().trunkRepo, this.landingJob(landing, granted), input.holdMs);
+		} catch (err) {
+			error = `runway error: ${errorMessage(err)}`;
+		}
+		const current = this.landingById(landing.id);
+		// The Center gave up on the crossing while this sector was still preparing its leg.
+		if (current.status !== "merging") {
+			if (o?.status === "landed") await this.runway().decide(landing.id, false).catch(() => null);
+			return { ready: false, landing: current };
+		}
+		if (!o) {
+			this.finishLanding(current, { status: "failed", error });
+			this.setFlightStatus(flight.id, "diverted");
+			this.patch("flight", this.flightById(flight.id));
+			return { ready: false, landing: this.landingById(landing.id) };
+		}
+		if (o.status === "landed") {
+			this.sql.exec(
+				"UPDATE landings SET status = 'verifying', fork_head = ?, trunk_before = ?, changes = ?, tests = ?, unioned = ? WHERE id = ?",
+				o.forkHead,
+				o.trunkBefore,
+				JSON.stringify(o.changes),
+				o.tests ? JSON.stringify(o.tests) : null,
+				o.unioned,
+				landing.id,
+			);
+			const ready = this.landingById(landing.id);
+			this.patch("landing", ready);
+			this.emit("landing.ready", `${flight.code} is merged and green for crossing ${input.crossing}, held until its other sectors are too`, {
+				flightId: flight.id,
+				agentId,
+				data: { landingId: landing.id, crossing: input.crossing },
+			});
+			return { ready: true, landing: ready };
+		}
+		// A crossing cannot wait for a human: its other sectors are held meanwhile.
+		if (o.status === "review") o = { ...o, status: "failed", error: `it touches ${o.reviewRequired?.join(", ")}, which policy reserves for a human review; land that part on its own` };
+		this.applyOutcome(current, o);
+		return { ready: false, landing: this.landingById(landing.id) };
+	}
+
+	/** Phase two: every sector is ready, so this leg lands. If its runway let the held landing go (a restart), it lands anew. */
+	async commitLeg(agentId: string): Promise<Landing> {
+		const flight = this.ownFlight(agentId);
+		const r = this.row("SELECT * FROM landings WHERE flight_id = ? AND status = 'verifying' AND crossing IS NOT NULL ORDER BY seq DESC LIMIT 1", flight.id);
+		if (!r) throw new Error(`${flight.code} has no landing ready for its crossing`);
+		const l = this.toLanding(r);
+		const runway = this.runway();
+		let result = await runway.decide(l.id, true).catch(() => null);
+		if (!result) {
+			const granted = this.activeClearances().filter((c) => c.status === "granted");
+			try {
+				result = await runway.land(this.project().trunkRepo, [this.landingJob(l, granted)]);
+			} catch (err) {
+				this.finishLanding(l, { status: "failed", error: `runway error: ${errorMessage(err)}` });
+				this.setFlightStatus(flight.id, "diverted");
+				this.patch("flight", this.flightById(flight.id));
+				return this.landingById(l.id);
+			}
+		}
+		const o = result.outcomes.find((x) => x.landingId === l.id);
+		if (!o) throw new Error(`the runway did not report on ${flight.code}`);
+		this.applyOutcome(l, o.status === "review" ? { ...o, status: "failed", error: "it needs a human review" } : o);
+		await this.trunkMoved(result);
+		return this.landingById(l.id);
+	}
+
+	/** The crossing will not land: a landing this leg prepared (or is still preparing) is let go, and trunk stays as it was. */
+	async abortLeg(agentId: string, reason: string): Promise<Landing | null> {
+		const r = this.row(
+			"SELECT l.* FROM landings l JOIN flights f ON f.id = l.flight_id WHERE f.agent_id = ? AND l.status IN ('merging', 'verifying') AND l.crossing IS NOT NULL ORDER BY l.seq DESC LIMIT 1",
+			agentId,
+		);
+		return r ? this.letGo(this.toLanding(r), reason) : null;
+	}
+
+	private async letGo(l: Landing, reason: string): Promise<Landing> {
+		const flight = this.flightById(l.flightId);
+		const landing = this.finishLanding(l, { status: "failed", error: reason });
+		if (l.status === "verifying") await this.runway().decide(l.id, false).catch(() => null);
+		this.setFlightStatus(flight.id, "diverted");
+		this.addContrail(flight.id, null, "note", `Held back: ${reason}`);
+		this.patch("flight", this.flightById(flight.id));
+		this.emit("landing.failed", `${flight.code} held back: ${reason}`, { flightId: flight.id, agentId: flight.agentId, data: { landingId: l.id, crossing: l.crossing } });
+		return landing;
+	}
+
+	/** Legs left ready by a Center that never came back (it restarted mid-crossing). */
+	private async expireLegs() {
+		const stale = this.rows("SELECT * FROM landings WHERE status = 'verifying' AND crossing IS NOT NULL AND created_at < ?", now() - LEG_TIMEOUT_MS).map((r) => this.toLanding(r));
+		for (const l of stale) await this.letGo(l, "the crossing did not finish in time");
+	}
+
 	// ───────────────────────── maintenance ─────────────────────────
 
 	async alarm() {
@@ -1719,6 +1927,7 @@ export class Tower extends DurableObject<Env> {
 		this.patch("clearances", this.activeClearances());
 		await this.ctx.storage.setAlarm(now() + 60_000);
 		if (this.row("SELECT id FROM landings WHERE status = 'queued' LIMIT 1")) await this.processQueue();
+		await this.expireLegs();
 		await this.retireForks();
 	}
 
