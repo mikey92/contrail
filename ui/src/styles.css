@@ -982,10 +982,10 @@ code {
 	cursor: pointer;
 	animation: touchdown 0.8s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
+/* A landing slides in without fading, so its text never shows at less than full contrast. */
 @keyframes touchdown {
 	from {
-		transform: translateX(50px);
-		opacity: 0;
+		transform: translateX(50px) scale(0.96);
 	}
 }
 .rw-dot {
