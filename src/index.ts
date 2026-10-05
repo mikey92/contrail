@@ -117,6 +117,34 @@ app.delete("/api/projects/:slug", async (c) => {
 	return c.json({ deleted: slug, ...result });
 });
 
+// Workspace forks no project still needs: those of deleted projects, and of playground rounds that ended
+// before forks were retired. Towers retire their own forks an hour after each flight; this sweeps the rest,
+// at most `limit` per call (run it again until `remaining` is 0).
+app.post("/api/admin/sweep-forks", async (c) => {
+	if (!isAdmin(c)) return c.json({ error: "admin key required" }, 401);
+	const limit = Math.max(1, Math.min(Number(c.req.query("limit") ?? 300) || 300, 1000));
+	const projects = await registry(c.env).list();
+	const live = new Set((await Promise.all(projects.map((p) => tower(c.env, p.slug).liveForks().catch(() => [] as string[])))).flat());
+	const cutoff = Date.now() - 60 * 60_000;
+	const orphans: string[] = [];
+	let total = 0;
+	let cursor: string | undefined;
+	do {
+		const page = await c.env.ARTIFACTS.list({ limit: 200, cursor });
+		total = page.total;
+		for (const repo of page.repos)
+			if (/--fl-\d+-[a-z0-9]{4}$/.test(repo.name) && !live.has(repo.name) && Date.parse(repo.updatedAt) < cutoff) orphans.push(repo.name);
+		cursor = page.cursor;
+	} while (cursor);
+	let deleted = 0;
+	const batch = orphans.slice(0, limit);
+	for (let i = 0; i < batch.length; i += 10) {
+		const done = await Promise.all(batch.slice(i, i + 10).map((name) => c.env.ARTIFACTS.delete(name).catch(() => false)));
+		deleted += done.filter(Boolean).length;
+	}
+	return c.json({ repos: total, liveForks: live.size, orphans: orphans.length, deleted, remaining: orphans.length - batch.length });
+});
+
 // Playgrounds publish their join code so anyone can connect their own agent.
 app.get("/api/p/:slug/join-info", async (c) => {
 	const entry = await registry(c.env).get(c.req.param("slug"));

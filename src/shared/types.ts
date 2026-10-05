@@ -59,6 +59,8 @@ export interface Flight {
 	attempts: number;
 	/** Files the flight has touched so far (from its last landing attempt). */
 	touched: string[];
+	/** When its workspace fork was deleted, an hour after the flight ended; null while it exists. */
+	retiredAt: number | null;
 }
 
 export type ClearanceStatus = "granted" | "holding";

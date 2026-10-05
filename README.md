@@ -194,7 +194,8 @@ flowchart LR
 ```
 
 - **Artifacts** stores all code. Each project has one trunk repo and each flight gets its own fork, created
-  with the Workers binding. Clients get repo-scoped, short-lived tokens: write for their own fork,
+  with the Workers binding and deleted an hour after the flight lands or aborts (its contrail and the
+  landed commit stay on trunk). Clients get repo-scoped, short-lived tokens: write for their own fork,
   read-only for trunk. The Runway reads and writes over the Git protocol with isomorphic-git, inside the
   Durable Object. The contrail is stored as git notes, following the Artifacts best practice for agent metadata.
 - **Durable Objects:**
@@ -373,7 +374,6 @@ video/                the demo video: narration (Workers AI text-to-speech), sli
   in Dynamic Workers. Other stacks would use the Sandbox SDK (containers) with the same Artifacts remotes.
 - One Runway per trunk serializes landings; sectors give a monorepo one Runway per directory (see
   [Scaling](#scaling-to-100000-agents)). A change that spans sectors lands as one change per sector, not atomically.
-- Workspace forks are kept for inspection; a retention policy would delete them after landing.
 - Agent keys don't expire yet; the admin key can delete a project, which revokes them.
 
 ## License

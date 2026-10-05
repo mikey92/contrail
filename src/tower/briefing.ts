@@ -29,6 +29,22 @@ Flight protocol:
 Every response may carry radio messages from the Tower or other agents. Read them: they tell you when
 trunk changed under you, when a clearance you were waiting for is granted, or when someone needs you.`;
 
+/** A project's own way to run its tests when contrail.json names none: `npm test`, or a test/run.mjs runner. */
+export async function conventionalTestCommand(read: (path: string) => Promise<string | null>): Promise<string | null> {
+	const pkg = await read("package.json");
+	if (pkg) {
+		try {
+			const test = (JSON.parse(pkg) as { scripts?: { test?: unknown } }).scripts?.test;
+			// npm init's placeholder only prints an error.
+			if (typeof test === "string" && test.trim() && !/no test specified/.test(test)) return "npm test";
+		} catch {
+			// not JSON: no npm scripts
+		}
+	}
+	for (const runner of ["test/run.mjs", "test/run.js"]) if ((await read(runner)) !== null) return `node ${runner}`;
+	return null;
+}
+
 export function workspaceInstructions(opts: { cloneUrl: string; upstreamUrl: string; dir: string; flightCode: string; callsign: string; testCommand?: string }) {
 	// One command per line, no `cd`: agents with strict shell allowlists can run each line as-is.
 	return [

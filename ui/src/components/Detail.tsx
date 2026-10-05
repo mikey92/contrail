@@ -97,6 +97,7 @@ export function FlightDrawer({
 				</div>
 				<div class="d-model muted">
 					{agent.model ?? agent.kind} · workspace <span class="mono">{f.repo}</span>
+					{f.retiredAt ? " (deleted an hour after the flight ended)" : ""}
 				</div>
 				<div class="d-intent">
 					<span class="mono muted">INT-{intent.seq}</span> {intent.title}

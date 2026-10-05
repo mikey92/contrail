@@ -29,7 +29,7 @@ import type {
 	TrunkState,
 } from "../shared/types";
 import { callsignFor, colorFor, errorMessage, json, now, randomId, randomToken, repoSafe, sha256, sleep } from "../util";
-import { PROTOCOL, workspaceInstructions } from "./briefing";
+import { conventionalTestCommand, PROTOCOL, workspaceInstructions } from "./briefing";
 import { findCollisions, normalizeTarget, parseTarget, targetsOverlap } from "./clearance";
 import { type AirTarget, crowding, firstCollision, predictTargets, type SymbolIndex, symbolIndex } from "./planner";
 import { SCHEMA } from "./schema";
@@ -41,6 +41,12 @@ const WORKSPACE_TOKEN_TTL_S = 6 * 3600;
 const TRAIN_SIZE = 12;
 const LANDING_WAIT_MS = 50_000;
 const MAX_EVENTS = 1000;
+/** Bumped when the way readTestCommand finds a command changes, so existing projects look again. */
+const TEST_COMMAND_CHECK = 2;
+/** A flight's workspace fork is kept this long after the flight lands or aborts, for inspection. */
+const FORK_RETENTION_MS = 60 * 60_000;
+/** Forks deleted per alarm (once a minute), so a backlog drains without a burst of Artifacts calls. */
+const RETIRE_BATCH = 20;
 const ACTIVE: FlightStatus[] = ["taxiing", "airborne", "holding", "approach", "diverted"];
 
 export interface ProjectSource {
@@ -214,6 +220,7 @@ export class Tower extends DurableObject<Env> {
 			landedAt: (r.landed_at as number) ?? null,
 			attempts: r.attempts as number,
 			touched: json(r.touched as string, []),
+			retiredAt: (r.retired_at as number) ?? null,
 		};
 	}
 
@@ -437,17 +444,27 @@ export class Tower extends DurableObject<Env> {
 	}
 
 	/** The project's own way to run its tests (contrail.json), told to agents when they take off. */
+	/**
+	 * The command agents are told to run their tests with: contrail.json's `tests.command`, else the
+	 * project's own convention (`npm test` when package.json defines it, a test/run.mjs runner).
+	 */
 	private async readTestCommand() {
 		const repo = await this.env.ARTIFACTS.get(this.project().trunkRepo);
+		const read = async (path: string) => {
+			const blob = await repo.readFile({ ref: "main", path }).catch(() => null);
+			return blob ? new Response(blob).text() : null;
+		};
 		try {
-			const blob = await repo.readFile({ ref: "main", path: CONFIG_FILE });
-			const command = blob ? (JSON.parse(await new Response(blob).text()) as { tests?: { command?: unknown } }).tests?.command : null;
+			const config = await read(CONFIG_FILE);
+			let command = config ? (JSON.parse(config) as { tests?: { command?: unknown } }).tests?.command : undefined;
+			if (typeof command !== "string") command = await conventionalTestCommand(read);
 			this.setMeta("testCommand", typeof command === "string" ? command : null);
 		} catch {
 			this.setMeta("testCommand", null);
 		} finally {
 			repo[Symbol.dispose]?.();
 		}
+		this.setMeta("testCommandChecked", TEST_COMMAND_CHECK);
 	}
 
 	private async refreshTrunk(): Promise<TrunkState> {
@@ -596,6 +613,8 @@ export class Tower extends DurableObject<Env> {
 			const f = this.toFlight(active);
 			throw new Error(`you are already flying ${f.code} (${f.status}); land it or call abort before taking off again`);
 		}
+		// Projects set up before test commands were detected look once (before an intent is picked: this awaits).
+		if (this.meta<number>("testCommandChecked", 0) < TEST_COMMAND_CHECK) await this.readTestCommand().catch(() => {});
 		let next = this.nextIntent(opts.intent);
 		if (!next && (await this.restartPlayground())) next = this.nextIntent(opts.intent);
 		if (!next || "wait" in next) {
@@ -1616,6 +1635,9 @@ export class Tower extends DurableObject<Env> {
 			);
 			this.setMeta("stats", { repos: 1 });
 			await this.refreshTrunk();
+			// The finished round's workspace forks go with its flights.
+			const forks = await this.liveForks();
+			this.ctx.waitUntil(Promise.all(forks.map((name) => this.env.ARTIFACTS.delete(name).catch(() => false))));
 			// No awaits from here on: no take-off can see the intents reopen before trunk and the tables are reset.
 			this.sql.exec("DELETE FROM intents WHERE created_by != 'operator'");
 			this.sql.exec("UPDATE intents SET status = 'open', flight_id = NULL, landed_commit = NULL");
@@ -1637,7 +1659,7 @@ export class Tower extends DurableObject<Env> {
 		await this.stopEdge().catch(() => {});
 		let repos = 0;
 		if (project) {
-			const names = [project.trunkRepo, ...this.rows<{ repo: string }>("SELECT repo FROM flights").map((r) => r.repo)];
+			const names = [project.trunkRepo, ...(await this.liveForks())];
 			for (let i = 0; i < names.length; i += 10) {
 				const batch = await Promise.all(names.slice(i, i + 10).map((name) => this.env.ARTIFACTS.delete(name).catch(() => false)));
 				repos += batch.filter(Boolean).length;
@@ -1697,6 +1719,30 @@ export class Tower extends DurableObject<Env> {
 		this.patch("clearances", this.activeClearances());
 		await this.ctx.storage.setAlarm(now() + 60_000);
 		if (this.row("SELECT id FROM landings WHERE status = 'queued' LIMIT 1")) await this.processQueue();
+		await this.retireForks();
+	}
+
+	/** Deletes the workspace forks of flights that ended over an hour ago, a few at a time. */
+	private async retireForks() {
+		const due = this.rows<{ id: string; repo: string }>(
+			"SELECT id, repo FROM flights WHERE status IN ('landed', 'aborted') AND retired_at IS NULL AND updated_at < ? ORDER BY updated_at LIMIT ?",
+			now() - FORK_RETENTION_MS,
+			RETIRE_BATCH,
+		);
+		if (!due.length) return;
+		// delete() is false when the repo is already gone, which counts as retired too; a throw is retried next time.
+		const retired = (await Promise.all(due.map((f) => this.env.ARTIFACTS.delete(f.repo).then(() => f.id, () => null)))).filter((id): id is string => id !== null);
+		const t = now();
+		for (const id of retired) {
+			this.sql.exec("UPDATE flights SET retired_at = ? WHERE id = ?", t, id);
+			this.patch("flight", this.flightById(id));
+		}
+		if (retired.length) this.bump("repos", -retired.length);
+	}
+
+	/** Workspace forks this project still has (for the orphan sweep): every flight whose fork was not retired. */
+	async liveForks(): Promise<string[]> {
+		return this.rows<{ repo: string }>("SELECT repo FROM flights WHERE retired_at IS NULL").map((r) => r.repo);
 	}
 
 	async ensureAlarm() {

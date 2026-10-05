@@ -37,4 +37,6 @@ export const SCHEMA = [
 		target TEXT NOT NULL, path TEXT NOT NULL, landing_id TEXT NOT NULL, flight_id TEXT NOT NULL,
 		commit_hash TEXT NOT NULL, at INTEGER NOT NULL)`,
 	`CREATE INDEX IF NOT EXISTS symbol_history_path ON symbol_history(path, at)`,
+	// When the flight's workspace fork was deleted (it ended FORK_RETENTION_MS earlier).
+	`ALTER TABLE flights ADD COLUMN retired_at INTEGER`,
 ];
