@@ -2534,8 +2534,8 @@ details.diffs summary {
 }
 .sectors {
 	display: grid;
-	/* Cards widen with the reader's text size. */
-	grid-template-columns: repeat(auto-fill, minmax(min(13.75rem, 100%), 1fr));
+	/* Cards share the row and widen with the reader's text size. */
+	grid-template-columns: repeat(auto-fit, minmax(min(13.75rem, 100%), 1fr));
 	gap: 12px;
 }
 .sector {
