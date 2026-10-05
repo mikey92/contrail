@@ -169,7 +169,7 @@ run landed about 1.8 changes per second each while their work was spread out, an
 whole run, crowded tail included, so that is roughly 30 to 100 sectors. However many sectors move, the
 Center commits at most about once a second, so the monorepo's history stays readable.
 
-![The monorepo replay at its end: 1,000 agents, 3,000 of 3,000 changes landed across 10 sectors, and landings per second over the run](docs/center.png)
+![The monorepo replay 1:34 into the run: 336 agents in the air and 127 holding across 10 sectors, 1,228 of 3,000 changes landed, 12 landings per second](docs/center.png)
 
 ## Built on Cloudflare
 
