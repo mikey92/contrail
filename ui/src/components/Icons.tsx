@@ -65,7 +65,7 @@ export function Icon({ name, size = 16 }: { name: string; size?: number }) {
 	const d = PATHS[name] ?? PATHS.intent;
 	const filled = FILLED.has(name);
 	return (
-		<svg class="icon" width={size} height={size} viewBox="0 0 16 16" aria-hidden="true">
+		<svg class="icon" width={size} height={size} style={{ width: `${size / 16}rem`, height: `${size / 16}rem` }} viewBox="0 0 16 16" aria-hidden="true">
 			<path d={d} fill={filled ? "currentColor" : "none"} stroke={filled ? "none" : "currentColor"} stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
 		</svg>
 	);
@@ -73,10 +73,21 @@ export function Icon({ name, size = 16 }: { name: string; size?: number }) {
 
 export const eventIcon = (type: string) => BY_EVENT[type] ?? (type.startsWith("contrail.") ? "pen" : "intent");
 
+/** The activity indicator: eight spokes turning, like the system spinner. Named for VoiceOver when it stands alone. */
+export function Spinner({ label }: { label?: string }) {
+	return (
+		<svg class="spinner" viewBox="0 0 16 16" {...(label ? { role: "img", "aria-label": label } : { "aria-hidden": "true" })}>
+			{Array.from({ length: 8 }, (_, i) => (
+				<line key={i} x1="8" y1="1.6" x2="8" y2="4.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" opacity={0.2 + (0.8 * i) / 7} transform={`rotate(${i * 45} 8 8)`} />
+			))}
+		</svg>
+	);
+}
+
 /** The Contrail mark: a plane heading up-right with two contrails behind it. */
 export function Logo({ size = 26 }: { size?: number }) {
 	return (
-		<svg class="logo" width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
+		<svg class="logo" width={size} height={size} style={{ width: `${size / 16}rem`, height: `${size / 16}rem` }} viewBox="0 0 32 32" aria-hidden="true">
 			<g transform="rotate(45 16 16)">
 				<path class="contrails" d="M12.6 19.5v10M19.4 19.5v10" stroke-width="2.2" stroke-linecap="round" />
 				<path

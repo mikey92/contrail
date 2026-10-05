@@ -126,29 +126,41 @@ function layout(files: TrunkFile[], width: number, height: number, focus: Set<st
 		if (!groups.has(dir)) groups.set(dir, []);
 		groups.get(dir)!.push(f);
 	}
-	const data = {
-		name: "root",
-		children: [...groups.entries()].map(([name, fs]) => {
-			if (!focus) return { name, children: fs.map((f) => ({ name: f.path, file: f, value: Math.max(f.lines, 10) })) };
-			const shown = fs.filter((f) => focus.has(f.path));
-			const rest = fs.filter((f) => !focus.has(f.path)).map((f) => f.path);
-			const children: any[] = shown.map((f) => ({ name: f.path, file: f, value: Math.max(f.lines, 40) }));
-			// Sized by file count, but kept smaller than the files in play: it is context, not the story.
-			if (rest.length) children.push({ name: "\uffff", rest, value: 40 + rest.length * 1.5 });
-			return { name, children };
-		}),
+	// A directory too small to show its name over a file gets twice the room, up to four times over.
+	const share = new Map<string, number>();
+	const tile = () => {
+		const data = {
+			name: "root",
+			children: [...groups.entries()].map(([name, fs]) => {
+				const k = share.get(name) ?? 1;
+				if (!focus) return { name, children: fs.map((f) => ({ name: f.path, file: f, value: k * Math.max(f.lines, 10) })) };
+				const shown = fs.filter((f) => focus.has(f.path));
+				const rest = fs.filter((f) => !focus.has(f.path)).map((f) => f.path);
+				const children: any[] = shown.map((f) => ({ name: f.path, file: f, value: k * Math.max(f.lines, 40) }));
+				// Sized by file count, but kept smaller than the files in play: it is context, not the story.
+				if (rest.length) children.push({ name: "\uffff", rest, value: k * (40 + rest.length * 1.5) });
+				return { name, children };
+			}),
+		};
+		// Stable ordering keeps the map from reshuffling as files grow: the source directory first, then the
+		// others from large to small (tiny ones end up together in a corner), root last; files by path.
+		const rank = (name: string) => (SOURCE_DIRS.has(name) ? 0 : name === "·" ? 2 : 1);
+		const root = hierarchy<any>(data)
+			.sum((d) => d.value ?? 0)
+			.sort((a, b) =>
+				a.depth === 1
+					? rank(a.data.name) - rank(b.data.name) || (b.value ?? 0) - (a.value ?? 0) || a.data.name.localeCompare(b.data.name)
+					: a.data.name.localeCompare(b.data.name),
+			);
+		return treemap<any>().size([width, height]).tile(treemapSquarify.ratio(1.15)).paddingOuter(4).paddingTop(22).paddingInner(5).round(true)(root);
 	};
-	// Stable ordering keeps the map from reshuffling as files grow: the source directory first, then the
-	// others from large to small (tiny ones end up together in a corner), root last; files by path.
-	const rank = (name: string) => (SOURCE_DIRS.has(name) ? 0 : name === "·" ? 2 : 1);
-	const root = hierarchy<any>(data)
-		.sum((d) => d.value ?? 0)
-		.sort((a, b) =>
-			a.depth === 1
-				? rank(a.data.name) - rank(b.data.name) || (b.value ?? 0) - (a.value ?? 0) || a.data.name.localeCompare(b.data.name)
-				: a.data.name.localeCompare(b.data.name),
-		);
-	treemap<any>().size([width, height]).tile(treemapSquarify.ratio(1.15)).paddingOuter(4).paddingTop(22).paddingInner(5).round(true)(root);
+	let root = tile();
+	for (let pass = 0; pass < 4; pass++) {
+		const cramped = (root.children ?? []).filter((g) => g.x1 - g.x0 < 64 || g.y1 - g.y0 < 46);
+		if (!cramped.length) break;
+		for (const g of cramped) share.set(g.data.name, (share.get(g.data.name) ?? 1) * 2);
+		root = tile();
+	}
 
 	const groupBoxes: GroupBox[] = [];
 	const fileBoxes: FileBox[] = [];
@@ -172,6 +184,8 @@ function layout(files: TrunkFile[], width: number, height: number, focus: Set<st
 				continue;
 			}
 			const f: TrunkFile = l.data.file;
+			// A box too short for its name keeps its functions inside it, without the name.
+			const named = l.y1 - l.y0 >= HEADER;
 			const box: FileBox = {
 				path: f.path,
 				name: f.path.split("/").pop()!,
@@ -181,11 +195,11 @@ function layout(files: TrunkFile[], width: number, height: number, focus: Set<st
 				w: l.x1 - l.x0,
 				h: l.y1 - l.y0,
 				bands: [],
-				content: { x: l.x0 + 3, y: l.y0 + HEADER, w: Math.max(0, l.x1 - l.x0 - 6), h: Math.max(0, l.y1 - l.y0 - HEADER - 3) },
+				content: { x: l.x0 + 3, y: l.y0 + (named ? HEADER : 2), w: Math.max(0, l.x1 - l.x0 - 6), h: Math.max(0, l.y1 - l.y0 - (named ? HEADER + 3 : 4)) },
 				label: null,
 				withLines: false,
 			};
-			if (box.w > 40 && box.h >= 18) {
+			if (box.w > 40 && named) {
 				const room = box.w - 12;
 				box.withLines = textWidth(box.name, LABEL_FONT) + textWidth(` ${f.lines}`, LINES_FONT) <= room;
 				box.label = box.withLines ? box.name : fit(box.name, room, LABEL_FONT);
@@ -196,7 +210,7 @@ function layout(files: TrunkFile[], width: number, height: number, focus: Set<st
 			for (const s of f.symbols) {
 				const depth = s.name.includes(".") ? 1 : 0;
 				const y = box.content.y + ((s.start - 1) / lines) * box.content.h;
-				const h = Math.max(3, ((s.end - s.start + 1) / lines) * box.content.h);
+				const h = Math.max(0, Math.min(Math.max(3, ((s.end - s.start + 1) / lines) * box.content.h), box.y + box.h - 1 - y));
 				const target = `${f.path}#${s.name}`;
 				const n = seen.get(target) ?? 0;
 				seen.set(target, n + 1);
@@ -231,7 +245,8 @@ function rectFor(target: string, files: FileBox[], groups: GroupBox[], rests: Re
 	if (!symbol) return file.content;
 	const band = file.bands.find((b) => b.name === symbol) ?? file.bands.find((b) => symbol.startsWith(`${b.name}.`));
 	if (band) return band;
-	return { x: file.content.x + file.content.w * 0.55, y: file.content.y + file.content.h - 10, w: file.content.w * 0.45, h: 8 };
+	const h = Math.min(8, Math.max(3, file.content.h));
+	return { x: file.content.x + file.content.w * 0.55, y: Math.max(file.y + 1, file.content.y + file.content.h - h - 2), w: file.content.w * 0.45, h };
 }
 
 const center = (r: Rect) => ({ x: r.x + r.w / 2, y: r.y + r.h / 2 });
@@ -442,7 +457,7 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 	// The text size the reader chose: tags and the apron's label grow with it.
 	const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
 	// A plane's tag, estimated from the CSS of .plane .tag with a little room to spare.
-	const fs = 0.6875 * rem;
+	const fs = Math.min(0.6875 * rem, 16.5);
 	const tagH = fs * 1.5 + 6;
 	const tagW = (f: Flight) => {
 		const agent = agents[f.agentId];
@@ -462,7 +477,7 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 	const positions = new Map<string, { x: number; y: number; orbit: boolean }>();
 	const widest = tagless ? 0 : Math.max(0, ...cruising.map(tagW));
 	const xEnd = size.w - 40 - widest;
-	const after = (label: string) => 44 + textWidth(label, `400 ${0.7188 * rem}px ${SANS}`);
+	const after = (label: string) => 44 + textWidth(label, `400 ${0.75 * rem}px ${SANS}`);
 	const roomy = (x: number) => cruising.length <= 1 || (xEnd - x) / (cruising.length - 1) >= Math.max(widest + 27, reach);
 	const apronLabel = roomy(after(APRON_LABEL)) ? APRON_LABEL : "Taxiing";
 	const x0 = after(apronLabel);
@@ -702,9 +717,7 @@ export function Airspace({ files, clearances, flights, agents, intents, flashes,
 			{hover && (
 				<div class="hovercard" style={{ left: `${cardX}px`, top: `${Math.min(hover.y + APRON, size.h - 64)}px` }}>
 					<div class="mono">{hover.target}</div>
-					<div class="muted">
-						{hover.kind} · {touch ? "tap" : "click"} to see why it changed
-					</div>
+					<div class="muted">{hover.kind}</div>
 				</div>
 			)}
 		</div>

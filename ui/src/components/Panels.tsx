@@ -1,7 +1,7 @@
 import { useState } from "preact/hooks";
 import type { Agent, Flight, Intent, Landing, RadarEvent } from "../../../src/shared/types";
 import { pressable } from "../a11y";
-import { ACTIVE_STATUSES, relTime, statusLabel } from "../store";
+import { ACTIVE_STATUSES, relTime, statusLabel, tidy } from "../store";
 import { KindBadge } from "./Airspace";
 import { eventIcon, Icon } from "./Icons";
 
@@ -24,8 +24,8 @@ const CUT_AT: Record<string, number> = { radio: 140, "landing.queued": 120 };
 function eventText(e: RadarEvent): string {
 	const limit = e.type.startsWith("contrail.") && e.type !== "contrail.read" ? 140 : CUT_AT[e.type];
 	const i = e.text.indexOf(": ");
-	if (!limit || i < 0 || e.text.length - i - 2 !== limit) return e.text;
-	return e.text.slice(0, i + 2) + clip(e.text.slice(i + 2), limit - 1);
+	if (!limit || i < 0 || e.text.length - i - 2 !== limit) return tidy(e.text);
+	return tidy(e.text.slice(0, i + 2) + clip(e.text.slice(i + 2), limit - 1));
 }
 
 /** Long lists of targets read as "a, b and 3 more"; flight codes and targets are set in mono. */
@@ -64,7 +64,7 @@ export function Feed({
 			<div class="feed-filter">
 				<div class="seg" role="group" aria-label="Events to show">
 					<button class={all ? "" : "on"} aria-pressed={!all} onClick={() => setAll(false)}>
-						Key events
+						Key Events
 					</button>
 					<button class={all ? "on" : ""} aria-pressed={all} onClick={() => setAll(true)}>
 						All
@@ -154,8 +154,10 @@ export function IntentBoard({ intents, flights, agents, onSelect }: { intents: R
 				return (
 					<div key={i.id} class={`irow is-${i.status} ${f ? "go" : ""}`} {...(f ? pressable(() => onSelect(f.id)) : {})}>
 						<span class="mono muted">INT-{i.seq}</span>
-						<span class="ititle">{i.title}</span>
-						<span class={`ist ist-${i.status === "assigned" && f ? f.status : i.status}`}>{i.status === "assigned" && f ? statusLabel(f.status) : i.status}</span>
+						<span class="ititle" title={i.title}>
+								{i.title}
+							</span>
+						<span class={`st st-${i.status === "assigned" && f ? f.status : i.status}`}>{i.status === "assigned" && f ? statusLabel(f.status) : i.status}</span>
 						{a && <span class="dot" title={a.callsign} style={{ background: a.color }} aria-hidden="true" />}
 					</div>
 				);
@@ -197,7 +199,9 @@ export function Runway({ landings, flights, agents, intents, onSelect }: { landi
 						<div key={l.id} class="rw-commit" style={{ "--c": a?.color } as any} {...(f ? pressable(() => onSelect(f.id)) : {})}>
 							<div class="rw-dot" />
 							<div class="rw-sha mono">{l.trunkAfter?.slice(0, 7)}</div>
-							<div class="rw-title">{i ? `INT-${i.seq} ${i.title}` : f?.code}</div>
+							<div class="rw-title" title={i ? `INT-${i.seq} ${i.title}` : undefined}>
+									{i ? `INT-${i.seq} ${i.title}` : f?.code}
+								</div>
 							<div class="rw-meta mono">
 								{f?.code} <span class="plus">+{plus}</span> <span class="minus">−{minus}</span>
 								{l.tests && <span class="ok"> ✓{l.tests.passed}</span>}

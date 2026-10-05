@@ -103,7 +103,7 @@ function reviewRequired(policy: string[], changes: FileChange[]): string[] {
 function failTests(outcome: LandingOutcome, tests: TestReport) {
 	outcome.status = "failed";
 	outcome.tests = tests;
-	outcome.error = tests.error ? `test suite failed to load: ${tests.error}` : `${tests.failed} test(s) failed`;
+	outcome.error = tests.error ? `test suite failed to load: ${tests.error}` : `${tests.failed} test${tests.failed === 1 ? "" : "s"} failed`;
 }
 
 interface Gate {

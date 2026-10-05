@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { CenterInfo, CenterSnapshot, Crossing, CrossingLeg, SectorSummary } from "../../../src/shared/types";
 import { useTitle } from "../a11y";
-import { duration, fetchRecording, relTime, SampleReplay, useReplay } from "../store";
+import { duration, fetchRecording, relTime, SampleReplay, tidy, useReplay } from "../store";
 import { Command } from "./Detail";
 import { Dialog } from "./Dialog";
-import { Icon, Logo } from "./Icons";
+import { Icon, Logo, Spinner } from "./Icons";
 import { ReplayBar } from "./ReplayBar";
 
 const n = (x: number) => x.toLocaleString("en-US");
@@ -154,8 +154,8 @@ function CenterReplay({ slug, path, params }: { slug: string; path: string; para
 		};
 	}, [path]);
 
-	if (failed) return <Boot text="This replay could not be loaded." link />;
-	if (!loaded) return <Boot text="Loading the recording…" />;
+	if (failed) return <Boot text="This replay couldn’t be loaded." link />;
+	if (!loaded) return <Boot text="Opening the recording…" />;
 	const { header, player, points } = loaded;
 	const x = player.current;
 	const snap = toSnapshot(header, x);
@@ -178,6 +178,7 @@ function Boot({ text, link = false }: { text: preact.ComponentChildren; link?: b
 				<h1 class="boot-text">{text}</h1>
 			) : (
 				<div class="boot-text" role="status">
+					<Spinner />
 					{text}
 				</div>
 			)}
@@ -233,7 +234,7 @@ function CenterView({
 				</a>
 				<div class="proj">
 					<h1 class="proj-name">{snap.center.name}</h1>
-					<div class="proj-sub">
+					<div class="proj-sub" title={`The monorepo trunk is at ${snap.head ?? "—"}, composed from ${snap.sectors.length} sectors ${n(snap.compositions)} time${snap.compositions === 1 ? "" : "s"}.`}>
 						<span class="mono">monorepo @ {snap.head?.slice(0, 8) ?? "—"}</span> · {snap.sectors.length} sectors · {n(snap.compositions)} composition{snap.compositions === 1 ? "" : "s"}
 					</div>
 				</div>
@@ -263,7 +264,7 @@ function CenterView({
 					)}
 					<button class="btn ghost" onClick={openClone} title="Clone the composed monorepo trunk">
 						<Icon name="clone" size={15} />
-						Clone Monorepo
+						Clone Monorepo…
 					</button>
 				</div>
 			</header>
@@ -271,7 +272,7 @@ function CenterView({
 
 			<main class="wrap center-main" id="main">
 				<p class="center-lede">
-					Each sector owns one directory of this monorepo and lands through its own runway, so sectors land in parallel. The Center folds every sector's
+					Each sector owns one directory of this monorepo and lands through its own runway, so sectors land in parallel. The Center folds every sector’s
 					trunk into one monorepo trunk as soon as it moves{snap.composedAt ? `: last composed ${relTime(snap.composedAt, now)}` : ""}
 					{snap.behind ? `, ${snap.behind} sector${snap.behind > 1 ? "s" : ""} to fold in` : ""}.{done && span ? ` All ${n(landed)} intents landed in ${duration(span)}.` : ""}
 					{replay && sectorHref ? " Open a sector to watch its radar from this moment." : ""}
@@ -282,7 +283,7 @@ function CenterView({
 						const m = s.summary;
 						const pct = m && m.intents ? Math.round((m.landed / m.intents) * 100) : 0;
 						return (
-							<a key={s.slug} class="sector" href={sectorHref ? sectorHref(s.slug) : `/p/${s.slug}`} title={sectorHref ? `Watch ${s.name}'s radar from this moment` : `Open ${s.name}'s radar`}>
+							<a key={s.slug} class="sector" href={sectorHref ? sectorHref(s.slug) : `/p/${s.slug}`} title={sectorHref ? `Watch the ${s.name} radar from this moment` : `Open the ${s.name} radar`}>
 								<div class="sector-top">
 									<span class="sector-name">{s.name}</span>
 									<span class="mono sector-prefix" title={s.prefix}>
@@ -313,9 +314,9 @@ function CenterView({
 			</main>
 
 			{clone && (
-				<Dialog kicker="Read-only, valid for an hour" title="Clone the monorepo" onClose={() => setClone(null)}>
+				<Dialog kicker="Read-only, valid for an hour" title="Clone Monorepo" onClose={() => setClone(null)}>
 					<div class="connect">
-						<p>The composed trunk: every sector's directory at its latest landing. Each commit names the sector heads it folded in.</p>
+						<p>The composed trunk: every sector’s directory at its latest landing. Each commit names the sector heads it folded in.</p>
 						<Command text={clone.join("\n")} />
 					</div>
 				</Dialog>
@@ -358,7 +359,7 @@ function Crossings({ snap, now }: { snap: CenterSnapshot; now: number }) {
 				</span>
 			</h2>
 			<p class="crossings-lede">
-				A crossing is one change across several sectors. It flies a leg in each sector it touches; every sector's runway merges and tests its part and
+				A crossing is one change across several sectors. It flies a leg in each sector it touches; every sector’s runway merges and tests its part and
 				holds it until all of them are ready, then all of them land and the monorepo gets one commit. If one sector turns its part away, none lands.
 			</p>
 			<div class="crossing-list">
@@ -382,7 +383,7 @@ function Crossings({ snap, now }: { snap: CenterSnapshot; now: number }) {
 									{[...cx.legs].sort((a, b) => order(a) - order(b)).map((leg) => {
 										const ls = legState(leg);
 										return (
-											<a key={leg.sector} class="crossing-leg" href={`/p/${leg.sector}`} title={leg.landing?.error ?? `Open ${leg.name}'s radar`}>
+											<a key={leg.sector} class="crossing-leg" href={`/p/${leg.sector}`} title={leg.landing?.error ? tidy(leg.landing.error) : `Open the ${leg.name} radar`}>
 												<span class="crossing-leg-name">{leg.name}</span>
 												<span class="mono muted">{leg.flight}</span>
 												<span class={`st st-${ls.tone}`}>{ls.label}</span>
@@ -391,7 +392,7 @@ function Crossings({ snap, now }: { snap: CenterSnapshot; now: number }) {
 									})}
 								</div>
 							)}
-							{cx.landing?.status === "failed" && cx.landing.error && <p class="crossing-error">{cx.landing.error}</p>}
+							{cx.landing?.status === "failed" && cx.landing.error && <p class="crossing-error">{tidy(cx.landing.error)}</p>}
 							{cx.landing?.status === "landed" && cx.landing.commit && <div class="crossing-foot mono">monorepo {cx.landing.commit.slice(0, 8)}</div>}
 						</article>
 					);

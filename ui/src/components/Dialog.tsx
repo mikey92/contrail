@@ -27,6 +27,34 @@ export function Dialog({
 	close.current = onClose;
 	// A click outside closes it only if it began outside: selecting a command and letting go past the edge does not.
 	const pressedOutside = useRef(false);
+	// On a phone the sheet rises from the bottom, and a downward swipe on its top puts it away.
+	const drag = useRef<{ y: number; dy: number } | null>(null);
+	const onDown = (e: PointerEvent) => {
+		if (e.pointerType === "mouse" || !matchMedia("(max-width: 700px)").matches) return;
+		if (!(e.target as Element).closest(".grabber, .why-kicker, .dialog-title")) return;
+		drag.current = { y: e.clientY, dy: 0 };
+		try {
+			(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+		} catch {
+			// a pointer the browser no longer tracks
+		}
+	};
+	const onMove = (e: PointerEvent) => {
+		const d = drag.current;
+		if (!d) return;
+		d.dy = Math.max(0, e.clientY - d.y);
+		panel.current!.style.transform = d.dy ? `translateY(${d.dy}px)` : "";
+	};
+	const onUp = () => {
+		const d = drag.current;
+		drag.current = null;
+		if (!d) return;
+		const el = panel.current!;
+		if (d.dy > 90) return close.current();
+		el.style.transition = "transform 0.2s ease-out";
+		el.style.transform = "";
+		setTimeout(() => (el.style.transition = ""), 200);
+	};
 
 	useEffect(() => {
 		const before = document.activeElement as HTMLElement | null;
@@ -71,8 +99,20 @@ export function Dialog({
 				if (e.target === e.currentTarget && pressedOutside.current) close.current();
 			}}
 		>
-			<div ref={panel} class={`why${wide ? " wide" : ""}`} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
-				<button class="close" onClick={() => close.current()} aria-label="Close">
+			<div
+				ref={panel}
+				class={`why${wide ? " wide" : ""}`}
+				role="dialog"
+				aria-modal="true"
+				aria-labelledby={titleId}
+				tabIndex={-1}
+				onPointerDown={onDown}
+				onPointerMove={onMove}
+				onPointerUp={onUp}
+				onPointerCancel={onUp}
+			>
+				<div class="grabber" aria-hidden="true" />
+				<button class="close" onClick={() => close.current()} aria-label="Close" title="Close">
 					<Icon name="abort" size={16} />
 				</button>
 				{kicker && <div class="why-kicker">{kicker}</div>}

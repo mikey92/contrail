@@ -17,14 +17,15 @@
 	--ink: #17191d;
 	--ink-2: #3b3f47;
 	/* Text greys meet WCAG AA (4.5:1): --muted on paper and paper-2, --faint on white surfaces. */
-	--muted: #646871;
-	--faint: #6f727a;
+	/* Secondary text: 7:1 on paper, as Apple asks of custom colors in small text. */
+	--muted: #4e5259;
+	--faint: #4e5259;
 	/* Text and icons on an ink fill: the primary button, a selected segment. */
 	--on-ink: #ffffff;
 	--ink-hover: #2b2e34;
 	--brand: #e8590c;
 	/* The brand orange for text, dark enough for 4.5:1. */
-	--brand-ink: #c2410c;
+	--brand-ink: #8f2d08;
 	--launch: #c2410c;
 	--launch-hover: #a8380a;
 	--on-launch: #ffffff;
@@ -45,6 +46,19 @@
 	--bad-line: #e7b3b0;
 	--plan: #6d3fc8;
 	--plan-bg: #f1ebfc;
+	--fill: rgba(118, 118, 128, 0.12);
+	--thumb: #ffffff;
+	--thumb-shadow: 0 1px 2px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+	--air-text: #1c4d9b;
+	/* Links: the one blue that means "go somewhere", dark enough for 7:1 on paper. */
+	--link: #194da1;
+	--hold-text: #774800;
+	--land-text: #0b5a51;
+	--bad-text: #962521;
+	--ok-text: #165c28;
+	--plan-text: #5d36aa;
+	--orange-text: #813604;
+	--clay-text: #7e391a;
 	--land: #0f7a6e;
 	--land-bg: #e2f2ef;
 	--orange-bg: #fde6d6;
@@ -79,6 +93,7 @@
 	--agent-11: #3a6b9c;
 	--agent-none: #6e727b;
 	--focus: #2463c7;
+	--focus-bg: rgba(36, 99, 199, 0.1);
 	--backdrop: rgba(23, 25, 29, 0.36);
 	--sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro", system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 	--mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
@@ -88,6 +103,13 @@
 	--shadow-drawer: -14px 0 32px rgba(23, 25, 29, 0.08);
 	/* Touch screens get 44 pt targets; a pointer needs less. */
 	--target: 28px;
+	/* Regular control height; small controls (segments, the replay buttons) use --target. */
+	--control: 32px;
+	/* Corner radii: small (tags, fields), medium (controls, small cards), large (cards), extra large (sheets). */
+	--r-s: 6px;
+	--r-m: 8px;
+	--r-l: 12px;
+	--r-xl: 16px;
 }
 
 /* Dark Mode: the same meanings on a dark ground. Surfaces lift as they come forward; status colors are
@@ -103,8 +125,8 @@
 		--hairline: #29292c;
 		--ink: #f5f5f7;
 		--ink-2: #d4d4d8;
-		--muted: #a1a1a6;
-		--faint: #939398;
+		--muted: #adadb1;
+		--faint: #adadb1;
 		--on-ink: #161618;
 		--ink-hover: #dcdce0;
 		--brand: #ff7a2f;
@@ -128,6 +150,18 @@
 		--bad-line: rgba(255, 107, 96, 0.5);
 		--plan: #c89bff;
 		--plan-bg: rgba(200, 155, 255, 0.16);
+		--fill: rgba(118, 118, 128, 0.24);
+		--thumb: #636366;
+		--thumb-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+		--air-text: #96c4ff;
+		--link: #78b3ff;
+		--hold-text: #ffbc56;
+		--land-text: #6cd9cf;
+		--bad-text: #ffa6a0;
+		--ok-text: #6bdc8b;
+		--plan-text: #d7b6ff;
+		--orange-text: #ffb68a;
+		--clay-text: #ffc7a4;
 		--land: #4fd1c5;
 		--land-bg: rgba(79, 209, 197, 0.15);
 		--orange-bg: rgba(255, 122, 47, 0.18);
@@ -160,6 +194,7 @@
 		--agent-11: #90cdf4;
 		--agent-none: #a1a1a6;
 		--focus: #5aa2ff;
+		--focus-bg: rgba(90, 162, 255, 0.16);
 		--backdrop: rgba(0, 0, 0, 0.6);
 		--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
 		--shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 6px 16px rgba(0, 0, 0, 0.4);
@@ -177,6 +212,8 @@
 		--line-2: #8a867c;
 		--hairline: #c9c5bb;
 		--focus: #1a4fa8;
+		--fill: rgba(118, 118, 128, 0.24);
+		--thumb-shadow: 0 0 0 1px var(--line-2);
 	}
 }
 @media (prefers-contrast: more) and (prefers-color-scheme: dark) {
@@ -185,11 +222,13 @@
 		--line-2: #85858b;
 		--hairline: #4a4a4f;
 		--focus: #8cc0ff;
+		--fill: rgba(118, 118, 128, 0.36);
 	}
 }
 @media (pointer: coarse) {
 	:root {
 		--target: 44px;
+		--control: 44px;
 	}
 }
 
@@ -242,9 +281,13 @@ h4 {
 	margin: 0;
 	font: inherit;
 }
+/* Emphasis is Semibold, the weight Apple's text styles use for emphasized text. */
+b,
+strong {
+	font-weight: 600;
+}
 .mono {
 	font-family: var(--mono);
-	font-size: max(0.92em, 0.6875rem);
 }
 .muted {
 	color: var(--muted);
@@ -257,20 +300,43 @@ h4 {
 }
 .dot {
 	display: inline-block;
-	width: 8px;
-	height: 8px;
+	width: 0.5rem;
+	height: 0.5rem;
 	border-radius: 50%;
 	margin-right: 7px;
 	vertical-align: 1px;
 	flex: none;
 }
 .dot.big {
-	width: 11px;
-	height: 11px;
+	width: 0.6875rem;
+	height: 0.6875rem;
 }
 .icon {
 	display: block;
 	flex: none;
+}
+.spinner {
+	width: 1.25rem;
+	height: 1.25rem;
+	flex: none;
+	color: var(--muted);
+	animation: spin 0.9s steps(8) infinite;
+}
+@keyframes spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+.busy,
+.boot-text[role="status"] {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.drawer.loading {
+	display: flex;
+	align-items: center;
+	justify-content: center;
 }
 .logo .contrails {
 	stroke: var(--brand);
@@ -280,7 +346,6 @@ h4 {
 }
 code {
 	font-family: var(--mono);
-	font-size: 0.92em;
 	background: var(--paper-2);
 	border-radius: 4px;
 	padding: 1px 5px;
@@ -306,12 +371,13 @@ code {
 	background: var(--ink);
 	color: var(--on-ink);
 	border: 1px solid var(--ink);
-	border-radius: 7px;
-	padding: 7px 13px;
-	font-size: 0.8438rem;
+	border-radius: var(--r-m);
+	min-height: var(--control);
+	padding: 0 13px;
+	font-size: 0.8125rem;
 	font-weight: 500;
 	white-space: nowrap;
-	cursor: pointer;
+	cursor: default;
 	transition:
 		background 0.15s,
 		border-color 0.15s;
@@ -338,7 +404,7 @@ code {
 	border-color: var(--launch-hover);
 }
 .btn.danger {
-	color: var(--bad);
+	color: var(--bad-text);
 	border-color: var(--bad-line);
 }
 .btn:disabled {
@@ -352,10 +418,10 @@ code {
 	background: var(--surface);
 	border: 1px solid var(--line-2);
 	color: var(--ink-2);
-	border-radius: 7px;
-	width: 34px;
-	height: 34px;
-	cursor: pointer;
+	border-radius: var(--r-m);
+	width: var(--control);
+	height: var(--control);
+	cursor: default;
 }
 .icon-btn:hover {
 	border-color: var(--ink-2);
@@ -387,7 +453,6 @@ code {
 	gap: 8px;
 	font-weight: 600;
 	font-size: 1.0625rem;
-	letter-spacing: -0.01em;
 }
 .proj {
 	padding-left: 18px;
@@ -426,7 +491,7 @@ code {
 }
 .stat-v {
 	font-weight: 600;
-	font-size: 1.1875rem;
+	font-size: 1.25rem;
 	line-height: 1.15;
 	font-variant-numeric: tabular-nums;
 }
@@ -434,7 +499,7 @@ code {
 	display: flex;
 	align-items: center;
 	gap: 5px;
-	font-size: 0.7188rem;
+	font-size: 0.75rem;
 	color: var(--muted);
 	white-space: nowrap;
 }
@@ -515,7 +580,7 @@ code {
 	position: absolute;
 	top: 9px;
 	left: 14px;
-	font-size: 0.7188rem;
+	font-size: 0.75rem;
 	color: var(--muted);
 }
 .legend {
@@ -527,7 +592,7 @@ code {
 	display: flex;
 	gap: 18px;
 	align-items: center;
-	font-size: 0.7188rem;
+	font-size: 0.75rem;
 	color: var(--muted);
 	z-index: 1;
 }
@@ -543,8 +608,8 @@ code {
 }
 .legend i {
 	display: inline-block;
-	width: 16px;
-	height: 11px;
+	width: 1rem;
+	height: 0.6875rem;
 	border-radius: 3px;
 }
 .lg-file {
@@ -553,15 +618,15 @@ code {
 }
 .lg-band {
 	background: var(--band-legend);
-	height: 7px !important;
+	height: 0.4375rem !important;
 }
 .lg-hold {
 	border: 1.5px dashed var(--hold-line);
 	background: var(--hold-bg);
 }
 .lg-plane {
-	width: 15px;
-	height: 15px;
+	width: 0.9375rem;
+	height: 0.9375rem;
 	fill: var(--air);
 }
 .map {
@@ -608,7 +673,7 @@ code {
 }
 .band {
 	fill: var(--band);
-	cursor: pointer;
+	cursor: default;
 	transition: fill 0.2s;
 }
 .band-class {
@@ -640,7 +705,7 @@ code {
 .claim rect {
 	fill-opacity: 0.14;
 	stroke-width: 1.6;
-	cursor: pointer;
+	cursor: default;
 	transition:
 		fill-opacity 0.3s,
 		stroke-width 0.3s;
@@ -682,11 +747,11 @@ code {
 	min-width: 64px;
 	height: 16px;
 	padding: 0 6px;
-	border-radius: 8px;
+	border-radius: var(--r-m);
 	background: var(--hold-bg);
 	border: 1px solid var(--hold-line);
 	box-shadow: var(--shadow-sm);
-	color: var(--hold);
+	color: var(--hold-text);
 	font-size: 0.6875rem;
 	font-weight: 600;
 	line-height: 14px;
@@ -740,7 +805,7 @@ code {
 	margin: -22px 0 0 -22px;
 	border-radius: 50%;
 	transition: transform 1.6s cubic-bezier(0.45, 0.05, 0.25, 1);
-	cursor: pointer;
+	cursor: default;
 	z-index: 5;
 }
 .plane > .orbit,
@@ -789,10 +854,10 @@ code {
 	align-items: center;
 	gap: 4px;
 	white-space: nowrap;
-	font-size: 0.6875rem;
+	font-size: min(0.6875rem, 16.5px);
 	font-weight: 500;
 	padding: 2px 7px 2px 6px;
-	border-radius: 6px;
+	border-radius: var(--r-s);
 	background: var(--surface);
 	border: 1px solid var(--line-2);
 	border-left: 3px solid var(--c);
@@ -828,6 +893,10 @@ code {
 .plane .tag .st {
 	margin-left: 2px;
 }
+.plane .tag .st,
+.plane .tag .kind {
+	font-size: 1em;
+}
 .plane.approach .glyph {
 	animation: approach 1.1s ease-in-out infinite alternate;
 }
@@ -842,7 +911,7 @@ code {
 	pointer-events: none;
 	background: var(--surface);
 	border: 1px solid var(--line-2);
-	border-radius: 8px;
+	border-radius: var(--r-m);
 	padding: 7px 10px;
 	font-size: 0.75rem;
 	max-width: 280px;
@@ -858,33 +927,33 @@ code {
 	border-radius: 999px;
 	margin-left: 6px;
 	background: var(--paper-2);
-	color: var(--muted);
+	color: var(--ink-2);
 	white-space: nowrap;
 }
 .st-airborne {
 	background: var(--air-bg);
-	color: var(--air);
+	color: var(--air-text);
 }
 .st-holding {
 	background: var(--hold-bg);
-	color: var(--hold);
+	color: var(--hold-text);
 }
 .st-approach {
 	background: var(--land-bg);
-	color: var(--land);
+	color: var(--land-text);
 }
 .st-diverted {
 	background: var(--bad-bg);
-	color: var(--bad);
+	color: var(--bad-text);
 }
 .st-landed {
 	background: var(--ok-bg);
-	color: var(--ok);
+	color: var(--ok-text);
 }
 .st-taxiing,
 .st-aborted {
 	background: var(--paper-2);
-	color: var(--muted);
+	color: var(--ink-2);
 }
 
 /* ── runway ───────────────────────────────────── */
@@ -894,7 +963,7 @@ code {
 	border-top: 1px solid var(--line);
 	background: var(--surface);
 	display: grid;
-	grid-template-columns: 112px auto minmax(0, 1fr);
+	grid-template-columns: 7rem auto minmax(0, 1fr);
 	align-items: stretch;
 }
 .rw-label {
@@ -908,7 +977,7 @@ code {
 }
 .rw-label .muted {
 	font-weight: 400;
-	font-size: 0.7188rem;
+	font-size: 0.75rem;
 	margin-top: 2px;
 }
 .rw-approach {
@@ -920,13 +989,13 @@ code {
 	max-width: 260px;
 }
 .rw-chip {
-	font-size: 0.7188rem;
+	font-size: 0.75rem;
 	padding: 3px 9px;
 	border-radius: 999px;
 	border: 1px solid color-mix(in srgb, var(--c) 45%, transparent);
 	background: color-mix(in srgb, var(--c) 9%, var(--surface));
 	white-space: nowrap;
-	cursor: pointer;
+	cursor: default;
 }
 .rw-chip.verifying,
 .rw-chip.merging {
@@ -938,7 +1007,7 @@ code {
 	}
 }
 .rw-more {
-	font-size: 0.7188rem;
+	font-size: 0.75rem;
 	color: var(--muted);
 }
 /* Newest landing on the right; older ones fill leftwards and the ones that don't fit wrap out of view. */
@@ -948,8 +1017,9 @@ code {
 	flex-direction: row-reverse;
 	flex-wrap: wrap;
 	align-content: flex-start;
-	gap: 40px 8px;
-	padding: 21px 12px 0;
+	/* Landings that don't fit wrap onto rows far below, out of sight, at any text size. */
+	gap: 100vh 8px;
+	padding: 1.3rem 12px 0;
 	overflow: hidden;
 }
 .rw-strip::before {
@@ -972,14 +1042,14 @@ code {
 .rw-commit {
 	position: relative;
 	flex: none;
-	width: 152px;
+	width: 9.5rem;
 	padding: 7px 10px;
-	border-radius: 7px;
+	border-radius: var(--r-m);
 	background: var(--surface);
 	border: 1px solid var(--line);
 	border-left: 3px solid var(--c);
 	box-shadow: var(--shadow-sm);
-	cursor: pointer;
+	cursor: default;
 	animation: touchdown 0.8s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 /* A landing slides in without fading, so its text never shows at less than full contrast. */
@@ -1009,13 +1079,13 @@ code {
 }
 .plus,
 .ok {
-	color: var(--ok);
+	color: var(--ok-text);
 }
 .minus {
-	color: var(--bad);
+	color: var(--bad-text);
 }
 .union {
-	color: var(--plan);
+	color: var(--plan-text);
 }
 
 /* ── replay ───────────────────────────────────── */
@@ -1035,11 +1105,11 @@ code {
 	flex: none;
 	width: 30px;
 	height: 28px;
-	border-radius: 7px;
+	border-radius: var(--r-m);
 	border: 1px solid var(--line-2);
 	background: var(--surface);
 	color: var(--ink-2);
-	cursor: pointer;
+	cursor: default;
 }
 .rb-btn:hover {
 	border-color: var(--ink-2);
@@ -1054,7 +1124,7 @@ code {
 	flex: none;
 	min-width: 34px;
 	font-family: var(--mono);
-	font-size: 0.7188rem;
+	font-size: 0.75rem;
 	color: var(--muted);
 	font-variant-numeric: tabular-nums;
 	text-align: center;
@@ -1064,7 +1134,7 @@ code {
 	flex: 1;
 	min-width: 48px;
 	height: 24px;
-	cursor: pointer;
+	cursor: default;
 	border-radius: 4px;
 }
 .rb-track::before,
@@ -1102,6 +1172,18 @@ code {
 .rb-speeds button {
 	padding: 4px 8px;
 }
+.rb-track {
+	touch-action: none;
+}
+/* The one-button speed control, for phones. */
+.rb-speed {
+	display: none;
+	width: auto;
+	padding: 0 8px;
+	font-size: 0.75rem;
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+}
 /* Over the map when the run is over: what it achieved and where to go next. */
 .endcard-wrap {
 	position: absolute;
@@ -1118,7 +1200,7 @@ code {
 	max-width: 460px;
 	padding: 20px 24px 22px;
 	border: 1px solid var(--line-2);
-	border-radius: 12px;
+	border-radius: var(--r-l);
 	background: var(--surface);
 	box-shadow: var(--shadow-lg);
 	pointer-events: auto;
@@ -1126,13 +1208,13 @@ code {
 }
 .endcard-title {
 	margin: 0 30px 6px 0;
-	font-size: 1.125rem;
+	font-size: 1.25rem;
 	font-weight: 600;
 }
 .endcard p {
 	margin: 0 0 16px;
 	color: var(--ink-2);
-	font-size: 0.9062rem;
+	font-size: 0.9375rem;
 	line-height: 1.5;
 }
 .endcard .row {
@@ -1143,40 +1225,47 @@ code {
 
 /* ── side panel ───────────────────────────────── */
 .tabs {
-	display: flex;
-	gap: 4px;
-	padding: 0 10px;
-	border-bottom: 1px solid var(--line);
+	display: grid;
+	grid-auto-flow: column;
+	grid-auto-columns: 1fr;
+	gap: 2px;
+	margin: 10px 12px 8px;
+	padding: 2px;
+	border-radius: var(--r-m);
+	background: var(--fill);
 	flex: none;
 }
 .tabs button {
-	flex: 1;
+	min-height: var(--target);
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 4px;
 	background: none;
 	border: none;
-	color: var(--muted);
-	padding: 13px 0 11px;
+	border-radius: calc(var(--r-m) - 2px);
+	color: var(--ink-2);
+	padding: 0 6px;
 	font-weight: 500;
-	font-size: 0.8438rem;
-	cursor: pointer;
-	border-bottom: 2px solid transparent;
-}
-.tabs button:hover {
-	color: var(--ink);
+	font-size: 0.8125rem;
+	cursor: default;
+	white-space: nowrap;
 }
 .tabs button.on {
+	background: var(--thumb);
+	box-shadow: var(--thumb-shadow);
 	color: var(--ink);
-	border-bottom-color: var(--ink);
 	font-weight: 600;
 }
 .tabs button.attn {
-	color: var(--hold);
+	color: var(--hold-text);
 }
 .count {
 	font-size: 0.6875rem;
 	font-weight: 500;
 	color: var(--muted);
 	background: var(--paper);
-	border-radius: 9px;
+	border-radius: 999px;
 	padding: 1px 6px;
 	margin-left: 3px;
 }
@@ -1201,7 +1290,7 @@ code {
 }
 .feed-hidden {
 	min-width: 0;
-	font-size: 0.7188rem;
+	font-size: 0.75rem;
 	color: var(--muted);
 	white-space: nowrap;
 	overflow: hidden;
@@ -1209,32 +1298,33 @@ code {
 }
 /* A row of toggle buttons: the feed filter, the replay speeds. */
 .seg {
-	display: inline-flex;
+	display: inline-grid;
+	grid-auto-flow: column;
+	grid-auto-columns: 1fr;
+	gap: 2px;
 	flex: none;
-	border: 1px solid var(--line-2);
-	border-radius: 7px;
-	overflow: hidden;
+	padding: 2px;
+	border-radius: var(--r-m);
+	background: var(--fill);
 }
 .seg button {
 	min-height: var(--target);
-	background: var(--surface);
+	background: none;
 	border: none;
-	padding: 4px 10px;
+	border-radius: calc(var(--r-m) - 2px);
+	padding: 0 10px;
 	font-size: 0.75rem;
 	font-weight: 500;
 	color: var(--ink-2);
-	cursor: pointer;
+	cursor: default;
 	font-variant-numeric: tabular-nums;
-}
-.seg button + button {
-	border-left: 1px solid var(--line-2);
-}
-.seg button:hover {
-	background: var(--paper);
+	white-space: nowrap;
 }
 .seg button.on {
-	background: var(--ink);
-	color: var(--on-ink);
+	background: var(--thumb);
+	box-shadow: var(--thumb-shadow);
+	color: var(--ink);
+	font-weight: 600;
 }
 .ev {
 	display: flex;
@@ -1244,7 +1334,7 @@ code {
 	animation: slidein 0.35s ease-out;
 }
 .ev.go {
-	cursor: pointer;
+	cursor: default;
 }
 @keyframes slidein {
 	from {
@@ -1284,7 +1374,7 @@ code {
 .ev-landing-landed .ev-icon,
 .ev-landing-landed .ev-text,
 .ev-landing-landed .ev-text .mono {
-	color: var(--ok);
+	color: var(--ok-text);
 }
 .ev-landing-landed .ev-text {
 	font-weight: 500;
@@ -1293,17 +1383,19 @@ code {
 .ev-landing-failed .ev-icon,
 .ev-landing-conflict .ev-text,
 .ev-landing-failed .ev-text {
-	color: var(--bad);
+	color: var(--bad-text);
 }
 .ev-clearance-holding .ev-icon,
-.ev-clearance-holding .ev-text,
 .ev-turbulence .ev-icon {
 	color: var(--hold);
+}
+.ev-clearance-holding .ev-text {
+	color: var(--hold-text);
 }
 .ev-flight-planned .ev-icon,
 .ev-flight-planned .ev-text,
 .ev-flight-planned .ev-text .mono {
-	color: var(--plan);
+	color: var(--plan-text);
 }
 .ev-radio .ev-text {
 	font-style: italic;
@@ -1332,11 +1424,11 @@ code {
 .fcard {
 	border: 1px solid var(--line);
 	border-left: 4px solid var(--line-2);
-	border-radius: 7px;
+	border-radius: var(--r-m);
 	padding: 9px 11px;
 	margin-bottom: 8px;
 	background: var(--surface);
-	cursor: pointer;
+	cursor: default;
 	box-shadow: var(--shadow-sm);
 }
 .fcard:hover {
@@ -1413,7 +1505,7 @@ code {
 	font-size: 0.8125rem;
 }
 .irow.go {
-	cursor: pointer;
+	cursor: default;
 }
 .irow .mono {
 	color: var(--faint);
@@ -1427,28 +1519,6 @@ code {
 }
 .is-landed .ititle {
 	color: var(--muted);
-}
-.ist {
-	font-size: 0.6875rem;
-	font-weight: 600;
-	color: var(--faint);
-	white-space: nowrap;
-}
-.ist-landed {
-	color: var(--ok);
-}
-.ist-airborne,
-.ist-taxiing {
-	color: var(--air);
-}
-.ist-holding {
-	color: var(--hold);
-}
-.ist-approach {
-	color: var(--land);
-}
-.ist-diverted {
-	color: var(--bad);
 }
 
 /* ── flight drawer ────────────────────────────── */
@@ -1483,11 +1553,11 @@ code {
 	height: 32px;
 	background: none;
 	border: none;
-	border-radius: 8px;
+	border-radius: var(--r-m);
 	color: var(--muted);
 	font-size: 1.375rem;
 	line-height: 1;
-	cursor: pointer;
+	cursor: default;
 }
 .close:hover {
 	background: var(--paper);
@@ -1514,7 +1584,7 @@ code {
 .d-intent {
 	margin-top: 12px;
 	font-weight: 600;
-	font-size: 0.9062rem;
+	font-size: 0.9375rem;
 }
 .d-body {
 	margin-top: 6px;
@@ -1541,10 +1611,10 @@ code {
 	font-family: var(--mono);
 	font-size: 0.6875rem;
 	padding: 3px 8px;
-	border-radius: 6px;
+	border-radius: var(--r-s);
 	background: var(--surface-2);
 	border: 1px solid var(--line-2);
-	cursor: pointer;
+	cursor: default;
 }
 .chip:hover {
 	border-color: var(--ink-2);
@@ -1552,12 +1622,12 @@ code {
 .chip.holding {
 	background: var(--hold-bg);
 	border: 1px dashed var(--hold-line);
-	color: var(--hold);
+	color: var(--hold-text);
 }
 .landing {
 	border: 1px solid var(--line);
 	border-left: 3px solid var(--line-2);
-	border-radius: 8px;
+	border-radius: var(--r-m);
 	padding: 11px 12px;
 	background: var(--surface);
 }
@@ -1579,15 +1649,15 @@ code {
 	font-weight: 600;
 }
 .lst-landed {
-	color: var(--ok);
+	color: var(--ok-text);
 }
 .lst-conflict,
 .lst-failed,
 .lst-rejected {
-	color: var(--bad);
+	color: var(--bad-text);
 }
 .lst-review {
-	color: var(--hold);
+	color: var(--hold-text);
 }
 .summary {
 	font-size: 0.8125rem;
@@ -1629,15 +1699,15 @@ code {
 	flex: none;
 }
 .cst-added {
-	color: var(--ok);
+	color: var(--ok-text);
 	background: var(--ok-bg);
 }
 .cst-modified {
-	color: var(--hold);
+	color: var(--hold-text);
 	background: var(--hold-bg);
 }
 .cst-deleted {
-	color: var(--bad);
+	color: var(--bad-text);
 	background: var(--bad-bg);
 }
 .sym {
@@ -1650,8 +1720,8 @@ code {
 	padding: 1px 6px;
 	border-radius: 4px;
 	background: var(--plan-bg);
-	color: var(--plan);
-	cursor: pointer;
+	color: var(--plan-text);
+	cursor: default;
 }
 button.sym {
 	display: inline-flex;
@@ -1660,10 +1730,10 @@ button.sym {
 }
 .conflict {
 	margin-top: 8px;
-	font-size: 0.7812rem;
+	font-size: 0.8125rem;
 }
 .conflict-head {
-	color: var(--bad);
+	color: var(--bad-text);
 	margin-bottom: 6px;
 	line-height: 1.45;
 }
@@ -1677,7 +1747,7 @@ pre {
 	font-family: var(--mono);
 	font-size: 0.6875rem;
 	padding: 7px 9px;
-	border-radius: 6px;
+	border-radius: var(--r-s);
 	overflow-x: auto;
 	white-space: pre;
 }
@@ -1692,21 +1762,21 @@ pre.theirs {
 }
 .tests {
 	margin-top: 8px;
-	font-size: 0.7812rem;
+	font-size: 0.8125rem;
 	font-weight: 500;
 	padding: 7px 10px;
-	border-radius: 6px;
+	border-radius: var(--r-s);
 }
 .tests.good {
 	background: var(--ok-bg);
-	color: var(--ok);
+	color: var(--ok-text);
 }
 .tests.bad {
 	background: var(--bad-bg);
-	color: var(--bad);
+	color: var(--bad-text);
 }
 .fail {
-	color: var(--bad);
+	color: var(--bad-text);
 	font-size: 0.6875rem;
 	font-weight: 400;
 	margin-top: 3px;
@@ -1788,12 +1858,12 @@ pre.theirs {
 	overflow-y: auto;
 	background: var(--surface);
 	border: 1px solid var(--line);
-	border-radius: 12px;
+	border-radius: var(--r-xl);
 	padding: 22px 26px;
 	box-shadow: var(--shadow-lg);
 }
 .why-kicker {
-	font-size: 0.7812rem;
+	font-size: 0.8125rem;
 	font-weight: 600;
 	color: var(--brand-ink);
 }
@@ -1837,7 +1907,7 @@ pre.theirs {
 	margin-right: 6px;
 }
 .why-error {
-	color: var(--bad);
+	color: var(--bad-text);
 	font-size: 0.8125rem;
 	line-height: 1.5;
 }
@@ -1853,7 +1923,7 @@ pre.theirs {
 	margin: 4px 0 18px;
 	padding: 12px 14px;
 	border: 1px solid var(--line);
-	border-radius: 8px;
+	border-radius: var(--r-m);
 	background: var(--surface-2);
 }
 .invite p {
@@ -1862,7 +1932,7 @@ pre.theirs {
 }
 .connect-sub {
 	margin: 0;
-	font-size: 0.8438rem;
+	font-size: 0.875rem;
 	font-weight: 600;
 }
 pre.code {
@@ -1889,14 +1959,14 @@ pre.code {
 	top: 7px;
 	right: 7px;
 	min-height: var(--target);
-	font-size: 0.7188rem;
+	font-size: 0.75rem;
 	font-weight: 500;
 	padding: 3px 9px;
-	border-radius: 6px;
+	border-radius: var(--r-s);
 	border: 1px solid var(--line-2);
 	background: var(--surface);
 	color: var(--ink-2);
-	cursor: pointer;
+	cursor: default;
 }
 .cmd .copy:hover {
 	border-color: var(--ink-2);
@@ -1913,13 +1983,17 @@ pre.code {
 	margin-bottom: 10px;
 }
 .operator input,
+.operator select {
+	min-height: var(--control);
+}
+.operator input,
 .operator select,
 .operator textarea,
 .rcomment {
 	background: var(--surface);
 	border: 1px solid var(--line-2);
 	color: var(--ink);
-	border-radius: 6px;
+	border-radius: var(--r-s);
 	padding: 7px 9px;
 	font-family: var(--sans);
 	font-size: 0.8125rem;
@@ -1949,22 +2023,23 @@ pre.code {
 }
 .op h3 {
 	margin: 0 0 4px;
-	font-size: 0.8438rem;
+	font-size: 0.875rem;
+	font-weight: 600;
 }
 .op p {
 	margin: 0 0 8px;
-	font-size: 0.7812rem;
+	font-size: 0.8125rem;
 }
 .op-msg {
 	margin-top: 12px;
-	color: var(--ok);
+	color: var(--ok-text);
 }
 
 /* review inbox */
 .rcard {
 	border: 1px solid var(--hold-border);
 	border-left: 4px solid var(--hold-line);
-	border-radius: 8px;
+	border-radius: var(--r-m);
 	padding: 12px 13px;
 	margin-bottom: 12px;
 	background: var(--hold-surface);
@@ -1973,15 +2048,15 @@ pre.code {
 	display: flex;
 	align-items: center;
 	gap: 5px;
-	cursor: pointer;
+	cursor: default;
 }
 .rcard-intent {
 	font-weight: 600;
 	margin: 6px 0;
 }
 .rcard-why {
-	font-size: 0.7812rem;
-	color: var(--hold);
+	font-size: 0.8125rem;
+	color: var(--hold-text);
 	margin-bottom: 8px;
 	display: flex;
 	flex-wrap: wrap;
@@ -1993,7 +2068,7 @@ pre.code {
 }
 .diff {
 	border: 1px solid var(--line);
-	border-radius: 6px;
+	border-radius: var(--r-s);
 	overflow: hidden;
 	margin: 4px 0 8px;
 	font-size: 0.6875rem;
@@ -2024,8 +2099,8 @@ pre.code {
 	font-size: 0.6875rem;
 }
 details.diffs summary {
-	cursor: pointer;
-	color: var(--air);
+	cursor: default;
+	color: var(--ink-2);
 	font-size: 0.75rem;
 	line-height: var(--target);
 }
@@ -2035,42 +2110,42 @@ details.diffs summary {
 	margin: 6px 0;
 }
 .rdone {
-	font-size: 0.7812rem;
+	font-size: 0.8125rem;
 	padding: 7px 4px;
 	border-bottom: 1px solid var(--line);
 }
 .rdone.go {
-	cursor: pointer;
+	cursor: default;
 }
 .rrecorded {
 	margin-top: 10px;
 	padding: 8px 10px;
-	border-radius: 6px;
+	border-radius: var(--r-s);
 	background: var(--paper);
 	color: var(--ink-2);
-	font-size: 0.7812rem;
+	font-size: 0.8125rem;
 }
 .rdone.approved b {
-	color: var(--ok);
+	color: var(--ok-text);
 }
 .rdone.rejected b {
-	color: var(--bad);
+	color: var(--bad-text);
 }
 .reviewnote {
 	margin-top: 8px;
 	font-size: 0.75rem;
 	padding: 7px 10px;
-	border-radius: 6px;
+	border-radius: var(--r-s);
 	background: var(--hold-bg);
-	color: var(--hold);
+	color: var(--hold-text);
 }
 .reviewnote.approved {
 	background: var(--ok-bg);
-	color: var(--ok);
+	color: var(--ok-text);
 }
 .reviewnote.rejected {
 	background: var(--bad-bg);
-	color: var(--bad);
+	color: var(--bad-text);
 }
 
 /* agent kind badges */
@@ -2080,16 +2155,15 @@ details.diffs summary {
 	font-size: 0.6875rem;
 	font-weight: 600;
 	padding: 0 4px;
-	border-radius: 3px;
+	border-radius: 4px;
 	margin-right: 3px;
 	vertical-align: 1px;
 	background: var(--paper-2);
 	color: var(--ink-2);
-	letter-spacing: 0.02em;
 }
 .kind-claude-code {
 	background: var(--clay-bg);
-	color: var(--clay-ink);
+	color: var(--clay-text);
 }
 .kind-codex {
 	background: var(--slate-bg);
@@ -2097,7 +2171,7 @@ details.diffs summary {
 }
 .kind-edge {
 	background: var(--orange-bg);
-	color: var(--orange-ink);
+	color: var(--orange-text);
 }
 
 /* ── boot ─────────────────────────────────────── */
@@ -2151,7 +2225,7 @@ details.diffs summary {
 	padding-bottom: 64px;
 }
 .eyebrow {
-	font-size: 0.8438rem;
+	font-size: 0.8125rem;
 	font-weight: 600;
 	color: var(--brand-ink);
 }
@@ -2159,13 +2233,12 @@ details.diffs summary {
 	text-wrap: balance;
 	font-size: clamp(2.375rem, 1.5rem + 2.6vw, 3.75rem);
 	line-height: 1.05;
-	letter-spacing: -0.025em;
 	font-weight: 600;
 	margin: 12px 0 18px;
 }
 .lede {
 	text-wrap: pretty;
-	font-size: 1.0938rem;
+	font-size: 1.0625rem;
 	line-height: 1.6;
 	color: var(--ink-2);
 	margin: 0;
@@ -2178,13 +2251,13 @@ details.diffs summary {
 }
 .hero-links .btn {
 	padding: 10px 16px;
-	font-size: 0.9062rem;
+	font-size: 0.9375rem;
 }
 .shot {
 	margin: 0;
 	background: var(--surface);
 	border: 1px solid var(--line-2);
-	border-radius: 10px;
+	border-radius: var(--r-l);
 	box-shadow: var(--shadow-lg);
 	overflow: hidden;
 }
@@ -2195,7 +2268,7 @@ details.diffs summary {
 	height: auto;
 }
 .shot figcaption {
-	font-size: 0.7812rem;
+	font-size: 0.8125rem;
 	color: var(--muted);
 	padding: 9px 14px;
 	border-top: 1px solid var(--line);
@@ -2208,9 +2281,8 @@ details.diffs summary {
 }
 .section-h {
 	text-wrap: balance;
-	font-size: 1.625rem;
+	font-size: 1.75rem;
 	font-weight: 600;
-	letter-spacing: -0.015em;
 	margin: 0 0 6px;
 }
 .section-sub {
@@ -2258,7 +2330,7 @@ details.diffs summary {
 .step .was {
 	display: block;
 	margin-top: 10px;
-	font-size: 0.7812rem;
+	font-size: 0.8125rem;
 	color: var(--muted);
 }
 .results {
@@ -2271,11 +2343,13 @@ details.diffs summary {
 .result {
 	border-top: 2px solid var(--ink);
 	padding-top: 14px;
+	container-type: inline-size;
 }
 .result-n {
 	font-size: clamp(1.75rem, 1.2rem + 1.2vw, 2.25rem);
+	/* No wider than its column, so the longest figure stays on one line and the headings below line up. */
+	font-size: min(clamp(1.75rem, 1.2rem + 1.2vw, 2.25rem), 11.5cqi);
 	font-weight: 600;
-	letter-spacing: -0.02em;
 	font-variant-numeric: tabular-nums;
 }
 .result-l {
@@ -2293,8 +2367,8 @@ details.diffs summary {
 .result a {
 	display: inline-block;
 	margin-top: 8px;
-	font-size: 0.8438rem;
-	color: var(--air);
+	font-size: 0.8125rem;
+	color: var(--link);
 }
 .result a:hover {
 	text-decoration: underline;
@@ -2314,7 +2388,7 @@ details.diffs summary {
 	flex-direction: column;
 	gap: 6px;
 	border: 1px solid var(--line);
-	border-radius: 10px;
+	border-radius: var(--r-l);
 	padding: 16px 18px;
 	background: var(--surface);
 	box-shadow: var(--shadow-sm);
@@ -2333,7 +2407,7 @@ details.diffs summary {
 }
 .pcard-name {
 	font-weight: 600;
-	font-size: 1rem;
+	font-size: 1.0625rem;
 }
 .badge {
 	font-size: 0.6875rem;
@@ -2346,20 +2420,20 @@ details.diffs summary {
 }
 .badge.real {
 	background: var(--ok-bg);
-	color: var(--ok);
+	color: var(--ok-text);
 }
 .badge.load {
 	background: var(--air-bg);
-	color: var(--air);
+	color: var(--air-text);
 }
 .badge.try {
 	background: var(--orange-bg);
-	color: var(--orange-ink);
+	color: var(--orange-text);
 }
 .pcard p {
 	margin: 0;
 	color: var(--ink-2);
-	font-size: 0.8438rem;
+	font-size: 0.875rem;
 	line-height: 1.55;
 	flex: 1;
 }
@@ -2481,10 +2555,15 @@ details.diffs summary {
 	}
 	.replaybar {
 		gap: 6px;
-		padding: 6px 10px;
+		padding-top: 6px;
+		padding-bottom: 6px;
+		--side: 10px;
 	}
-	.rb-speeds button {
-		padding: 4px 6px;
+	.rb-speeds {
+		display: none;
+	}
+	.rb-speed {
+		display: inline-flex;
 	}
 	.legend .lg-long {
 		display: none;
@@ -2507,6 +2586,12 @@ details.diffs summary {
 	}
 	.home-nav .links {
 		gap: 14px;
+	}
+}
+/* The narrowest phones keep the elapsed time; the track's end stands for the total. */
+@media (max-width: 360px) {
+	.rb-track + .rb-time {
+		display: none;
 	}
 }
 @media (max-width: 560px) {
@@ -2544,7 +2629,7 @@ details.diffs summary {
 	gap: 8px;
 	padding: 13px 14px;
 	border: 1px solid var(--line);
-	border-radius: 10px;
+	border-radius: var(--r-l);
 	background: var(--surface);
 	box-shadow: var(--shadow-sm);
 }
@@ -2593,17 +2678,25 @@ details.diffs summary {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 4px 12px;
-	font-size: 0.7812rem;
+	font-size: 0.8125rem;
 	color: var(--ink-2);
 }
-.sector-stats .t-air {
-	color: var(--air);
+.sector-stats .t-air::before,
+.sector-stats .t-hold::before {
+	content: "";
+	display: inline-block;
+	width: 0.5rem;
+	height: 0.5rem;
+	margin-right: 0.3125rem;
+	border-radius: 50%;
+	vertical-align: 0.0625rem;
+	background: var(--air);
 }
-.sector-stats .t-hold {
-	color: var(--hold);
+.sector-stats .t-hold::before {
+	background: var(--hold-line);
 }
 .sector-foot {
-	font-size: 0.7188rem;
+	font-size: 0.75rem;
 	color: var(--muted);
 }
 .crossings {
@@ -2634,7 +2727,7 @@ details.diffs summary {
 .crossings-lede {
 	max-width: 760px;
 	color: var(--ink-2);
-	font-size: 0.8438rem;
+	font-size: 0.875rem;
 	line-height: 1.6;
 	margin: 0 0 12px;
 }
@@ -2649,7 +2742,7 @@ details.diffs summary {
 	gap: 8px;
 	padding: 13px 14px;
 	border: 1px solid var(--line);
-	border-radius: 10px;
+	border-radius: var(--r-l);
 	background: var(--surface);
 	box-shadow: var(--shadow-sm);
 }
@@ -2663,7 +2756,7 @@ details.diffs summary {
 	margin-left: 0;
 }
 .crossing-code {
-	font-size: 0.7812rem;
+	font-size: 0.8125rem;
 	color: var(--muted);
 }
 .crossing-title {
@@ -2687,9 +2780,9 @@ details.diffs summary {
 	gap: 8px;
 	padding: 5px 10px;
 	border: 1px solid var(--line);
-	border-radius: 8px;
+	border-radius: var(--r-m);
 	background: var(--paper);
-	font-size: 0.7812rem;
+	font-size: 0.8125rem;
 }
 .crossing-leg:hover {
 	border-color: var(--line-2);
@@ -2702,16 +2795,16 @@ details.diffs summary {
 }
 .crossing-error {
 	margin: 0;
-	font-size: 0.7812rem;
+	font-size: 0.8125rem;
 	line-height: 1.5;
-	color: var(--bad);
+	color: var(--bad-text);
 	overflow-wrap: anywhere;
 }
 .rate-chart {
 	margin: 18px 0 0;
 	padding: 14px 16px 10px;
 	border: 1px solid var(--line);
-	border-radius: 10px;
+	border-radius: var(--r-l);
 	background: var(--surface);
 	box-shadow: var(--shadow-sm);
 }
@@ -2726,7 +2819,7 @@ details.diffs summary {
 }
 .rc-sub {
 	grid-column: 1;
-	font-size: 0.7812rem;
+	font-size: 0.8125rem;
 	color: var(--muted);
 }
 .rc-toggle {
@@ -2735,12 +2828,12 @@ details.diffs summary {
 	align-self: start;
 	padding: 4px 10px;
 	border: 1px solid var(--line-2);
-	border-radius: 6px;
+	border-radius: var(--r-s);
 	background: var(--surface);
 	color: var(--ink-2);
 	font: inherit;
-	font-size: 0.7812rem;
-	cursor: pointer;
+	font-size: 0.8125rem;
+	cursor: default;
 }
 .rc-toggle:hover {
 	background: var(--surface-2);
@@ -2767,7 +2860,7 @@ details.diffs summary {
 }
 .rc-ref-label {
 	fill: var(--muted);
-	font-size: 11.5px;
+	font-size: 12px;
 }
 .rc-area {
 	fill: var(--plan);
@@ -2798,7 +2891,7 @@ details.diffs summary {
 	gap: 1px;
 	padding: 6px 9px;
 	border: 1px solid var(--line);
-	border-radius: 7px;
+	border-radius: var(--r-m);
 	background: var(--surface);
 	box-shadow: var(--shadow);
 	font-size: 0.75rem;
@@ -2818,7 +2911,7 @@ details.diffs summary {
 	width: auto;
 	min-width: 360px;
 	border-collapse: collapse;
-	font-size: 0.7812rem;
+	font-size: 0.8125rem;
 	font-variant-numeric: tabular-nums;
 }
 .rc-table th,
@@ -2839,9 +2932,9 @@ details.diffs summary {
 	margin-left: 8px;
 	/* Taller to the pointer than the line it sits in. */
 	padding-block: 0.52em;
-	font-size: 0.7812rem;
+	font-size: 0.8125rem;
 	font-weight: 400;
-	color: var(--air);
+	color: var(--link);
 }
 .proj-up:hover {
 	text-decoration: underline;
@@ -2849,10 +2942,15 @@ details.diffs summary {
 }
 
 /* ── states: focus, press, disable ───────────── */
+/* Pointer shapes follow macOS: the pointing hand is for links only; buttons, rows and the map keep the arrow. */
 /* A keyboard user always sees where focus is: one ring, in the accent color, on every control. */
 :focus-visible {
 	outline: 2px solid var(--focus);
 	outline-offset: 2px;
+}
+/* A link's ring is rounded too, like every other focus ring on macOS. */
+:where(a:focus-visible) {
+	border-radius: var(--r-s);
 }
 :focus:not(:focus-visible) {
 	outline: none;
@@ -2864,6 +2962,14 @@ details.diffs summary {
 .tabs button:focus-visible,
 .seg button:focus-visible {
 	outline-offset: -2px;
+}
+/* In a list, focus highlights the whole row, as macOS and iPadOS do; fields and buttons keep the ring. */
+.ev.go:focus-visible,
+.irow.go:focus-visible,
+.rdone.go:focus-visible {
+	outline: none;
+	background: var(--focus-bg);
+	box-shadow: inset 3px 0 0 var(--focus);
 }
 /* The map draws its own ring: an SVG group has no outline box. */
 .band-g:focus {
@@ -2908,7 +3014,7 @@ details.diffs summary {
 	cursor: not-allowed;
 }
 [role="button"] {
-	cursor: pointer;
+	cursor: default;
 }
 
 
@@ -2922,7 +3028,7 @@ details.diffs summary {
 	align-items: center;
 	z-index: 100;
 	padding: 10px 14px;
-	border-radius: 8px;
+	border-radius: var(--r-m);
 	background: var(--ink);
 	color: var(--on-ink);
 	font-weight: 600;
@@ -2937,10 +3043,57 @@ details.diffs summary {
 	max-width: 90vw;
 }
 .pcard-h {
-	font-size: 1rem;
+	font-size: 1.0625rem;
 }
 .why.wide {
 	width: min(860px, 94vw);
+}
+.grabber {
+	display: none;
+}
+/* On a phone a sheet rises from the bottom edge at full width, as on iOS: its Close button on the leading
+   side, a grabber on top, and a downward swipe on the top puts it away. */
+@media (max-width: 700px) {
+	.why-backdrop {
+		align-items: flex-end;
+		padding: env(safe-area-inset-top) 0 0;
+	}
+	.why,
+	.why.wide {
+		width: 100%;
+		max-height: calc(100% - 10px);
+		border-radius: var(--r-xl) var(--r-xl) 0 0;
+		border-bottom: none;
+		padding: 14px 18px max(22px, env(safe-area-inset-bottom));
+		animation: sheet 0.32s cubic-bezier(0.2, 0.8, 0.2, 1);
+	}
+	.grabber {
+		display: block;
+		width: 36px;
+		height: 5px;
+		margin: -4px auto 10px;
+		border-radius: 3px;
+		background: var(--line-2);
+	}
+	.grabber,
+	.why .why-kicker,
+	.why .dialog-title {
+		touch-action: none;
+	}
+	.why > .close {
+		right: auto;
+		left: 6px;
+		top: 18px;
+	}
+	.why > .why-kicker,
+	.why > .dialog-title {
+		padding-left: 44px;
+	}
+}
+@keyframes sheet {
+	from {
+		transform: translateY(100%);
+	}
 }
 .operator label.inline {
 	display: contents;
@@ -2957,7 +3110,7 @@ details.diffs summary {
 	background: var(--surface);
 	border: 1px solid var(--line-2);
 	color: var(--ink);
-	border-radius: 6px;
+	border-radius: var(--r-s);
 	padding: 7px 9px;
 	font-size: 0.8125rem;
 }
@@ -3055,8 +3208,8 @@ details.diffs summary {
 /* ── notched screens: content stays inside the safe area ── */
 .topbar,
 .replaybar {
-	padding-left: max(18px, env(safe-area-inset-left));
-	padding-right: max(18px, env(safe-area-inset-right));
+	padding-left: max(var(--side, 18px), env(safe-area-inset-left));
+	padding-right: max(var(--side, 18px), env(safe-area-inset-right));
 }
 .topbar {
 	padding-top: max(10px, env(safe-area-inset-top));
@@ -3110,7 +3263,8 @@ details.diffs summary {
 	.rw-commit,
 	.drawer,
 	.endcard,
-	.why-backdrop {
+	.why-backdrop,
+	.why {
 		animation: fade 0.2s ease-out !important;
 	}
 	html {

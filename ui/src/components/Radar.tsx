@@ -2,7 +2,7 @@ import { useEffect, useState } from "preact/hooks";
 import { useTitle } from "../a11y";
 import { ACTIVE_STATUSES, duration, type RadarState, type Replay, useRadar, useReplay } from "../store";
 import { Airspace } from "./Airspace";
-import { Icon, Logo } from "./Icons";
+import { Icon, Logo, Spinner } from "./Icons";
 import { ConnectModal, FlightDrawer, WhyPanel } from "./Detail";
 import { ClonePanel, OperatorPanel } from "./Operator";
 import { ReplayBar } from "./ReplayBar";
@@ -46,7 +46,7 @@ export function Radar({ slug, fixture }: { slug: string; fixture: string | null 
 		return (
 			<main class="boot">
 				<Logo size={34} />
-				<h1 class="boot-text">This replay could not be loaded.</h1>
+				<h1 class="boot-text">This replay couldn’t be loaded.</h1>
 				<a class="btn ghost" href="/">
 					See All Airspaces
 				</a>
@@ -71,6 +71,7 @@ export function Radar({ slug, fixture }: { slug: string; fixture: string | null 
 			<main class="boot" aria-busy="true">
 				<Logo size={34} />
 				<div class="boot-text" role="status">
+					<Spinner />
 					Contacting the tower…
 				</div>
 			</main>
@@ -108,7 +109,7 @@ export function Radar({ slug, fixture }: { slug: string; fixture: string | null 
 						label="Collisions avoided"
 						value={s.stats.conflictsPrevented}
 						tone="hold"
-						title="Times an agent was put in a holding pattern before writing code that would have collided with another agent's."
+						title="Times an agent was put in a holding pattern before writing code that would have collided with another agent’s."
 					/>
 					<Stat label="Planned around" value={s.stats.planned ?? 0} tone="plan" title="Take-offs the tower routed to other work because that code was already in the air." />
 				</div>
@@ -125,15 +126,15 @@ export function Radar({ slug, fixture }: { slug: string; fixture: string | null 
 					{s.project?.playground && <LaunchButton slug={slug} />}
 					<button class="btn ghost" onClick={() => setClone(true)} title="Clone trunk with its contrail notes">
 						<Icon name="clone" size={15} />
-						Clone Trunk
+						Clone Trunk…
 					</button>
 					<button class="btn" onClick={() => setConnect(true)} aria-label="Connect an Agent">
-						<span class="long">Connect an Agent</span>
+						<span class="long">Connect an Agent…</span>
 						<span class="short" aria-hidden="true">
-							Connect
+							Connect…
 						</span>
 					</button>
-					<button class="icon-btn" onClick={() => setOperator(true)} title="Operator" aria-label="Operator controls">
+					<button class="icon-btn" onClick={() => setOperator(true)} title="Operator Controls" aria-label="Operator Controls">
 						<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
 							<circle cx="3.5" cy="8" r="1.3" fill="currentColor" />
 							<circle cx="8" cy="8" r="1.3" fill="currentColor" />
@@ -215,25 +216,28 @@ function CenterLink({ center, replay }: { center: string; replay: Replay | null 
 		location.href = `/c/${center}?replay=${centerReplay}&from=${Math.floor(replay.t / 1000)}&speed=${replay.speed}`;
 	};
 	return (
-		<a class="proj-up" href={`/c/${center}`} onClick={open} title={centerReplay ? "Back to the monorepo's replay, at this moment" : "The monorepo this sector belongs to"}>
+		<a class="proj-up" href={`/c/${center}`} onClick={open} title={centerReplay ? "Back to the monorepo’s replay, at this moment" : "The monorepo this sector belongs to"}>
 			<span class="sr-only">, a sector </span>in {center}
 		</a>
 	);
 }
 
 function LaunchButton({ slug }: { slug: string }) {
-	const [msg, setMsg] = useState<string | null>(null);
+	// The button says what it is doing, and then what happened, for a few seconds (and says it to VoiceOver too).
+	const [state, setState] = useState<{ label: string; detail?: string } | null>(null);
 	const launch = async () => {
-		setMsg("Launching…");
+		setState({ label: "Launching…" });
 		const res = await fetch(`/api/p/${slug}/edge/launch`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ count: 3 }) });
 		const d = await res.json().catch(() => ({}));
-		setMsg(res.ok ? `${d.launched?.length ?? 0} agents airborne` : (d.error ?? "busy"));
-		setTimeout(() => setMsg(null), 6000);
+		const n = d.launched?.length ?? 0;
+		setState(res.ok ? { label: `${n} ${n === 1 ? "Agent" : "Agents"} Airborne` } : { label: "Couldn’t Launch", detail: d.error ? String(d.error).replace(/\.?$/, ".") : "The airspace is busy. Try again in a moment." });
+		setTimeout(() => setState(null), 6000);
 	};
 	return (
-		<button class="btn launch" onClick={launch} title="Spawn edge agents (Durable Objects reasoning on Workers AI)" aria-live="polite">
+		<button class="btn launch" onClick={launch} disabled={state?.label === "Launching…"} title={state?.detail ?? "Spawn edge agents (Durable Objects reasoning on Workers AI)"} aria-live="polite">
 			<Icon name="bolt" size={14} />
-			{msg ?? "Launch Edge Agents"}
+			{state?.label ?? "Launch Edge Agents"}
+			{state?.detail && <span class="sr-only">: {state.detail}</span>}
 		</button>
 	);
 }

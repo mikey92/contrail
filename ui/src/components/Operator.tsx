@@ -1,6 +1,7 @@
 import { useEffect, useState } from "preact/hooks";
 import { Command } from "./Detail";
 import { Dialog } from "./Dialog";
+import { Spinner } from "./Icons";
 
 const MODELS = [
 	["@cf/zai-org/glm-5.3-flash", "GLM-5.3 Flash (fast, cheap)"],
@@ -32,24 +33,35 @@ export function OperatorPanel({ slug, onClose }: { slug: string; onClose: () => 
 		} catch {
 			// private mode
 		}
-		setMsg("…");
+		setMsg("Sending…");
 		const res = await fetch(`/api/p/${slug}${path}`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${key}` }, body: JSON.stringify(body) });
 		const json = await res.json().catch(() => ({}));
-		setMsg(res.ok ? "Done." : `Error: ${json.error ?? res.status}`);
+		setMsg(
+			res.ok
+				? "Done."
+				: res.status === 401 || res.status === 403
+					? "The admin key wasn’t accepted. Check it and try again."
+					: `That didn’t go through: ${json.error ?? `the server answered ${res.status}`}.`,
+		);
 		return json;
+	};
+	// Return in a field presses the section's main button, as in a sheet.
+	const submit = (run: () => unknown) => (e: Event) => {
+		e.preventDefault();
+		run();
 	};
 
 	return (
-		<Dialog kicker="Operator" title="Control tower" onClose={onClose}>
+		<Dialog kicker="Control tower" title="Operator Controls" onClose={onClose}>
 			<div class="operator">
 				<label class="field">
 					<span>Admin key</span>
-					<input type="password" autocomplete="current-password" value={key} onInput={(e) => setKey((e.target as HTMLInputElement).value)} placeholder="Contrail admin key" />
+					<input type="password" autocomplete="current-password" autocapitalize="off" spellcheck={false} value={key} onInput={(e) => setKey((e.target as HTMLInputElement).value)} placeholder="Contrail admin key" />
 				</label>
 				<section class="op">
 					<h3>Edge agents on Workers AI</h3>
 					<p class="muted">Coding agents that live in Durable Objects: Artifacts workspace, tests in Dynamic Workers, reasoning on Workers AI.</p>
-					<div class="row">
+					<form class="row" onSubmit={submit(() => call("/edge/launch", { count, model, maxFlights: 4 }))}>
 						<label class="inline">
 							<span class="sr-only">Number of edge agents</span>
 							<input type="number" min={1} max={20} value={count} onInput={(e) => setCount(Number((e.target as HTMLInputElement).value))} />
@@ -64,43 +76,43 @@ export function OperatorPanel({ slug, onClose }: { slug: string; onClose: () => 
 								))}
 							</select>
 						</label>
-						<button class="btn" onClick={() => call("/edge/launch", { count, model, maxFlights: 4 })}>
-							Launch
+						<button class="btn" type="submit">
+							Launch Edge Agents
 						</button>
-					</div>
+					</form>
 				</section>
 				<section class="op">
 					<h3>Load test</h3>
 					<p class="muted">Scripted agents (no LLM) for intents that carry a machine-readable script.</p>
-					<div class="row">
+					<form class="row" onSubmit={submit(() => call("/edge/launch", { count: load, mode: "scripted", maxFlights: 10 }))}>
 						<label class="inline">
 							<span class="sr-only">Number of scripted agents</span>
 							<input type="number" min={1} max={300} value={load} onInput={(e) => setLoad(Number((e.target as HTMLInputElement).value))} />
 						</label>
-						<button class="btn" onClick={() => call("/edge/launch", { count: load, mode: "scripted", maxFlights: 10 })}>
+						<button class="btn" type="submit">
 							Launch Scripted Agents
 						</button>
-						<button class="btn ghost" onClick={() => call("/edge/stop", {})}>
+						<button class="btn ghost danger" type="button" onClick={() => call("/edge/stop", {})}>
 							Stop All Edge Agents
 						</button>
-					</div>
+					</form>
 				</section>
-				<section class="op">
+				<form class="op" onSubmit={submit(() => intentTitle && call("/intents", { intents: [{ title: intentTitle, body: intentBody, priority: 5 }] }).then(() => setIntentTitle("")))}>
 					<h3>File an intent</h3>
 					<label class="field">
 						<span class="sr-only">Title</span>
-						<input class="wide" value={intentTitle} onInput={(e) => setIntentTitle((e.target as HTMLInputElement).value)} placeholder="Imperative title" />
+						<input class="wide" value={intentTitle} onInput={(e) => setIntentTitle((e.target as HTMLInputElement).value)} placeholder="Title, like “Support coupon codes”" enterkeyhint="send" />
 					</label>
 					<label class="field">
 						<span class="sr-only">Details</span>
 						<textarea value={intentBody} onInput={(e) => setIntentBody((e.target as HTMLTextAreaElement).value)} placeholder="Details and acceptance criteria" />
 					</label>
-					<button class="btn" disabled={!intentTitle} onClick={() => call("/intents", { intents: [{ title: intentTitle, body: intentBody, priority: 5 }] }).then(() => setIntentTitle(""))}>
+					<button class="btn" type="submit" disabled={!intentTitle}>
 						File Intent
 					</button>
-				</section>
+				</form>
 				{msg && (
-					<div class="op-msg mono" role="status">
+					<div class="op-msg" role="status">
 						{msg}
 					</div>
 				)}
@@ -116,20 +128,21 @@ export function ClonePanel({ slug, onClose }: { slug: string; onClose: () => voi
 	useEffect(() => {
 		fetch(`/api/p/${slug}/clone`)
 			.then((r) => r.json())
-			.then((d) => (d.commands ? setCmds(d.commands) : setErr(d.error ?? "unavailable")))
-			.catch((e) => setErr(String(e)));
+			.then((d) => (d.commands ? setCmds(d.commands) : setErr(`The clone commands aren’t available right now${d.error ? ` (${d.error})` : ""}. Try again in a moment.`)))
+			.catch(() => setErr("The clone commands couldn’t be loaded. Check your connection and try again."));
 	}, [slug]);
 	return (
-		<Dialog kicker="Trunk" title="Clone trunk with its contrail" onClose={onClose}>
+		<Dialog kicker="Read-only, valid for an hour" title="Clone Trunk" onClose={onClose}>
 			<div class="connect">
-				<p>Trunk is an Artifacts repo. Every landed commit carries its flight's intent, plan, decisions and evidence as a git note in refs/notes/contrail. This read-only URL is valid for an hour.</p>
+				<p>Trunk is an Artifacts repo. Every landed commit carries its flight’s intent, plan, decisions and evidence as a git note in refs/notes/contrail.</p>
 				{err && (
 					<div class="muted" role="alert">
 						{err}
 					</div>
 				)}
 				{!cmds && !err && (
-					<div class="muted" role="status">
+					<div class="muted busy" role="status">
+						<Spinner />
 						Asking for a read-only URL…
 					</div>
 				)}

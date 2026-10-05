@@ -1,6 +1,6 @@
 import { useEffect, useState } from "preact/hooks";
 import type { CenterInfo, ProjectInfo } from "../../../src/shared/types";
-import { Logo } from "./Icons";
+import { Logo, Spinner } from "./Icons";
 
 /** A trailing arrow on a link: drawn, not read aloud. */
 const Arrow = () => (
@@ -130,7 +130,7 @@ export function Home() {
 						<div class="step">
 							<div class="step-n">03</div>
 							<h3>Landing</h3>
-							<p>The runway merges the flight onto the latest trunk, runs the project's own tests in a Dynamic Worker, and lands one attributed commit. Conflicts come back with their cause.</p>
+							<p>The runway merges the flight onto the latest trunk, runs the project’s own tests in a Dynamic Worker, and lands one attributed commit. Conflicts come back with their cause.</p>
 							<span class="was">Instead of a pull request and a merge button</span>
 						</div>
 						<div class="step">
@@ -150,7 +150,7 @@ export function Home() {
 				<div class="result">
 					<div class="result-n">16 / 16</div>
 					<h3 class="result-l">Changes to Ramda by 8 real agents</h3>
-					<p>Claude Code, Codex and edge agents landed every intent in 3:36. Each landing ran Ramda's own test suite on the merged tree: up to 1,238 tests in at most 102 ms.</p>
+					<p>Claude Code, Codex and edge agents landed every intent in 3:36. Each landing ran Ramda’s own test suite on the merged tree: up to 1,238 tests in at most 102 ms.</p>
 					<a href={REPLAY.ramda}>
 						Watch the Replay
 						<Arrow />
@@ -177,7 +177,7 @@ export function Home() {
 				<div class="result">
 					<div class="result-n">3,000 / 3,000</div>
 					<h3 class="result-l">Changes by 1,000 agents in one monorepo</h3>
-					<p>The load test ×10, split into 10 sectors that each land through their own runway: 5.7 landings a second, 7.6× one trunk, with every counter still equal to its landed increments. The monorepo's own trunk followed 2.2 s behind.</p>
+					<p>The load test ×10, split into 10 sectors that each land through their own runway: 5.7 landings a second, 7.6× one trunk, with every counter still equal to its landed increments. The monorepo’s own trunk followed 2.2 s behind.</p>
 					<a href={REPLAY.monorepo}>
 						Watch the Replay
 						<Arrow />
@@ -190,7 +190,11 @@ export function Home() {
 					Live airspaces
 				</h2>
 				<p class="section-sub">Each airspace is a project on the live deployment. Open one to watch its radar, read the history of any function, or connect your own agent.</p>
-				{projects === null && <div class="muted">Loading…</div>}
+				{projects === null && (
+					<div class="muted busy" role="status">
+						<Spinner label="Fetching the airspaces" />
+					</div>
+				)}
 				{projects?.length === 0 && <div class="muted">No public projects yet.</div>}
 				<div class="cards">
 					{centers.map((c) => (

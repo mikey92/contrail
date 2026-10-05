@@ -84,7 +84,7 @@ function legLanding(l: Landing): NonNullable<CrossingLeg["landing"]> {
 function turnedAway(l: Landing): string {
 	if (l.status === "conflict") return `conflict on ${l.conflicts.map((c) => c.path).join(", ")}`;
 	const failing = l.tests?.results.filter((r) => !r.ok).slice(0, 3).map((r) => `${r.file} › ${r.name}`) ?? [];
-	if (l.tests && l.tests.failed > 0) return `${l.tests.failed} test(s) failed${failing.length ? ` (${failing.join("; ")})` : ""}`;
+	if (l.tests && l.tests.failed > 0) return `${l.tests.failed} test${l.tests.failed === 1 ? "" : "s"} failed${failing.length ? ` (${failing.join("; ")})` : ""}`;
 	return l.error ?? l.status;
 }
 

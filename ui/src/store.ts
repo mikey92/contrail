@@ -465,6 +465,9 @@ export function useReplay<R extends ReplayClock, T>(replay: R | null, pick: (r: 
 	return value;
 }
 
+/** Server wording, made plain for people: "1 test(s) failed" (in older records) reads "1 test failed". */
+export const tidy = (text: string) => text.replace(/\b(\d+) test\(s\)/g, (_, n: string) => `${n} test${n === "1" ? "" : "s"}`);
+
 /** Live state for a project: snapshot over WebSocket, then patches and events; reconnects. Or a recorded run. */
 export function useRadar(slug: string, fixture: string | null) {
 	const [state, dispatch] = useReducer(reducer, empty);

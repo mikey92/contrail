@@ -1,8 +1,8 @@
 import { useEffect, useState } from "preact/hooks";
 import type { Agent, Clearance, ContrailEntry, Flight, Intent, Landing } from "../../../src/shared/types";
-import { relTime, statusLabel, toned } from "../store";
+import { relTime, statusLabel, tidy, toned } from "../store";
 import { Dialog } from "./Dialog";
-import { Icon } from "./Icons";
+import { Icon, Spinner } from "./Icons";
 import { Diff } from "./Review";
 
 interface FlightDetail {
@@ -62,7 +62,7 @@ export function FlightDrawer({
 		let cancelled = false;
 		load(slug, fixture, flightId, flight?.code)
 			.then((d) => !cancelled && (setDetail(d), setError(null)))
-			.catch(() => !cancelled && setError("This flight's details are not available."));
+			.catch(() => !cancelled && setError("This flight’s details aren’t available."));
 		return () => {
 			cancelled = true;
 		};
@@ -79,7 +79,9 @@ export function FlightDrawer({
 	if (!detail)
 		return (
 			<aside class="drawer loading" aria-label="Flight" aria-busy="true">
-				<span role="status">Loading flight…</span>
+				<span role="status">
+					<Spinner label="Fetching this flight" />
+				</span>
 			</aside>
 		);
 	const { agent, intent, clearances, contrail } = detail;
@@ -154,7 +156,7 @@ export function FlightDrawer({
 								</div>
 							))}
 							<details class="diffs">
-								<summary>Show Diff</summary>
+								<summary>Diff</summary>
 								{l.changes.map((c) => (
 									<div key={c.path}>
 										<div class="mono muted diff-file">{c.path}</div>
@@ -206,7 +208,7 @@ export function FlightDrawer({
 							{l.tests.error && <div class="mono fail">{l.tests.error}</div>}
 						</div>
 					)}
-					{l.error && !l.tests?.failed && <div class="mono fail">{l.error}</div>}
+					{l.error && !l.tests?.failed && <div class="mono fail">{tidy(l.error)}</div>}
 				</section>
 			))}
 
@@ -216,7 +218,7 @@ export function FlightDrawer({
 					{contrail.map((e) => (
 						<div key={e.id} class={`tl tl-${e.kind}`}>
 							<div class="tl-kind">{KIND_LABEL[e.kind] ?? e.kind}</div>
-							<div class="tl-text">{e.text}</div>
+							<div class="tl-text">{tidy(e.text)}</div>
 							<div class="tl-at muted">{relTime(e.at)}</div>
 						</div>
 					))}
@@ -244,7 +246,7 @@ export function WhyPanel({ slug, fixture, target, onClose }: { slug: string; fix
 		fetch(url)
 			.then(async (r) => {
 				const d = await r.json().catch(() => null);
-				if (!r.ok || !Array.isArray(d?.history)) throw new Error(d?.error ?? (r.ok ? "unexpected answer" : `HTTP ${r.status}`));
+				if (!r.ok || !Array.isArray(d?.history)) throw new Error(d?.error ?? "");
 				return d as WhyResult;
 			})
 			.then((d) => !cancelled && setData(d))
@@ -256,13 +258,14 @@ export function WhyPanel({ slug, fixture, target, onClose }: { slug: string; fix
 	return (
 		<Dialog kicker="Why this code looks the way it does" title={target} titleMono wide onClose={onClose}>
 			{!data && !error && (
-				<div class="muted" role="status">
+				<div class="muted busy" role="status">
+					<Spinner />
 					Reading the contrail…
 				</div>
 			)}
 			{error && (
 				<div class="why-error" role="alert">
-					Couldn't read the contrail: {error}
+					The contrail couldn’t be read{error ? `: ${error}` : ""}. Try again in a moment.
 				</div>
 			)}
 			{data?.note && <div class="muted">{data.note}</div>}
@@ -273,7 +276,7 @@ export function WhyPanel({ slug, fixture, target, onClose }: { slug: string; fix
 						<b>{h.intent}</b>
 					</div>
 					<div class="muted">
-						{h.agent} {h.model ? `(${h.model})` : ""} · {h.flight} · {new Date(h.when).toLocaleString()}
+						{h.agent} {h.model ? `(${h.model})` : ""} · {h.flight} · <time dateTime={h.when}>{new Date(h.when).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })}</time>
 					</div>
 					<div class="why-summary">{h.summary}</div>
 					{h.plan && (
@@ -333,11 +336,11 @@ export function ConnectModal({ slug, onClose }: { slug: string; onClose: () => v
 	const mint = async () => {
 		const res = await fetch(`/api/p/${slug}/join`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ joinCode, kind: "claude-code", model: "claude" }) });
 		const d = await res.json();
-		if (!res.ok) return setErr(d.error ?? "could not join");
+		if (!res.ok) return setErr(d.error ? `No key was issued: ${d.error}.` : "No key was issued. Try again in a moment.");
 		setKey({ key: d.key, callsign: d.agent.callsign });
 	};
 	return (
-		<Dialog kicker="Join the airspace" title="Connect a coding agent" onClose={onClose}>
+		<Dialog kicker="Join the airspace" title="Connect an Agent" onClose={onClose}>
 			<div class="connect">
 				<p>Any MCP-capable agent can fly here. It gets its own Artifacts workspace, claims functions before editing, and lands through the runway.</p>
 				{joinCode === undefined ? (
