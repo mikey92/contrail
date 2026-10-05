@@ -198,7 +198,10 @@ of the order JSON that its orders API, payments and storefront share; the three 
 69 s after it started. [`scripts/crossing-smoke.mjs`](scripts/crossing-smoke.mjs) checks the failure cases
 against the live deployment: failing tests in one sector, a hold across sectors and a real conflict.
 
-![The Shop center: three sectors, and crossing CX-001, which a real Claude Code landed in the orders API, payments and the storefront at once, with one monorepo commit](docs/crossing.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/crossing-dark.png">
+  <img src="docs/crossing.png" alt="The Shop center: three sectors, and crossing CX-001, which a real Claude Code landed in the orders API, payments and the storefront at once, with one monorepo commit">
+</picture>
 
 ## Built on Cloudflare
 
