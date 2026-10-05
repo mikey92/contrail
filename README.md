@@ -11,7 +11,8 @@ Workers and Workers AI.
 [Bookshop](https://contrail.mikey9220.workers.dev/p/bookshop?replay=/replays/bookshop.jsonl.gz&speed=2),
 [incident](https://contrail.mikey9220.workers.dev/p/incident?replay=/replays/incident.jsonl.gz),
 [100 scripted agents](https://contrail.mikey9220.workers.dev/p/stress?replay=/replays/stress.jsonl.gz&speed=6) ·
-**Scale:** [1,000 agents in one monorepo of 10 sectors](https://contrail.mikey9220.workers.dev/c/monorepo?replay=/replays/monorepo.jsonl.gz&speed=4)
+**Scale:** [1,000 agents in one monorepo of 10 sectors](https://contrail.mikey9220.workers.dev/c/monorepo?replay=/replays/monorepo.jsonl.gz&speed=4) ·
+**Crossings:** [one change landed in three sectors at once](https://contrail.mikey9220.workers.dev/c/shop)
 
 ![The Contrail radar: each block is a file and each row a function; planes are agents on the code they are cleared to change, with the activity feed on the right and the runway below](docs/radar.png)
 
@@ -124,6 +125,8 @@ landed ISBN-13 validation, and CODEX-7's new test used a made-up ISBN.
 | Flight planning, off vs on (snapshots: [off](https://contrail.mikey9220.workers.dev/api/p/stress-a/snapshot), [on](https://contrail.mikey9220.workers.dev/api/p/stress-b/snapshot); [replay with planning](https://contrail.mikey9220.workers.dev/p/stress-b?replay=/replays/stress-planned.jsonl.gz&speed=4)) | The same 100 scripted agents and 300 intents, one run each way on the same deployment | Time agents spent holding a claim fell from 5.8 h to 18 min. They waited on the ground instead, without a workspace (2.7 h in total), so all waiting fell by half (5.9 h → 3.0 h). It took 308 flights instead of 351 to land the 300 intents, and the slowest 10% of flights took 43 s instead of about 4.8 min. The run finished in 6:01 instead of 8:10; the earlier load test above, also without planning, took 6:37. Both runs: no lost updates. |
 | Load test + redeploy mid-flight | 60 scripted agents, 180 intents | Exactly-once landings across the restart: no lost or doubled updates |
 | Sectors: the load test ×10 in one monorepo ([replay](https://contrail.mikey9220.workers.dev/c/monorepo?replay=/replays/monorepo.jsonl.gz&speed=4)) | 1,000 scripted agents, 100 per sector | 3,000/3,000 landed in 8:42, 5.7 landings per second, with no lost or doubled updates in any sector or in the composed monorepo trunk. See [Scaling](#scaling-to-100000-agents). |
+| Crossings: one change across three sectors ([Shop](https://contrail.mikey9220.workers.dev/c/shop)) | 1 Claude Code (Sonnet), told only "Use the contrail tools. Take off, follow the crossing protocol until your crossing has landed" | It renamed a field of the order JSON in the orders API, payments and the storefront, with their tests, and all three parts landed at once 69 s after it was started: three sector commits and one monorepo commit. See [Crossings](#scaling-to-100000-agents). |
+| End-to-end crossing test ([`scripts/crossing-smoke.mjs`](scripts/crossing-smoke.mjs)) | A scripted git agent and a sector's own flight | 27/27 checks. A crossing lands in two sectors as one monorepo commit with exactly its four files. Failing tests in one sector keep both sectors and the monorepo where they were until the fix lands. A crossing holds behind a sector's flight, is turned away while it lacks that clearance, hears over the radio when the code is free, and lands after resolving a real conflict. A change outside every sector is refused, and aborting closes every leg. |
 | End-to-end protocol test ([`scripts/smoke.mjs`](scripts/smoke.mjs)) | Scripted git agents | Sibling methods merged in parallel, a hold, a landing turned away for touching code another flight holds, a real conflict with its cause, a semantic conflict caught by tests, resolution, `why()`, review by exception, a train with a culprit, and a playground starting over |
 
 From request to trunk, a landing takes about 1 s on the Bookshop and 2–3 s on Ramda: fetch the fork,
@@ -184,11 +187,10 @@ all parts land, and the monorepo trunk gets one commit for the crossing. If one 
 conflict, failing tests or code another flight holds, every part is let go and no trunk moves. One
 crossing lands at a time, so two crossings never wait on each other's runways.
 
-[`scripts/crossing-smoke.mjs`](scripts/crossing-smoke.mjs) checks this against the live deployment
-(27 checks): a crossing that lands in two sectors as one monorepo commit; one whose tests fail in one
-sector, so neither sector moves until it is fixed; one that holds behind a sector's own flight, is turned
-away while it lacks that clearance, and lands after the flight lands and a real conflict is resolved; and
-a change outside every sector, which is refused.
+On the live [Shop](https://contrail.mikey9220.workers.dev/c/shop) center, a real Claude Code renamed a field
+of the order JSON that its orders API, payments and storefront share; the three parts landed at once,
+69 s after it started. [`scripts/crossing-smoke.mjs`](scripts/crossing-smoke.mjs) checks the failure cases
+against the live deployment: failing tests in one sector, a hold across sectors and a real conflict.
 
 ## Built on Cloudflare
 
