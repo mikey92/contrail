@@ -7,7 +7,7 @@ import { checkPrefixes } from "./center/compose";
 import { handleMcp } from "./mcp";
 import { CROSSING_PROTOCOL, PROTOCOL } from "./tower/briefing";
 import type { ProjectSource } from "./tower/tower";
-import { byteRange, errorMessage, expiredKeyMessage, randomToken, safeEqual } from "./util";
+import { byteRange, errorMessage, expiredKeyMessage, randomToken, readJson, safeEqual, TooLarge } from "./util";
 
 export { Center } from "./center/center";
 export { EdgeAgent } from "./edge/agent";
@@ -48,6 +48,7 @@ const renewProject = (c: { req: { url: string }; env: Env }, slug: string) =>
 const renewCenter = (slug: string) => `Ask the operator for a new one (POST /api/c/${slug}/join with the admin key)`;
 
 app.onError((err, c) => {
+	if (err instanceof TooLarge) return c.json({ error: "request too large" }, 413);
 	const message = errorMessage(err);
 	// A Durable Object restarting or a platform hiccup is worth a retry, unlike a request the tower turned down.
 	const transient = /internal error|network connection|connection (?:reset|lost)|Durable Object reset|overloaded|exceeded|try again|HTTP Error: 5\d\d/i.test(message);
@@ -376,7 +377,7 @@ app.get("/api/p/:slug/agent/tools", (c) => c.json({ tools: TOOLS.map(({ name, de
 app.post("/api/p/:slug/agent/:tool", async (c) => {
 	const tool = TOOL_BY_NAME.get(c.req.param("tool"));
 	if (!tool) return c.json({ error: "unknown tool" }, 404);
-	const args = await c.req.json<Record<string, unknown>>().catch(() => ({}));
+	const args = await readJson<Record<string, unknown>>(c.req.raw, 1 << 20, {});
 	return c.json(await tool.run(tower(c.env, c.req.param("slug")), c.get("agentId")!, boundArgs(args)));
 });
 
@@ -390,6 +391,8 @@ app.all("/mcp/:slug", async (c) => {
 	const t = tower(c.env, slug);
 	const key = bearer(c.req.raw);
 	const found = key ? await t.authenticate(key) : null;
+	// A private airspace answers only its own agents and the operator: not even its name to anyone else.
+	if (!entry.info.public && !(found && "agent" in found) && !isAdmin(c)) return c.json({ error: "not found" }, 404);
 	return handleMcp(c.req.raw, {
 		tools: TOOLS,
 		target: t,
@@ -536,7 +539,7 @@ app.get("/api/c/:slug/agent/tools", (c) => c.json({ tools: CENTER_TOOLS.map(({ n
 app.post("/api/c/:slug/agent/:tool", async (c) => {
 	const tool = CENTER_TOOL_BY_NAME.get(c.req.param("tool"));
 	if (!tool) return c.json({ error: "unknown tool" }, 404);
-	const args = await c.req.json<Record<string, unknown>>().catch(() => ({}));
+	const args = await readJson<Record<string, unknown>>(c.req.raw, 1 << 20, {});
 	return c.json(await tool.run(center(c.env, c.req.param("slug")), c.get("agentId")!, boundArgs(args)));
 });
 
@@ -555,6 +558,7 @@ app.all("/mcp/c/:slug", async (c) => {
 	const target = center(c.env, slug);
 	const key = bearer(c.req.raw);
 	const found = key ? await target.authenticate(key) : null;
+	if (!info.public && !(found && "agent" in found) && !isAdmin(c)) return c.json({ error: "not found" }, 404);
 	return handleMcp(c.req.raw, {
 		tools: CENTER_TOOLS,
 		target,

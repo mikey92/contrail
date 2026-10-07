@@ -55,8 +55,16 @@ const MAX_LIVE_MESSAGE = 800_000;
 const TEST_COMMAND_CHECK = 2;
 /** A flight's workspace fork is kept this long after the flight lands or aborts, for inspection. */
 const FORK_RETENTION_MS = 60 * 60_000;
+/** An aborted flight that never asked to land kept nothing worth inspecting: its fork goes after a few minutes. */
+const UNUSED_FORK_RETENTION_MS = 5 * 60_000;
+/** Take-offs one agent may make in ten minutes: each forks a repository. */
+const TAKEOFFS_PER_10_MIN = 10;
+/** Workspace forks one airspace keeps at once (they are retired an hour after their flight ends). */
+const MAX_LIVE_FORKS = 3000;
+/** In a playground, a flight older than this is aborted even if its agent is still calling in. */
+const PLAYGROUND_FLIGHT_MS = 45 * 60_000;
 /** Forks deleted per alarm (once a minute), so a backlog drains without a burst of Artifacts calls. */
-const RETIRE_BATCH = 20;
+const RETIRE_BATCH = 50;
 /** A crossing's leg that is ready this long without word from its Center is let go (the Center restarted). */
 const LEG_TIMEOUT_MS = 2 * 60_000;
 const ACTIVE: FlightStatus[] = ["taxiing", "airborne", "holding", "approach", "diverted"];
@@ -670,7 +678,7 @@ export class Tower extends DurableObject<Env> {
 	 * When every open intent collides, one flight lines up behind each piece of busy code (it holds and
 	 * is cleared the moment that code lands); other agents are told to wait on the ground.
 	 */
-	private nextIntent(intentRef?: string | number | null): Dispatch | { wait: number } | null {
+	private nextIntent(intentRef?: string | number | null, leg = false): Dispatch | { wait: number } | null {
 		const index = symbolIndex(this.meta<TrunkState>("trunk", { head: null, files: [], landedCount: 0 }).files);
 		if (intentRef !== undefined && intentRef !== null && intentRef !== "") {
 			const ref = String(intentRef).replace(/^INT-/i, "");
@@ -678,6 +686,10 @@ export class Tower extends DurableObject<Env> {
 			if (!r) throw new Error(`no intent ${intentRef}`);
 			const intent = this.toIntent(r);
 			if (intent.status !== "open") throw new Error(`INT-${intent.seq} is ${intent.status}`);
+			// A crossing's intents are flown by its legs only, through the Center.
+			if (!leg && intent.createdBy.startsWith("center:")) throw new Error(`INT-${intent.seq} is part of a crossing; its Center flies it`);
+			const waiting = intent.dependsOn.map((id) => this.intentById(id)).filter((d) => d.status !== "landed");
+			if (waiting.length) throw new Error(`INT-${intent.seq} waits for ${waiting.map((d) => `INT-${d.seq}`).join(", ")} to land first`);
 			return { intent, expected: predictTargets(intent, index), deferred: [] };
 		}
 		const planning = this.meta<{ planning?: boolean }>("policy", {}).planning !== false;
@@ -711,7 +723,7 @@ export class Tower extends DurableObject<Env> {
 
 	// ───────────────────────── flights ─────────────────────────
 
-	async takeOff(agentId: string, opts: { intent?: string | number | null } = {}): Promise<TakeOffResult | { idle: true; message: string; radio: RadioMessage[] }> {
+	async takeOff(agentId: string, opts: { intent?: string | number | null; leg?: boolean } = {}): Promise<TakeOffResult | { idle: true; message: string; radio: RadioMessage[] }> {
 		const agent = this.agentById(agentId);
 		this.touchAgent(agentId);
 		const active = this.row(`SELECT * FROM flights WHERE agent_id = ? AND status IN (${ACTIVE.map(() => "?").join(",")})`, agentId, ...ACTIVE);
@@ -719,10 +731,15 @@ export class Tower extends DurableObject<Env> {
 			const f = this.toFlight(active);
 			throw new Error(`you are already flying ${f.code} (${f.status}); land it or call abort before taking off again`);
 		}
+		// Every take-off forks a repository: an agent that takes off and aborts in a loop would pile them up.
+		const recent = this.row<{ c: number }>("SELECT COUNT(*) AS c FROM flights WHERE agent_id = ? AND created_at > ?", agentId, now() - 600_000)?.c ?? 0;
+		if (recent >= TAKEOFFS_PER_10_MIN) throw new Error(`you have taken off ${recent} times in ten minutes; land what you take, or wait a few minutes`);
+		if ((this.row<{ c: number }>("SELECT COUNT(*) AS c FROM flights WHERE retired_at IS NULL")?.c ?? 0) >= MAX_LIVE_FORKS)
+			throw new Error("this airspace has as many workspaces as it can keep; try again in a few minutes");
 		// Projects set up before test commands were detected look once (before an intent is picked: this awaits).
 		if (this.meta<number>("testCommandChecked", 0) < TEST_COMMAND_CHECK) await this.readTestCommand().catch(() => {});
-		let next = this.nextIntent(opts.intent);
-		if (!next && (await this.restartPlayground())) next = this.nextIntent(opts.intent);
+		let next = this.nextIntent(opts.intent, opts.leg);
+		if (!next && (await this.restartPlayground())) next = this.nextIntent(opts.intent, opts.leg);
 		if (!next || "wait" in next) {
 			const waiting = this.row<{ c: number }>("SELECT COUNT(*) AS c FROM intents WHERE status = 'open'")?.c ?? 0;
 			return {
@@ -897,6 +914,15 @@ export class Tower extends DurableObject<Env> {
 			now() - STALE_FLIGHT_MS,
 		).map((r) => this.toFlight(r));
 		for (const flight of stale) this.endFlight(flight, null, "no word from its agent for an hour");
+		// A playground is shared: one flight held open for ever would keep its round from ever starting over.
+		if (this.meta<ProjectInfo | null>("project", null)?.playground)
+			for (const r of this.rows(
+				`SELECT f.* FROM flights f JOIN intents i ON i.id = f.intent_id WHERE f.status IN (${ACTIVE.map(() => "?").join(",")}) AND f.created_at < ? AND i.created_by NOT LIKE 'center:%'
+				 AND NOT EXISTS (SELECT 1 FROM landings l WHERE l.flight_id = f.id AND l.status IN ('queued', 'merging', 'verifying', 'review'))`,
+				...ACTIVE,
+				now() - PLAYGROUND_FLIGHT_MS,
+			))
+				this.endFlight(this.toFlight(r), null, `flights in the playground last at most ${PLAYGROUND_FLIGHT_MS / 60_000} minutes`);
 	}
 
 	// ───────────────────────── clearances ─────────────────────────
@@ -1919,7 +1945,7 @@ export class Tower extends DurableObject<Env> {
 		}
 		const [intent] = await this.addIntents([{ title: input.title, body: input.body }], `center:${input.crossing}`);
 		try {
-			const res = await this.takeOff(agentId, { intent: intent.seq });
+			const res = await this.takeOff(agentId, { intent: intent.seq, leg: true });
 			if ("idle" in res) throw new Error(res.message);
 			return { agentId, flight: res.flight };
 		} catch (err) {
@@ -2103,8 +2129,9 @@ export class Tower extends DurableObject<Env> {
 	/** Deletes the workspace forks of flights that ended over an hour ago, a few at a time. */
 	private async retireForks() {
 		const due = this.rows<{ id: string; repo: string }>(
-			"SELECT id, repo FROM flights WHERE status IN ('landed', 'aborted') AND retired_at IS NULL AND updated_at < ? ORDER BY updated_at LIMIT ?",
+			"SELECT id, repo FROM flights WHERE status IN ('landed', 'aborted') AND retired_at IS NULL AND (updated_at < ? OR (status = 'aborted' AND attempts = 0 AND updated_at < ?)) ORDER BY updated_at LIMIT ?",
 			now() - FORK_RETENTION_MS,
+			now() - UNUSED_FORK_RETENTION_MS,
 			RETIRE_BATCH,
 		);
 		if (!due.length) return;

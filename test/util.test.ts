@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AGENT_KEY_TTL_MS, AGENT_KINDS, byteRange, expiredKeyMessage, flightTrailer, keyCheck, landingTrailer, oneLine, retryTransient } from "../src/util";
+import { AGENT_KEY_TTL_MS, AGENT_KINDS, byteRange, expiredKeyMessage, flightTrailer, keyCheck, landingTrailer, oneLine, readJson, retryTransient, TooLarge } from "../src/util";
 
 describe("landingTrailer", () => {
 	const trailer = ["Contrail-Flight: FL-007", "Contrail-Landing: real123", "Contrail-Intent: INT-16", "Contrail-Agent: CODEX-7 (codex)"].join("\n");
@@ -141,5 +141,34 @@ describe("agent keys", () => {
 		expect(text).toBe(
 			"This agent key expired on 2026-11-06 12:30 UTC; keys work for 30 days. Get a new one with Connect an Agent… on https://x.dev/p/playground and use it in place of the old one.",
 		);
+	});
+});
+
+describe("readJson", () => {
+	/** A request whose body streams in chunks, with no Content-Length. */
+	const streamed = (chunks: string[]) =>
+		new Request("https://x/", {
+			method: "POST",
+			body: new ReadableStream({
+				start(c) {
+					for (const ch of chunks) c.enqueue(new TextEncoder().encode(ch));
+					c.close();
+				},
+			}),
+			// @ts-expect-error Node needs this for a streamed body
+			duplex: "half",
+		});
+
+	it("reads a body within its limit", async () => {
+		expect(await readJson(streamed(['{"a":', "1}"]), 100, {})).toEqual({ a: 1 });
+	});
+
+	it("stops a body over its limit while it streams in, with no Content-Length", async () => {
+		await expect(readJson(streamed(["x".repeat(60), "y".repeat(60)]), 100, {})).rejects.toBeInstanceOf(TooLarge);
+	});
+
+	it("gives the fallback for an empty or broken body", async () => {
+		expect(await readJson(new Request("https://x/", { method: "POST" }), 100, { none: true })).toEqual({ none: true });
+		expect(await readJson(streamed(["{broken"]), 100, { none: true })).toEqual({ none: true });
 	});
 });

@@ -120,6 +120,41 @@ function trailer(message: string, key: string): string | null {
 	return [...block.matchAll(new RegExp(`^${key}: (\\S+)$`, "gm"))].at(-1)?.[1] ?? null;
 }
 
+/** Thrown by readJson for a body over its limit. */
+export class TooLarge extends Error {}
+
+/**
+ * A request's JSON body, read up to `max` bytes. The limit holds while the body streams in, with or without a
+ * Content-Length; an empty or unparsable body is `fallback`.
+ */
+export async function readJson<T>(req: Request, max: number, fallback: T): Promise<T> {
+	if (!req.body) return fallback;
+	const reader = req.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		total += value.byteLength;
+		if (total > max) {
+			await reader.cancel().catch(() => {});
+			throw new TooLarge(`request body over ${max} bytes`);
+		}
+		chunks.push(value);
+	}
+	const bytes = new Uint8Array(total);
+	let at = 0;
+	for (const c of chunks) {
+		bytes.set(c, at);
+		at += c.byteLength;
+	}
+	try {
+		return JSON.parse(new TextDecoder().decode(bytes)) as T;
+	} catch {
+		return fallback;
+	}
+}
+
 /** Text an agent supplied, as one line of at most `max` characters: control characters and line breaks become spaces. */
 export function oneLine(text: unknown, max: number): string {
 	return String(text ?? "")

@@ -2,7 +2,7 @@
 // Each POST carries one JSON-RPC message (or a batch). The agent is identified by its Contrail
 // key in the Authorization header, so the server keeps no protocol session state.
 import { boundArgs, type ToolDef } from "./agent-api";
-import { errorMessage } from "./util";
+import { errorMessage, readJson, TooLarge } from "./util";
 
 const SUPPORTED = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
@@ -88,12 +88,14 @@ export async function handleMcp(request: Request, ctx: McpContext): Promise<Resp
 		return new Response("This MCP server is stateless and does not offer an SSE stream.", { status: 405, headers: { Allow: "POST" } });
 	}
 	if (request.method !== "POST") return new Response("Method not allowed", { status: 405 });
-	let body: RpcMessage | RpcMessage[];
+	let body: RpcMessage | RpcMessage[] | null;
 	try {
-		body = await request.json();
-	} catch {
-		return Response.json(rpcError(null, -32700, "Parse error"), { status: 400 });
+		body = await readJson<RpcMessage | RpcMessage[] | null>(request, 1 << 20, null);
+	} catch (err) {
+		if (err instanceof TooLarge) return Response.json(rpcError(null, -32600, "Request too large"), { status: 413 });
+		throw err;
 	}
+	if (!body || typeof body !== "object") return Response.json(rpcError(null, -32700, "Parse error"), { status: 400 });
 	const messages = Array.isArray(body) ? body : [body];
 	const responses = [];
 	for (const msg of messages) {

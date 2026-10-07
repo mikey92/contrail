@@ -330,6 +330,14 @@ const { ticket } = await call(`/api/p/${slug}/live-ticket`, {}, admin);
 const firstUse = await live(ticket);
 const secondUse = await live(ticket);
 check(firstUse === "snapshot" && secondUse === "refused", `a one-minute ticket opens the private feed once (${firstUse}, then ${secondUse})`);
+const mcpInit = (key) =>
+  fetch(`${base}/mcp/${slug}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(key ? { authorization: `Bearer ${key}` } : {}) },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } }),
+  }).then((r) => r.status);
+const [anonymous, member] = await Promise.all([mcpInit(null), mcpInit(Q.key)]);
+check(anonymous === 404 && member === 200, `a private airspace's MCP server answers its agents only (${anonymous} without a key, ${member} with one)`);
 
 // ── 6. a playground starts over once all of its work has landed ─────
 const pg = `${slug}-pg`;
