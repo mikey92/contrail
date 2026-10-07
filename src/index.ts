@@ -7,7 +7,7 @@ import { checkPrefixes } from "./center/compose";
 import { handleMcp } from "./mcp";
 import { CROSSING_PROTOCOL, PROTOCOL } from "./tower/briefing";
 import type { ProjectSource } from "./tower/tower";
-import { errorMessage, randomToken, safeEqual } from "./util";
+import { byteRange, errorMessage, randomToken, safeEqual } from "./util";
 
 export { Center } from "./center/center";
 export { EdgeAgent } from "./edge/agent";
@@ -498,6 +498,12 @@ app.all("/mcp/c/:slug", async (c) => {
 app.all("/api/*", (c) => c.json({ error: "not found" }, 404));
 
 // ── Radar UI (static assets with SPA fallback) ────────────
+
+// The demo video, with byte ranges: Safari on iPhone plays only from a server that answers them.
+app.on(["GET", "HEAD"], "/demo.mp4", async (c) => {
+	const asset = await c.env.ASSETS.fetch(new URL("/demo.mp4", c.req.url));
+	return byteRange(asset, c.req.header("range") ?? null, c.req.method === "HEAD");
+});
 
 app.get("*", async (c) => {
 	const res = await c.env.ASSETS.fetch(c.req.raw);

@@ -89,3 +89,45 @@ export async function retryTransient<T>(fn: () => Promise<T>, attempts = 3): Pro
 export function landingTrailer(message: string): string | null {
 	return [...message.matchAll(/^Contrail-Landing: (\S+)$/gm)].at(-1)?.[1] ?? null;
 }
+
+/**
+ * A static asset answered for one byte range (206), as Safari on iPhone needs to play a video: the asset
+ * server always sends the whole file. One range only; anything else gets the whole file, as HTTP allows.
+ */
+export async function byteRange(asset: Response, range: string | null, head = false): Promise<Response> {
+	const headers = new Headers(asset.headers);
+	headers.set("accept-ranges", "bytes");
+	const m = /^bytes=(\d*)-(\d*)$/.exec(range?.trim() ?? "");
+	if (asset.status !== 200 || !m || (m[1] === "" && m[2] === "")) return new Response(head ? null : asset.body, { status: asset.status, headers });
+	let body = asset.body;
+	let size = Number(asset.headers.get("content-length") ?? Number.NaN);
+	if (!Number.isFinite(size) || !body) {
+		const all = new Uint8Array(await asset.arrayBuffer());
+		size = all.length;
+		body = new Blob([all]).stream();
+	}
+	// "bytes=-500" is the last 500 bytes; "bytes=100-" runs to the end.
+	const start = m[1] === "" ? Math.max(0, size - Number(m[2])) : Number(m[1]);
+	const end = m[1] === "" || m[2] === "" ? size - 1 : Math.min(Number(m[2]), size - 1);
+	if (start >= size || start > end) {
+		await body?.cancel();
+		return new Response(null, { status: 416, headers: { "accept-ranges": "bytes", "content-range": `bytes */${size}` } });
+	}
+	headers.set("content-range", `bytes ${start}-${end}/${size}`);
+	headers.set("content-length", String(end - start + 1));
+	if (head) {
+		await body?.cancel();
+		return new Response(null, { status: 206, headers });
+	}
+	let pos = 0;
+	const slice = new TransformStream<Uint8Array, Uint8Array>({
+		transform(chunk, out) {
+			const from = Math.max(0, start - pos);
+			const to = Math.min(chunk.length, end + 1 - pos);
+			if (from < to) out.enqueue(chunk.subarray(from, to));
+			pos += chunk.length;
+			if (pos > end) out.terminate();
+		},
+	});
+	return new Response(body.pipeThrough(slice), { status: 206, headers });
+}
