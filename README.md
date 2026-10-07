@@ -236,13 +236,13 @@ flowchart LR
   - The **Runway** keeps a warm in-memory clone of trunk and is its only writer, so landings are serialized.
   - **Edge agents** are agents that live entirely on Cloudflare.
   - The **Center** composes a sectored monorepo's trunk from its sectors' trunks, and lands crossings,
-    changes that span sectors, in every sector or none (see [Scaling](#scaling-to-100000-agents)).
+    changes that span sectors, in all of their sectors at once (see [Scaling](#scaling-to-100000-agents)).
 - **Dynamic Workers** run the test suite of every candidate tree (one run per landing train) in a fresh,
   network-isolated isolate with a CPU limit, cached by git tree id. The gate's configuration comes from
   trunk, never from the change being judged, and a tree that drops every test fails.
 - **Workers AI** is the brain of the edge agents. They use any tool-calling model; GLM-5.3 Flash is the default.
   It also narrated the demo video (Deepgram Aura 2, [`video/tts.mjs`](video/tts.mjs)).
-- **Workers static assets** serve the Radar, a Preact app (about 30 KB of JavaScript, gzipped), and the recorded replays.
+- **Workers static assets** serve the Radar, a Preact app (about 40 KB of JavaScript, gzipped), and the recorded replays.
 
 ## Try it
 
@@ -357,7 +357,7 @@ crossings filed for changes to it.
 Crossings are flown through the Center. `POST /api/c/<slug>/intents` files work that spans sectors, and
 `POST /api/c/<slug>/join` (admin key) returns an agent key and the MCP command for `/mcp/c/<slug>`. The
 Center's tools mirror a project's: `take_off`, `request_clearance` and `why` take monorepo paths and go to
-the sector that owns each one, and `request_landing` lands the crossing in every sector or in none. The
+the sector that owns each one, and `request_landing` lands the crossing in all of its sectors at once. The
 same tools are at `/api/c/<slug>/agent/<tool>` over REST.
 
 ### Test
@@ -400,7 +400,7 @@ src/
   agent-api.ts        the agent tools (12 for a project, 10 for a Center's crossings), shared by MCP and REST
   tower/              Tower DO: flights, clearances, flight planning, landing queue, contrail, radar events, review policy
   runway/             Runway DO: warm trunk clone, 3-way tree merge, clearance check, Dynamic Worker test gate, notes
-  center/             Center DO: composes sector trunks into one monorepo trunk; lands crossings in every sector or none
+  center/             Center DO: composes sector trunks into one monorepo trunk; lands crossings across sectors at once
   edge/               edge agents: Durable Object + in-memory git workspace + Workers AI loop
   git/                symbol extraction, diff3 merge with insert/insert union, in-memory fs
 ui/                   the Radar (Preact + Vite)
@@ -424,6 +424,9 @@ video/                the demo video: narration (Workers AI text-to-speech), sli
 - One Runway per trunk serializes landings; sectors give a monorepo one Runway per directory (see
   [Scaling](#scaling-to-100000-agents)). Crossings land one at a time per monorepo, and each of a
   crossing's sectors holds its runway for it until every sector is ready (at most a minute).
+- A crossing's second phase is not a distributed transaction. If a sector's runway restarts between the
+  two phases and loses the part it held, the parts that landed stay landed: the Center says which
+  sectors have the change, and requesting landing again lands the rest.
 - Agent keys expire 30 days after they're issued, and the agent is told where to get a new one. An operator
   can revoke one at once: `POST /api/p/<slug>/agents/<callsign>/revoke` with the admin key.
 

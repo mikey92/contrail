@@ -27,12 +27,21 @@ if (!slug || !base || !admin) {
   process.exit(2);
 }
 const auth = { authorization: `Bearer ${admin}` };
-const get = async (path) => {
-  const res = await fetch(`${base}${path}`, { headers: auth });
-  if (!res.ok) throw new Error(`GET ${path}: ${res.status}`);
-  return path.includes("/file?") ? res.text() : res.json();
-};
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// A run lasts minutes: a dropped connection or a 5xx answer is tried again a few times before the run gives up.
+const get = async (path) => {
+  for (let attempt = 1; ; attempt++) {
+    let res = null;
+    try {
+      res = await fetch(`${base}${path}`, { headers: auth });
+    } catch (err) {
+      if (attempt >= 5) throw err;
+    }
+    if (res?.ok) return path.includes("/file?") ? res.text() : res.json();
+    if (res && (res.status < 500 || attempt >= 5)) throw new Error(`GET ${path}: ${res.status}`);
+    await sleep(500 * 2 ** (attempt - 1));
+  }
+};
 // Minutes and seconds, to the nearest second (as the radar's end card shows them).
 const clock = (ms) => {
   const s = Math.round(ms / 1000);
@@ -63,7 +72,16 @@ function tap(sectorSlug) {
   const lines = streams.get(sectorSlug);
   const ws = new WebSocket(`${base.replace(/^http/, "ws")}/api/p/${sectorSlug}/live`);
   sockets.push(ws);
-  ws.onmessage = (m) => m.data !== "pong" && lines.push({ t: Date.now() - t0, m: JSON.parse(m.data) });
+  ws.onmessage = (m) => {
+    if (m.data === "pong") return;
+    const message = JSON.parse(m.data);
+    // A message too big for the socket comes as "resync": record the snapshot it stands for instead.
+    if (message.kind === "resync")
+      get(`/api/p/${sectorSlug}/snapshot`)
+        .then((snapshot) => lines.push({ t: Date.now() - t0, m: { kind: "snapshot", snapshot } }))
+        .catch((err) => console.log(`  ${sectorSlug}: no snapshot for a resync (${err.message})`));
+    else lines.push({ t: Date.now() - t0, m: message });
+  };
   ws.onclose = () => recording && setTimeout(() => tap(sectorSlug), 500);
   return new Promise((resolve) => (ws.onopen = resolve));
 }

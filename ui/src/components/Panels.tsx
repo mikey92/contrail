@@ -139,14 +139,16 @@ export function FlightList({ flights, agents, intents, onSelect }: { flights: Re
 
 export function IntentBoard({ intents, flights, agents, onSelect }: { intents: Record<string, Intent>; flights: Record<string, Flight>; agents: Record<string, Agent>; onSelect: (id: string) => void }) {
 	const list = Object.values(intents).sort((a, b) => a.seq - b.seq);
+	// Cancelled intents stay listed but are not work to land.
+	const work = list.filter((i) => i.status !== "cancelled").length;
 	const landed = list.filter((i) => i.status === "landed").length;
 	return (
 		<div class="intents">
 			<div class="progress-label">
-				<b>{landed}</b> of {list.length} intents landed
+				<b>{landed}</b> of {work} {work === 1 ? "intent" : "intents"} landed
 			</div>
-			<div class="progress" role="progressbar" aria-label="Intents landed" aria-valuemin={0} aria-valuemax={list.length} aria-valuenow={landed}>
-				<div class="bar" style={{ width: `${list.length ? (landed / list.length) * 100 : 0}%` }} />
+			<div class="progress" role="progressbar" aria-label="Intents landed" aria-valuemin={0} aria-valuemax={work} aria-valuenow={landed}>
+				<div class="bar" style={{ width: `${work ? (landed / work) * 100 : 0}%` }} />
 			</div>
 			{list.map((i) => {
 				const f = i.flightId ? flights[i.flightId] : null;

@@ -13,13 +13,23 @@ let stopping = false;
 let ws;
 let retry = 500;
 
+function write(message) {
+  file.write(`${JSON.stringify({ t: Date.now() - t0, m: message })}\n`);
+  if (++count % 100 === 0) console.log(`${count} messages, ${Math.round((Date.now() - t0) / 1000)}s`);
+}
+
 function connect() {
   ws = new WebSocket(`${base.replace(/^http/, "ws")}/api/p/${slug}/live`);
   ws.onmessage = (m) => {
     retry = 500;
     if (m.data === "pong") return;
-    file.write(`${JSON.stringify({ t: Date.now() - t0, m: JSON.parse(m.data) })}\n`);
-    if (++count % 100 === 0) console.log(`${count} messages, ${Math.round((Date.now() - t0) / 1000)}s`);
+    const message = JSON.parse(m.data);
+    if (message.kind !== "resync") return write(message);
+    // A message too big for the socket: record the snapshot it stands for instead.
+    fetch(`${base}/api/p/${slug}/snapshot`)
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
+      .then((snapshot) => !stopping && write({ kind: "snapshot", snapshot }))
+      .catch((err) => console.log(`no snapshot for a resync (${err.message})`));
   };
   ws.onclose = (e) => {
     if (stopping) return;

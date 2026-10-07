@@ -334,10 +334,15 @@ export function ConnectModal({ slug, onClose }: { slug: string; onClose: () => v
 			.catch(() => setJoinCode(null));
 	}, [slug]);
 	const mint = async () => {
-		const res = await fetch(`/api/p/${slug}/join`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ joinCode, kind: "claude-code", model: "claude" }) });
-		const d = await res.json();
-		if (!res.ok) return setErr(d.error ? `No key was issued: ${d.error}.` : "No key was issued. Try again in a moment.");
-		setKey({ key: d.key, callsign: d.agent.callsign, expiresAt: d.expiresAt });
+		setErr(null);
+		try {
+			const res = await fetch(`/api/p/${slug}/join`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ joinCode, kind: "claude-code", model: "claude" }) });
+			const d = await res.json().catch(() => ({}));
+			if (!res.ok || !d.key) return setErr(d.error ? `No key was issued: ${d.error}.` : "No key was issued. Try again in a moment.");
+			setKey({ key: d.key, callsign: d.agent.callsign, expiresAt: d.expiresAt });
+		} catch {
+			setErr("No key was issued: the tower couldn’t be reached. Check your connection and try again.");
+		}
 	};
 	return (
 		<Dialog kicker="Join the airspace" title="Connect an Agent" onClose={onClose}>

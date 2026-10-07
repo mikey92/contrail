@@ -81,7 +81,8 @@ export function Radar({ slug, fixture }: { slug: string; fixture: string | null 
 	const flights = Object.values(s.flights);
 	const airborne = flights.filter((f) => ACTIVE_STATUSES.includes(f.status)).length;
 	const holding = flights.filter((f) => f.status === "holding").length;
-	const intents = Object.values(s.intents);
+	// A crossing's leg that closed without landing leaves a cancelled intent behind: it is not work.
+	const intents = Object.values(s.intents).filter((i) => i.status !== "cancelled");
 	const landedIntents = intents.filter((i) => i.status === "landed").length;
 	const reviews = Object.values(s.landings).filter((l) => l.status === "review").length;
 
@@ -249,7 +250,7 @@ function LaunchButton({ slug }: { slug: string }) {
 
 /** Over the map when a replay has played to its end: what the run achieved, and where to go next. */
 function EndCard({ s, slug, onRestart, onClose }: { s: RadarState; slug: string; onRestart: () => void; onClose: () => void }) {
-	const intents = Object.values(s.intents);
+	const intents = Object.values(s.intents).filter((i) => i.status !== "cancelled");
 	const landed = intents.filter((i) => i.status === "landed").length;
 	const flights = Object.values(s.flights);
 	// From the first agent joining to the last landing, to the nearest second.

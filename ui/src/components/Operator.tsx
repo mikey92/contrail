@@ -34,7 +34,13 @@ export function OperatorPanel({ slug, onClose }: { slug: string; onClose: () => 
 			// private mode
 		}
 		setMsg("Sending…");
-		const res = await fetch(`/api/p/${slug}${path}`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${key}` }, body: JSON.stringify(body) });
+		let res: Response;
+		try {
+			res = await fetch(`/api/p/${slug}${path}`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${key}` }, body: JSON.stringify(body) });
+		} catch {
+			setMsg("That didn’t go through: the tower couldn’t be reached. Check your connection and try again.");
+			return false;
+		}
 		const json = await res.json().catch(() => ({}));
 		setMsg(
 			res.ok
@@ -43,7 +49,7 @@ export function OperatorPanel({ slug, onClose }: { slug: string; onClose: () => 
 					? "The admin key wasn’t accepted. Check it and try again."
 					: `That didn’t go through: ${json.error ?? `the server answered ${res.status}`}.`,
 		);
-		return json;
+		return res.ok;
 	};
 	// Return in a field presses the section's main button, as in a sheet.
 	const submit = (run: () => unknown) => (e: Event) => {
@@ -97,7 +103,7 @@ export function OperatorPanel({ slug, onClose }: { slug: string; onClose: () => 
 						</button>
 					</form>
 				</section>
-				<form class="op" onSubmit={submit(() => intentTitle && call("/intents", { intents: [{ title: intentTitle, body: intentBody, priority: 5 }] }).then(() => setIntentTitle("")))}>
+				<form class="op" onSubmit={submit(() => intentTitle && call("/intents", { intents: [{ title: intentTitle, body: intentBody, priority: 5 }] }).then((ok) => ok && setIntentTitle("")))}>
 					<h3>File an intent</h3>
 					<label class="field">
 						<span class="sr-only">Title</span>

@@ -31,7 +31,7 @@ trunk changed under you, when a clearance you were waiting for is granted, or wh
 
 export const CROSSING_PROTOCOL = `You are flying a crossing in Contrail: one change to a monorepo that is split into sectors, each
 with its own tower, runway and trunk. A crossing changes several sectors at once and lands in all of
-them together or in none, so no sector ever has half of it.
+them together: if any sector turns its part away, nothing lands anywhere.
 
 Crossing protocol:
 1. take_off — you get the crossing's intent, your own workspace (a fork of the monorepo trunk) and the
@@ -49,7 +49,9 @@ Crossing protocol:
    that sector's trunk, runs that sector's tests and holds the result. Only when every sector is ready do
    all parts land, and the monorepo trunk gets them as one commit. If any sector reports a conflict,
    failing tests or code another flight holds, nothing lands anywhere: pull upstream main, fix, push and
-   request landing again.
+   request landing again. Rarely, a sector's runway restarts after every sector was ready and its part
+   does not land; the landing then names the sectors that have your change. Request landing again to land
+   the rest.
 7. When it has landed, take_off again for the next crossing.
 
 Responses carry radio messages from the sectors, tagged with the sector's name. Read them.`;
