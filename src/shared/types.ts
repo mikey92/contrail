@@ -270,6 +270,8 @@ export interface CrossingLeg {
 	flightId: string;
 	flight: string;
 	repo: string;
+	/** Its flight is over: its part landed, or the crossing landed without a change in this sector. */
+	closed?: boolean;
 	/** Its part of the latest landing attempt. */
 	landing: {
 		status: LandingStatus;

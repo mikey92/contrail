@@ -62,4 +62,29 @@ describe("touchedSymbols", () => {
 	it("treats file creation as (top)", () => {
 		expect(touchedSymbols("m.js", null, "x")).toEqual(["(top)"]);
 	});
+	it("counts every function of a file that is added or deleted as touched", () => {
+		// A deleted file changes the functions others may be cleared for.
+		expect(touchedSymbols("m.js", BASE, null)).toEqual(["(top)", "add", "sub"]);
+		expect(touchedSymbols("m.js", null, BASE)).toEqual(["(top)", "add", "sub"]);
+	});
+});
+
+describe("mergeText inserts", () => {
+	const base = 'import { a } from "./a.js";\n\nexport function one() {\n  return a;\n}\n';
+	it("keeps an import both sides added once", () => {
+		const ours = base.replace('import { a } from "./a.js";\n', 'import { a } from "./a.js";\nimport { z } from "./z.js";\nimport { x } from "./x.js";\n');
+		const theirs = base.replace('import { a } from "./a.js";\n', 'import { a } from "./a.js";\nimport { z } from "./z.js";\nimport { y } from "./y.js";\n');
+		const r = mergeText("m.js", base, ours, theirs);
+		expect(r.clean).toBe(true);
+		expect(r.text.match(/import \{ z \}/g)).toHaveLength(1);
+		expect(r.text).toContain('import { x } from "./x.js";');
+		expect(r.text).toContain('import { y } from "./y.js";');
+	});
+	it("reports two inserts that declare the same name as a conflict", () => {
+		const ours = `${base}\nexport function clamp(x) {\n  return Math.max(0, x);\n}\n`;
+		const theirs = `${base}\nexport function clamp(x) {\n  return Math.min(1, x);\n}\n`;
+		const r = mergeText("m.js", base, ours, theirs);
+		expect(r.clean).toBe(false);
+		expect(r.conflicts[0].symbols).toEqual(["clamp"]);
+	});
 });

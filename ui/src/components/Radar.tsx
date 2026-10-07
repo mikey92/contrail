@@ -182,6 +182,7 @@ export function Radar({ slug, fixture }: { slug: string; fixture: string | null 
 					</div>
 					{selected && (
 						<FlightDrawer
+							key={selected}
 							slug={slug}
 							fixture={fixture}
 							flightId={selected}
@@ -227,10 +228,14 @@ function LaunchButton({ slug }: { slug: string }) {
 	const [state, setState] = useState<{ label: string; detail?: string } | null>(null);
 	const launch = async () => {
 		setState({ label: "Launching…" });
-		const res = await fetch(`/api/p/${slug}/edge/launch`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ count: 3 }) });
-		const d = await res.json().catch(() => ({}));
-		const n = d.launched?.length ?? 0;
-		setState(res.ok ? { label: `${n} ${n === 1 ? "Agent" : "Agents"} Airborne` } : { label: "Couldn’t Launch", detail: d.error ? String(d.error).replace(/\.?$/, ".") : "The airspace is busy. Try again in a moment." });
+		try {
+			const res = await fetch(`/api/p/${slug}/edge/launch`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ count: 3 }) });
+			const d = await res.json().catch(() => ({}));
+			const n = d.launched?.length ?? 0;
+			setState(res.ok ? { label: `${n} ${n === 1 ? "Agent" : "Agents"} Airborne` } : { label: "Couldn’t Launch", detail: d.error ? String(d.error).replace(/\.?$/, ".") : "The airspace is busy. Try again in a moment." });
+		} catch {
+			setState({ label: "Couldn’t Launch", detail: "The tower didn’t answer. Check your connection and try again." });
+		}
 		setTimeout(() => setState(null), 6000);
 	};
 	return (

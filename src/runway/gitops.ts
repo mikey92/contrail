@@ -93,6 +93,7 @@ export async function pushMain(repo: Repo, token: string) {
 	return res;
 }
 
+/** Pushes the landing notes. A fast-forward only: notes added on top of trunk's notes never replace them. */
 export async function pushNotes(repo: Repo, token: string) {
 	return git.push({
 		fs: repo.fs,
@@ -101,18 +102,22 @@ export async function pushNotes(repo: Repo, token: string) {
 		remote: "origin",
 		ref: "refs/notes/contrail",
 		remoteRef: "refs/notes/contrail",
-		force: true,
 		headers: headers(token),
 		cache: repo.cache,
 	});
 }
 
+/** Fetches trunk's landing notes into the local notes ref, so new notes are added to them. */
 export async function fetchNotes(repo: Repo, token: string) {
+	let head: string | null = null;
 	try {
-		await git.fetch({ fs: repo.fs, http, dir: repo.dir, remote: "origin", ref: "refs/notes/contrail", remoteRef: "refs/notes/contrail", singleBranch: true, headers: headers(token), cache: repo.cache });
-	} catch {
-		// No notes yet.
+		const res = await git.fetch({ fs: repo.fs, http, dir: repo.dir, remote: "origin", ref: "refs/notes/contrail", remoteRef: "refs/notes/contrail", singleBranch: true, tags: false, headers: headers(token), cache: repo.cache });
+		head = res.fetchHead;
+	} catch (err) {
+		// A trunk without notes yet has nothing to fetch; anything else is an error.
+		if (!/could not find|not found|no ref/i.test(String((err as Error)?.message ?? err))) throw err;
 	}
+	if (head) await git.writeRef({ fs: repo.fs, dir: repo.dir, ref: "refs/notes/contrail", value: head, force: true });
 }
 
 export async function mergeBase(repo: Repo, a: string, b: string): Promise<string | null> {

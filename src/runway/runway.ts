@@ -164,7 +164,8 @@ export class Runway extends DurableObject<Env> {
 		this.repo = newRepo();
 		this.trunkName = trunk;
 		const head = await cloneMain(this.repo, this.remote!, token);
-		await fetchNotes(this.repo, token);
+		const repo = this.repo;
+		await retryTransient(() => fetchNotes(repo, token));
 		return head;
 	}
 
@@ -408,7 +409,9 @@ export class Runway extends DurableObject<Env> {
 			}
 			await pushNotes(r, token).catch(() => {});
 		}
-		return { outcomes, head: tip, trunk: tip !== start || opts.retry > 0 ? await this.summarize(tip) : null };
+		// A replayed train whose landings were all on trunk already still reports trunk: the Tower may not have heard.
+		const moved = tip !== start || opts.retry > 0 || outcomes.some((o) => o.status === "landed");
+		return { outcomes, head: tip, trunk: moved ? await this.summarize(tip) : null };
 	}
 
 	/** Runs the test suite of `tree` in a Dynamic Worker. */

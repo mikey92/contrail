@@ -30,6 +30,18 @@ export interface TextMergeResult {
 
 const sameLines = (a: string[], b: string[]) => a.length === b.length && a.every((l, i) => l === b[i]);
 
+/** An unindented import line (JavaScript, TypeScript or Python). */
+const IMPORT_LINE = /^(?:import\s|from\s+\S+\s+import\s)/;
+/** The name an unindented line declares, if it declares one. */
+const DECLARATION = /^(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:function\*?|class|const|let|var|def|fn|func)\s+([\w$]+)/;
+
+/** Names both inserts declare at the top level: kept side by side, the file would declare them twice. */
+function declaredTwice(a: string[], b: string[]): string[] {
+	const names = (lines: string[]) => new Set(lines.flatMap((l) => DECLARATION.exec(l)?.[1] ?? []));
+	const ours = names(a);
+	return [...names(b)].filter((n) => ours.has(n));
+}
+
 export function mergeText(path: string, base: string, ours: string, theirs: string): TextMergeResult {
 	if (ours === theirs) return { clean: true, text: ours, conflicts: [], unioned: 0 };
 	if (base === ours) return { clean: true, text: theirs, conflicts: [], unioned: 0 };
@@ -50,15 +62,18 @@ export function mergeText(path: string, base: string, ours: string, theirs: stri
 			continue;
 		}
 		const c = (region as { conflict: { a: string[]; o: string[]; b: string[]; oIndex: number } }).conflict;
-		if (c.o.length === 0) {
-			// Both sides inserted at the same point without touching existing lines: keep both.
+		const twice = c.o.length === 0 ? declaredTwice(c.a, c.b) : [];
+		if (c.o.length === 0 && twice.length === 0) {
+			// Both sides inserted at the same point without touching existing lines: keep both, and an
+			// import both added only once.
 			out.push(...c.a);
-			if (!sameLines(c.a, c.b)) out.push(...c.b);
+			if (!sameLines(c.a, c.b)) out.push(...c.b.filter((l) => !(IMPORT_LINE.test(l) && c.a.includes(l))));
 			unioned++;
 			continue;
 		}
 		const start = c.oIndex + 1;
-		const symbols = symbolsInRange(baseSymbols, start, start + Math.max(0, c.o.length - 1));
+		// Two inserts that declare the same name are a real conflict: one definition has to win.
+		const symbols = twice.length ? twice : symbolsInRange(baseSymbols, start, start + Math.max(0, c.o.length - 1));
 		conflicts.push({ baseStart: start, baseLines: c.o, ours: c.a, theirs: c.b, symbols });
 		out.push("<<<<<<< trunk", ...c.a, "||||||| base", ...c.o, "=======", ...c.b, ">>>>>>> flight");
 	}
@@ -71,7 +86,8 @@ export function mergeText(path: string, base: string, ours: string, theirs: stri
  */
 export function touchedSymbols(path: string, before: string | null, after: string | null): string[] {
 	if (before === after) return [];
-	if (before === null || after === null) return [TOP];
+	// A whole file added or deleted touches everything in it.
+	if (before === null || after === null) return [...new Set([TOP, ...extractSymbols(path, before ?? after ?? "").map((s) => s.name)])].sort();
 	const beforeLines = before.split("\n");
 	const afterLines = after.split("\n");
 	const beforeSyms = extractSymbols(path, before);

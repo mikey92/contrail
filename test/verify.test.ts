@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { globToRegExp, hasDefaultExport, isTestFile, moduleKind, reachableModules, relativePath, testConfig, testFiles, testWorkerModules } from "../src/runway/verify";
+import { describe, expect, it, vi } from "vitest";
+import { globToRegExp, hasDefaultExport, isTestFile, moduleKind, reachableModules, relativePath, testConfig, testFiles, testWorkerModules, verifyTree } from "../src/runway/verify";
 
 describe("verify helpers", () => {
 	it("recognises test files", () => {
@@ -103,5 +103,51 @@ describe("verify helpers", () => {
 		]);
 		const { modules } = testWorkerModules(files);
 		expect(modules["src/counters.js"]).toEqual({ js: files.get("src/counters.js") });
+	});
+});
+
+describe("the test gate", () => {
+	const files = new Map([
+		["src/a.js", "export const a = 1;\n"],
+		["test/a.test.js", 'import { a } from "../src/a.js";\nexport function one() {}\n'],
+	]);
+	/** A Worker Loader whose runner answers with `results` (or never, for null). */
+	const loader = (results: unknown[] | null) =>
+		({
+			get: () => ({ getEntrypoint: () => ({ fetch: () => (results ? Promise.resolve(Response.json(results)) : new Promise(() => {})) }) }),
+		}) as unknown as WorkerLoader;
+
+	it("fails a tree whose tests are all gone or skipped when trunk has a suite", async () => {
+		const skipped = [{ file: "test/a.test.js", name: "one", ok: true, skipped: true, ms: 0 }];
+		const report = await verifyTree(loader(skipped), "t1", files, undefined, true);
+		expect(report.failed).toBe(1);
+		expect(report.error).toMatch(/no tests ran/);
+		expect((await verifyTree(loader([]), "t2", files, undefined, true)).failed).toBe(1);
+		// Without a suite on trunk there is nothing to keep.
+		expect((await verifyTree(loader([]), "t3", files, undefined, false)).failed).toBe(0);
+		expect((await verifyTree(loader([{ file: "test/a.test.js", name: "one", ok: true, ms: 1 }]), "t4", files, undefined, true)).passed).toBe(1);
+	});
+
+	it("gives up on a suite that never finishes", async () => {
+		vi.useFakeTimers();
+		try {
+			const pending = verifyTree(loader(null), "t5", files, undefined, true);
+			await vi.advanceTimersByTimeAsync(61_000);
+			const report = await pending;
+			expect(report.failed).toBe(1);
+			expect(report.error).toMatch(/ran longer than 60 s/);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("scans imports in linear time", () => {
+		const big = new Map([["test/x.test.js", "import ".repeat(80_000)]]);
+		const started = Date.now();
+		reachableModules(["test/x.test.js"], big);
+		expect(Date.now() - started).toBeLessThan(2000);
+		// Long import lists still resolve.
+		const list = `import {\n${Array.from({ length: 60 }, (_, i) => `  name${i},`).join("\n")}\n} from "../src/a.js";\n`;
+		expect(reachableModules(["test/y.test.js"], new Map([["test/y.test.js", list], ["src/a.js", ""]]))).toContain("src/a.js");
 	});
 });

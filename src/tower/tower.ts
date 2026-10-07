@@ -43,6 +43,8 @@ const LANDING_WAIT_MS = 50_000;
 const MAX_EVENTS = 1000;
 /** Agents one airspace keeps; idle ones that never took off make room for new ones. */
 const MAX_AGENTS = 2000;
+/** A flight whose agent has not been heard from for this long is aborted, so its intent can fly again. */
+const STALE_FLIGHT_MS = 60 * 60_000;
 /** Bumped when the way readTestCommand finds a command changes, so existing projects look again. */
 const TEST_COMMAND_CHECK = 2;
 /** A flight's workspace fork is kept this long after the flight lands or aborts, for inspection. */
@@ -302,8 +304,17 @@ export class Tower extends DurableObject<Env> {
 		this.sql.exec("UPDATE flights SET status = ?, updated_at = ? WHERE id = ?", status, now(), flightId);
 	}
 
+	/** An agent that is heard from keeps its clearances and holds: their lease starts over. */
 	private touchAgent(agentId: string) {
-		this.sql.exec("UPDATE agents SET last_seen_at = ? WHERE id = ?", now(), agentId);
+		const t = now();
+		this.sql.exec("UPDATE agents SET last_seen_at = ? WHERE id = ?", t, agentId);
+		this.sql.exec(
+			`UPDATE clearances SET expires_at = ? WHERE expires_at > ? AND flight_id IN (SELECT id FROM flights WHERE agent_id = ? AND status IN (${ACTIVE.map(() => "?").join(",")}))`,
+			t + CLEARANCE_TTL_MS,
+			t,
+			agentId,
+			...ACTIVE,
+		);
 	}
 
 	private emit(type: string, text: string, extra: { flightId?: string; agentId?: string; data?: Record<string, unknown> } = {}) {
@@ -738,6 +749,8 @@ export class Tower extends DurableObject<Env> {
 			if (!workspace) throw new Error("workspace fork did not become ready");
 			const upstream = await this.mintWorkspace(project.trunkRepo, "read");
 			this.bump("repos");
+			// Aborted while its workspace was being made: it stays aborted.
+			if (this.flightById(flightId).status !== "taxiing") throw new Error("the flight was aborted while its workspace was being made");
 			this.setFlightStatus(flightId, "airborne");
 			this.addContrail(flightId, agentId, "intent", `INT-${intent.seq} ${intent.title}${intent.body ? `\n\n${intent.body}` : ""}`);
 			const flight = this.flightById(flightId);
@@ -773,7 +786,7 @@ export class Tower extends DurableObject<Env> {
 			};
 		} catch (err) {
 			this.setFlightStatus(flightId, "aborted");
-			this.sql.exec("UPDATE intents SET status = 'open', flight_id = NULL WHERE id = ?", intent.id);
+			this.sql.exec("UPDATE intents SET status = 'open', flight_id = NULL WHERE id = ? AND flight_id = ?", intent.id, flightId);
 			this.patch("flight", this.flightById(flightId));
 			this.patch("intent", this.intentById(intent.id));
 			this.addContrail(flightId, agentId, "note", `Aborted on the ground: ${errorMessage(err)}`);
@@ -789,18 +802,41 @@ export class Tower extends DurableObject<Env> {
 
 	async abort(agentId: string, flightRef?: string, reason?: string): Promise<{ ok: true; radio: RadioMessage[] }> {
 		const flight = this.ownFlight(agentId, flightRef);
+		// The runway's answer would land or divert a flight that is gone, and its intent may be flying again by then.
+		if (this.row("SELECT id FROM landings WHERE flight_id = ? AND status IN ('merging', 'verifying')", flight.id))
+			throw new Error(`${flight.code} is on the runway right now; abort once landing_status has its result`);
+		this.endFlight(flight, agentId, reason === undefined ? undefined : String(reason).slice(0, 500));
+		return { ok: true, radio: this.drainRadio(flight.id) };
+	}
+
+	/** Aborts a flight: a landing still waiting (for the runway or a reviewer) goes with it, its intent reopens and its clearances are released. */
+	private endFlight(flight: Flight, agentId: string | null, reason?: string) {
 		this.setFlightStatus(flight.id, "aborted");
-		// A landing still waiting for the runway (or for a reviewer) goes with the flight.
 		for (const l of this.rows("SELECT * FROM landings WHERE flight_id = ? AND status IN ('queued', 'review')", flight.id).map((r) => this.toLanding(r)))
 			this.finishLanding(l, { status: "failed", error: "flight aborted before landing" });
-		this.sql.exec("UPDATE intents SET status = 'open', flight_id = NULL WHERE id = ? AND status = 'assigned'", flight.intentId);
+		this.sql.exec("UPDATE intents SET status = 'open', flight_id = NULL WHERE id = ? AND status = 'assigned' AND flight_id = ?", flight.intentId, flight.id);
 		this.releaseAll(flight.id);
-		reason = reason === undefined ? undefined : String(reason).slice(0, 500);
 		if (reason) this.addContrail(flight.id, agentId, "note", `Aborted: ${reason}`);
 		this.patch("flight", this.flightById(flight.id));
 		this.patch("intent", this.intentById(flight.intentId));
-		this.emit("flight.aborted", `${flight.code} aborted${reason ? `: ${reason.slice(0, 140)}` : ""}`, { flightId: flight.id, agentId });
-		return { ok: true, radio: this.drainRadio(flight.id) };
+		this.emit("flight.aborted", `${flight.code} aborted${reason ? `: ${reason.slice(0, 140)}` : ""}`, { flightId: flight.id, agentId: agentId ?? flight.agentId });
+	}
+
+	/**
+	 * Flights whose agent has not been heard from in an hour are aborted, so their intents fly again. Not
+	 * those with a landing under way or awaiting review (the runway or a reviewer still has the next word),
+	 * nor a crossing's legs, which its Center ends.
+	 */
+	private abortStale() {
+		const stale = this.rows(
+			`SELECT f.* FROM flights f JOIN agents a ON a.id = f.agent_id JOIN intents i ON i.id = f.intent_id
+			 WHERE f.status IN (${ACTIVE.map(() => "?").join(",")}) AND a.last_seen_at < ? AND f.updated_at < ? AND i.created_by NOT LIKE 'center:%'
+			 AND NOT EXISTS (SELECT 1 FROM landings l WHERE l.flight_id = f.id AND l.status IN ('queued', 'merging', 'verifying', 'review'))`,
+			...ACTIVE,
+			now() - STALE_FLIGHT_MS,
+			now() - STALE_FLIGHT_MS,
+		).map((r) => this.toFlight(r));
+		for (const flight of stale) this.endFlight(flight, null, "no word from its agent for an hour");
 	}
 
 	// ───────────────────────── clearances ─────────────────────────
@@ -1190,9 +1226,16 @@ export class Tower extends DurableObject<Env> {
 				let result: BatchResult;
 				try {
 					result = await this.runway().land(project.trunkRepo, jobs);
-				} catch (err) {
-					for (const l of queued) this.finishLanding(l, { status: "failed", error: `runway error: ${errorMessage(err)}` });
-					continue;
+				} catch {
+					// The runway may have pushed before it failed (it restarted, say). The same train run again finds
+					// what already landed by its trailer, instead of a retry under a new landing id landing it twice.
+					await sleep(1000);
+					try {
+						result = await this.runway().land(project.trunkRepo, jobs);
+					} catch (err) {
+						for (const l of queued) this.finishLanding(l, { status: "failed", error: `runway error: ${errorMessage(err)}` });
+						continue;
+					}
 				}
 				for (const outcome of result.outcomes) {
 					const l = queued.find((q) => q.id === outcome.landingId)!;
@@ -1691,6 +1734,8 @@ export class Tower extends DurableObject<Env> {
 			const forks = await this.liveForks();
 			this.ctx.waitUntil(Promise.all(forks.map((name) => this.env.ARTIFACTS.delete(name).catch(() => false))));
 			// No awaits from here on: no take-off can see the intents reopen before trunk and the tables are reset.
+			// A flight that took off meanwhile (on an intent an agent filed) keeps this round going.
+			if (this.row(`SELECT id FROM flights WHERE status IN (${ACTIVE.map(() => "?").join(",")}) LIMIT 1`, ...ACTIVE)) return false;
 			this.sql.exec("DELETE FROM intents WHERE created_by != 'operator'");
 			this.sql.exec("UPDATE intents SET status = 'open', flight_id = NULL, landed_commit = NULL");
 			for (const table of ["flights", "clearances", "landings", "contrail", "inbox", "symbol_history", "events"]) this.sql.exec(`DELETE FROM ${table}`);
@@ -1950,7 +1995,10 @@ export class Tower extends DurableObject<Env> {
 	// ───────────────────────── maintenance ─────────────────────────
 
 	async alarm() {
+		this.abortStale();
 		this.sql.exec("DELETE FROM clearances WHERE expires_at <= ?", now());
+		// Radio messages an agent has read are kept a day, not forever.
+		this.sql.exec("DELETE FROM inbox WHERE delivered = 1 AND at < ?", now() - 86_400_000);
 		this.promoteHolds();
 		this.patch("clearances", this.activeClearances());
 		await this.ctx.storage.setAlarm(now() + 60_000);

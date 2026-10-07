@@ -35,6 +35,8 @@ const SCRIPT_FILE = /\.(m?js|cjs)$/;
 /** CPU budget of one test run: a runaway loop must not stall the runway, trunk's only writer. */
 const CPU_LIMIT_MS = 15_000;
 const MAX_MODULE_BYTES = 512 * 1024;
+/** The whole suite's time on the runway: a test that never settles must not hold every landing behind it. */
+const SUITE_TIMEOUT_MS = 60_000;
 /** Failures kept in a report (passing results are only counted). */
 const MAX_REPORTED_FAILURES = 50;
 
@@ -87,7 +89,8 @@ export function isTestFile(path: string) {
 	return testFiles(DEFAULT_CONFIG, [path]).length === 1;
 }
 
-const IMPORT_RE = /(?:import|export)\s[^'"`;]*?from\s*["']([^"']+)["']|import\s*["']([^"']+)["']|import\(\s*["']([^"']+)["']\s*\)|\brequire\(\s*["']([^"']+)["']\s*\)/g;
+// The clause before `from` is bounded: unbounded, a file of many bare "import " words takes quadratic time.
+const IMPORT_RE = /(?:import|export)\s[^'"`;]{0,2000}?from\s*["']([^"']+)["']|import\s*["']([^"']+)["']|import\(\s*["']([^"']+)["']\s*\)|\brequire\(\s*["']([^"']+)["']\s*\)/g;
 
 function resolveRelative(from: string, spec: string): string | null {
 	if (!spec.startsWith("./") && !spec.startsWith("../")) return null;
@@ -109,7 +112,8 @@ export function reachableModules(entries: string[], files: Map<string, string>, 
 		const path = stack.pop()!;
 		if (seen.has(path) || !files.has(path)) continue;
 		seen.add(path);
-		if (path.endsWith(".json")) continue;
+		// Modules too big to load are not scanned either.
+		if (path.endsWith(".json") || files.get(path)!.length > MAX_MODULE_BYTES) continue;
 		for (const m of files.get(path)!.matchAll(IMPORT_RE)) {
 			const spec = m[1] ?? m[2] ?? m[3] ?? m[4];
 			const target = resolveRelative(path, spec) ?? aliases[spec] ?? null;
@@ -340,11 +344,20 @@ export async function verifyTree(loader: WorkerLoader, treeOid: string, files: M
 			globalOutbound: null,
 			limits: { cpuMs: CPU_LIMIT_MS },
 		}));
-		const res = await worker.getEntrypoint().fetch("https://verify.contrail/");
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const res = await Promise.race([
+			worker.getEntrypoint().fetch("https://verify.contrail/"),
+			new Promise<never>((_, reject) => {
+				timer = setTimeout(() => reject(new Error(`the test suite ran longer than ${SUITE_TIMEOUT_MS / 1000} s`)), SUITE_TIMEOUT_MS);
+			}),
+		]).finally(() => clearTimeout(timer));
 		if (!res.ok) throw new Error(`runner responded ${res.status}: ${(await res.text()).slice(0, 300)}`);
 		const results = (await res.json()) as (TestReport["results"][number] & { skipped?: boolean })[];
 		const failures = results.filter((r) => !r.ok);
 		const skipped = results.filter((r) => r.skipped).length;
+		// Test files emptied out or skipped wholesale are no suite at all.
+		if (expectTests && results.length - failures.length - skipped === 0 && failures.length === 0)
+			return { passed: 0, failed: 1, skipped: skipped || undefined, results: [], error: "no tests ran: trunk has a test suite, but every test in this tree is gone or skipped", ms: Date.now() - started };
 		return {
 			passed: results.length - failures.length - skipped,
 			failed: failures.length,

@@ -5,8 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Workspace } from "../src/edge/workspace";
+import { addNote, cloneMain, fetchNotes, newRepo, pushNotes } from "../src/runway/gitops";
 
-// An edge agent's workspace against real git over smart HTTP (git-http-backend behind a tiny CGI bridge).
+// Edge workspaces and the runway's landing notes against real git over smart HTTP (git-http-backend behind
+// a tiny CGI bridge).
 let root: string;
 let server: Server;
 let base: string;
@@ -102,5 +104,30 @@ describe("Workspace", () => {
 		expect(git(bare, "show", "main:a.js")).toBe("export const a = 2;");
 		// And once it has, there is nothing to push.
 		expect(await ws.commitAndPush("Again")).toBeNull();
+	}, 30_000);
+});
+
+describe("landing notes", () => {
+	it("survive a fresh clone: notes are added to trunk's, never replace them", async () => {
+		const { url, bare } = makeRepo("notes", { "a.js": "export const a = 1;\n" });
+		const first = newRepo();
+		const one = await cloneMain(first, url, "t");
+		await fetchNotes(first, "t");
+		await addNote(first, one, "first landing");
+		expect((await pushNotes(first, "t")).ok).toBe(true);
+
+		// Trunk moves on, and a runway that starts over (a restart) clones it afresh.
+		const work = join(root, "notes-work");
+		writeFileSync(join(work, "a.js"), "export const a = 2;\n");
+		git(work, "commit", "-qam", "two");
+		git(work, "push", "-q", bare, "main");
+		const second = newRepo();
+		const two = await cloneMain(second, url, "t");
+		await fetchNotes(second, "t");
+		await addNote(second, two, "second landing");
+		expect((await pushNotes(second, "t")).ok).toBe(true);
+
+		expect(git(bare, "notes", "--ref=contrail", "show", one)).toBe("first landing");
+		expect(git(bare, "notes", "--ref=contrail", "show", two)).toBe("second landing");
 	}, 30_000);
 });

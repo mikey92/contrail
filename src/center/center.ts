@@ -43,8 +43,12 @@ const TOKEN_SECONDS = 600;
 const AUTHOR = { name: "Contrail Center", email: "center@contrail.dev" };
 /** How long a sector's runway holds a crossing's part, merged and green, for the crossing's other sectors. */
 const HOLD_MS = 60_000;
-/** How long the Center waits for a sector to prepare its part before the crossing is given up. */
-const PREPARE_MS = 90_000;
+/**
+ * How long the Center waits for a sector to prepare its part before the crossing is given up. Well under
+ * HOLD_MS: a sector that was ready at once still holds its part when the last one is ready, so a crossing
+ * lands in every sector or in none.
+ */
+const PREPARE_MS = 45_000;
 const WORKSPACE_TOKEN_TTL_S = 6 * 3600;
 /** A crossing's workspace fork is kept this long after it lands or aborts, for inspection. */
 const FORK_RETENTION_MS = 60 * 60_000;
@@ -189,7 +193,8 @@ export class Center extends DurableObject<Env> {
 
 	/** The alarm composes sectors that moved and retires old crossing workspaces, whichever is due first. */
 	private async scheduleAlarm() {
-		const dirty = ((await this.ctx.storage.get<string[]>("dirty")) ?? []).filter((slug) => !this.holding.has(slug));
+		const pending = [...((await this.ctx.storage.get<string[]>("dirty")) ?? []), ...((await this.ctx.storage.get<string[]>("composing")) ?? [])];
+		const dirty = pending.filter((slug) => !this.holding.has(slug));
 		const retiring = (await this.ctx.storage.get<{ due: number }[]>("retiring")) ?? [];
 		const next = Math.min(dirty.length ? Date.now() + COALESCE_MS : Infinity, ...retiring.map((r) => r.due));
 		if (next === Infinity) return;
@@ -219,11 +224,12 @@ export class Center extends DurableObject<Env> {
 	async compose(): Promise<string | null> {
 		return this.exclusive(async () => {
 			const info = await this.info();
-			const all = (await this.ctx.storage.get<string[]>("dirty")) ?? [];
+			// "composing" is left over only if a composition was cut off (a restart): those sectors are due again.
+			const all = [...new Set([...((await this.ctx.storage.get<string[]>("dirty")) ?? []), ...((await this.ctx.storage.get<string[]>("composing")) ?? [])])];
 			// Sectors a crossing is landing in wait: the crossing composes them in a commit of its own.
 			const dirty = all.filter((slug) => !this.holding.has(slug));
 			if (!dirty.length) return null;
-			await this.ctx.storage.put("dirty", all.filter((slug) => this.holding.has(slug)));
+			await this.ctx.storage.put({ dirty: all.filter((slug) => this.holding.has(slug)), composing: dirty });
 			const heads = (await this.ctx.storage.get<Record<string, string>>("heads")) ?? {};
 			try {
 				const { head, token } = await this.sync(info.trunkRepo);
@@ -248,6 +254,8 @@ export class Center extends DurableObject<Env> {
 				const now = new Set([...((await this.ctx.storage.get<string[]>("dirty")) ?? []), ...dirty]);
 				await this.ctx.storage.put("dirty", [...now]);
 				throw err;
+			} finally {
+				await this.ctx.storage.delete("composing");
 			}
 		});
 	}
@@ -519,8 +527,10 @@ export class Center extends DurableObject<Env> {
 
 	/** The crossing's leg in `sector`: a flight there under the crossing's agent, opened the first time it is needed. */
 	private async leg(info: CenterInfo, agent: AgentRecord, cx: Crossing, sector: SectorInfo): Promise<CrossingLeg> {
-		const open = cx.legs.find((l) => l.sector === sector.slug);
-		if (open) return open;
+		const known = cx.legs.find((l) => l.sector === sector.slug);
+		if (known && !known.closed) return known;
+		// That leg's flight is over (after a partial landing, say): the sector gets a new one.
+		if (known) cx.legs = cx.legs.filter((l) => l !== known);
 		const tower = this.tower(sector.slug);
 		const { agentId, flight } = await tower.openLeg({
 			crossing: cx.code,
@@ -749,11 +759,15 @@ export class Center extends DurableObject<Env> {
 			// Phase two: every sector is ready, so every part lands. From here on the crossing only moves forward.
 			const landed = await Promise.all(legs.map((leg) => this.tower(leg.sector).commitLeg(leg.agentId).catch((err) => errorMessage(err))));
 			landed.forEach((l, i) => (legs[i].landing = typeof l === "string" ? { status: "failed", commit: null, error: l, tests: null, conflicts: [], changes: 0 } : legLanding(l)));
+			for (const leg of legs) if (leg.landing?.status === "landed") leg.closed = true;
 			// Its other legs close: sectors where it asked for clearance but changed nothing, or whose part had landed before.
 			const others = cx.legs.filter((l) => !legs.includes(l));
 			await Promise.all(others.map((l) => this.tower(l.sector).closeLeg(l.agentId, `crossing ${cx.code} landed without a change here`).catch(() => {})));
+			for (const l of others) l.closed = true;
 			const down = landed.flatMap((l, i) => (typeof l !== "string" && l.status === "landed" && l.trunkAfter && l.trunkBefore ? [{ leg: legs[i], before: l.trunkBefore, after: l.trunkAfter }] : []));
-			const commit = down.length ? await this.exclusive(() => this.composeCrossing(info, cx, down, summary)) : ((await this.ctx.storage.get<string>("head")) ?? null);
+			// The parts have landed: if their composition fails, the next regular one folds them into the monorepo.
+			const composed = down.length ? await this.exclusive(() => this.composeCrossing(info, cx, down, summary)).catch(() => null) : null;
+			const commit = down.length ? composed : ((await this.ctx.storage.get<string>("head")) ?? null);
 			const missed = legs.filter((l) => l.landing?.status !== "landed");
 			if (missed.length)
 				await this.finish(cx, {
@@ -911,7 +925,12 @@ export class Center extends DurableObject<Env> {
 			const cx = await this.ctx.storage.get<Crossing>(CROSSING(r.seq));
 			if (cx) await this.ctx.storage.put(CROSSING(r.seq), { ...cx, retiredAt: now() });
 		}
-		await this.ctx.storage.put("retiring", retiring.filter((r) => !gone.has(r.repo)));
+		// One that failed is tried again in ten minutes, not at once: the alarm would fire back to back.
+		const later = now() + 10 * 60_000;
+		await this.ctx.storage.put(
+			"retiring",
+			retiring.filter((r) => !gone.has(r.repo)).map((r) => (due.includes(r) ? { ...r, due: later } : r)),
+		);
 	}
 
 	/** Crossing workspace forks that still exist (for the orphan sweep). */

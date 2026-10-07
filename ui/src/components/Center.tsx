@@ -107,8 +107,9 @@ function CenterLive({ slug }: { slug: string }) {
 			const res = await fetch(`/api/c/${slug}`).catch(() => null);
 			if (stop) return;
 			if (res?.status === 404) return setMissing(true);
-			if (res?.ok) {
-				const s = (await res.json()) as CenterSnapshot;
+			// A body that fails to arrive is skipped: polling goes on.
+			const s = res?.ok ? ((await res.json().catch(() => null)) as CenterSnapshot | null) : null;
+			if (s && !stop) {
 				points.current = [...points.current.filter((x) => x.t > Date.now() - 60_000), { t: Date.now(), landed: landedIn(s) }];
 				setSnap(s);
 			}
@@ -144,7 +145,8 @@ function CenterReplay({ slug, path, params }: { slug: string; path: string; para
 					.map((l) => JSON.parse(l));
 				if (header?.kind !== "center" || !samples.length) throw new Error("not a center recording");
 				const speed = Number(params.get("speed") ?? 1);
-				player = new SampleReplay<Sample>(samples, Number(params.get("from") ?? 0) * 1000, speed > 0 ? speed : 1);
+				const from = Number(params.get("from") ?? 0);
+				player = new SampleReplay<Sample>(samples, Number.isFinite(from) && from > 0 ? from * 1000 : 0, speed > 0 ? speed : 1);
 				setLoaded({ header, player, points: ratePoints(header, samples) });
 			})
 			.catch(() => !cancelled && setFailed(true));
@@ -330,7 +332,10 @@ function crossingState(cx: Crossing): { label: string; tone: string } {
 	if (cx.status === "landed") return { label: `Landed in ${cx.legs.filter((l) => l.landing?.status === "landed").length} sectors at once`, tone: "landed" };
 	if (cx.status === "aborted") return { label: "Aborted", tone: "aborted" };
 	if (cx.landing?.status === "landing") return { label: "Landing", tone: "approach" };
-	if (cx.status === "diverted") return { label: "Landed nowhere", tone: "diverted" };
+	if (cx.status === "diverted") {
+		const landed = cx.legs.filter((l) => l.landing?.status === "landed").length;
+		return { label: landed ? `Landed in ${landed} of ${cx.legs.length} sectors` : "Landed nowhere", tone: "diverted" };
+	}
 	return { label: "In the air", tone: "airborne" };
 }
 

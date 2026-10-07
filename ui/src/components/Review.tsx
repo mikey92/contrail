@@ -115,13 +115,18 @@ function ReviewCard({
 		}
 		setErr(null);
 		setBusy(true);
-		const res = await fetch(`/api/p/${slug}/landings/${landing.id}/review`, {
-			method: "POST",
-			headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
-			body: JSON.stringify({ decision, comment: comment || undefined, reviewer: "operator" }),
-		});
-		setBusy(false);
-		if (!res.ok) setErr((await res.json().catch(() => ({}))).error ?? `HTTP ${res.status}`);
+		try {
+			const res = await fetch(`/api/p/${slug}/landings/${landing.id}/review`, {
+				method: "POST",
+				headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+				body: JSON.stringify({ decision, comment: comment || undefined, reviewer: "operator" }),
+			});
+			if (!res.ok) setErr((await res.json().catch(() => ({}))).error ?? `HTTP ${res.status}`);
+		} catch {
+			setErr("The tower didn’t answer. Check your connection and try again.");
+		} finally {
+			setBusy(false);
+		}
 	};
 	return (
 		<div class="rcard">
