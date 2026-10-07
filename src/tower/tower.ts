@@ -28,7 +28,7 @@ import type {
 	SectorSummary,
 	TrunkState,
 } from "../shared/types";
-import { AGENT_KEY_TTL_MS, callsignFor, cloneUrl, colorFor, errorMessage, json, keyCheck, now, randomId, randomToken, repoSafe, sha256, sleep } from "../util";
+import { AGENT_KEY_TTL_MS, AGENT_KINDS, callsignFor, cloneUrl, colorFor, errorMessage, json, keyCheck, now, oneLine, randomId, randomToken, repoSafe, sha256, sleep } from "../util";
 import { conventionalTestCommand, PROTOCOL, workspaceInstructions } from "./briefing";
 import { findCollisions, normalizeTarget, parseTarget, targetsOverlap } from "./clearance";
 import { type AirTarget, crowding, firstCollision, predictTargets, type SymbolIndex, symbolIndex } from "./planner";
@@ -41,6 +41,8 @@ const WORKSPACE_TOKEN_TTL_S = 6 * 3600;
 const TRAIN_SIZE = 12;
 const LANDING_WAIT_MS = 50_000;
 const MAX_EVENTS = 1000;
+/** Agents one airspace keeps; idle ones that never took off make room for new ones. */
+const MAX_AGENTS = 2000;
 /** Bumped when the way readTestCommand finds a command changes, so existing projects look again. */
 const TEST_COMMAND_CHECK = 2;
 /** A flight's workspace fork is kept this long after the flight lands or aborts, for inspection. */
@@ -490,13 +492,21 @@ export class Tower extends DurableObject<Env> {
 	// ───────────────────────── agents ─────────────────────────
 
 	async join(input: { callsign?: string; kind?: AgentKind; model?: string }): Promise<{ agent: Agent; key: string; expiresAt: number }> {
+		const count = () => this.row<{ c: number }>("SELECT COUNT(*) AS c FROM agents")?.c ?? 0;
+		// Agents that never took off and have not been heard from in an hour make room for new ones.
+		if (count() >= MAX_AGENTS)
+			this.sql.exec(
+				"DELETE FROM agents WHERE id IN (SELECT a.id FROM agents a WHERE a.last_seen_at < ? AND NOT EXISTS (SELECT 1 FROM flights f WHERE f.agent_id = a.id) ORDER BY a.last_seen_at LIMIT 100)",
+				now() - 3600_000,
+			);
+		if (count() >= MAX_AGENTS) throw new Error(`this airspace is full (${MAX_AGENTS} agents)`);
 		const n = (this.row<{ n: number }>("SELECT COALESCE(MAX(n), 0) + 1 AS n FROM agents")?.n ?? 1) as number;
-		if (n > 2000) throw new Error("this airspace is full (2000 agents)");
-		const kind: AgentKind = input.kind ?? "other";
-		let callsign = (input.callsign ?? "").trim().toUpperCase().replace(/[^A-Z0-9-]/g, "").slice(0, 20) || callsignFor(kind, n);
+		const kind: AgentKind = AGENT_KINDS.includes(input.kind as AgentKind) ? (input.kind as AgentKind) : "other";
+		let callsign = String(input.callsign ?? "").trim().toUpperCase().replace(/[^A-Z0-9-]/g, "").slice(0, 20) || callsignFor(kind, n);
 		if (this.row("SELECT id FROM agents WHERE callsign = ?", callsign)) callsign = `${callsign}-${n}`;
 		const key = randomToken("ct");
-		const agent: Agent = { id: randomId(), callsign, kind, model: input.model?.slice(0, 60) ?? null, color: colorFor(n - 1), joinedAt: now(), lastSeenAt: now() };
+		// The model goes into the trailer of every commit the agent lands: one line, no look-alike trailers.
+		const agent: Agent = { id: randomId(), callsign, kind, model: oneLine(input.model, 60) || null, color: colorFor(n - 1), joinedAt: now(), lastSeenAt: now() };
 		this.sql.exec(
 			"INSERT INTO agents (id, n, callsign, kind, model, color, key_hash, joined_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
 			agent.id,
@@ -512,6 +522,14 @@ export class Tower extends DurableObject<Env> {
 		this.patch("agent", agent);
 		this.emit("agent.joined", `${agent.callsign} joined${agent.model ? ` (${agent.model})` : ""}`, { agentId: agent.id });
 		return { agent, key, expiresAt: agent.joinedAt + AGENT_KEY_TTL_MS };
+	}
+
+	/** A join with the project's join code, which a public airspace gives to anyone: 20 in any 10 minutes. */
+	async joinWithCode(input: { callsign?: string; kind?: AgentKind; model?: string }): Promise<{ agent: Agent; key: string; expiresAt: number } | { error: string }> {
+		const recent = this.meta<number[]>("codeJoins", []).filter((t) => t > now() - 600_000);
+		if (recent.length >= 20) return { error: "20 agents joined in the last 10 minutes; try again in a few minutes" };
+		this.setMeta("codeJoins", [...recent, now()]);
+		return this.join(input);
 	}
 
 	/** The agent a key belongs to, or when the key expired. */
@@ -532,9 +550,9 @@ export class Tower extends DurableObject<Env> {
 			const intent: Intent = {
 				id: randomId(),
 				seq,
-				title: item.title.slice(0, 200),
-				body: (item.body ?? "").slice(0, 8000),
-				priority: item.priority ?? 0,
+				title: oneLine(item.title, 200),
+				body: String(item.body ?? "").slice(0, 8000),
+				priority: Number.isFinite(Number(item.priority)) ? Math.trunc(Number(item.priority)) : 0,
 				status: "open",
 				labels: item.labels ?? [],
 				createdBy,
@@ -568,7 +586,10 @@ export class Tower extends DurableObject<Env> {
 		const agent = this.agentById(agentId);
 		const recent = this.row<{ c: number }>("SELECT COUNT(*) AS c FROM intents WHERE created_by != 'operator' AND created_at > ?", now() - 3600_000)?.c ?? 0;
 		if (recent >= 30) throw new Error("agents have filed 30 intents in the last hour; ask the operator to file more");
-		const [intent] = await this.addIntents([input], agent.callsign);
+		if (!oneLine(input.title, 200)) throw new Error("an intent needs a title");
+		// An agent's intent never jumps ahead of the operator's: its priority is at most the default, 0.
+		const priority = Math.max(-10, Math.min(0, Math.trunc(Number(input.priority) || 0)));
+		const [intent] = await this.addIntents([{ title: input.title, body: input.body, priority }], agent.callsign);
 		return intent;
 	}
 
@@ -774,10 +795,11 @@ export class Tower extends DurableObject<Env> {
 			this.finishLanding(l, { status: "failed", error: "flight aborted before landing" });
 		this.sql.exec("UPDATE intents SET status = 'open', flight_id = NULL WHERE id = ? AND status = 'assigned'", flight.intentId);
 		this.releaseAll(flight.id);
+		reason = reason === undefined ? undefined : String(reason).slice(0, 500);
 		if (reason) this.addContrail(flight.id, agentId, "note", `Aborted: ${reason}`);
 		this.patch("flight", this.flightById(flight.id));
 		this.patch("intent", this.intentById(flight.intentId));
-		this.emit("flight.aborted", `${flight.code} aborted${reason ? `: ${reason}` : ""}`, { flightId: flight.id, agentId });
+		this.emit("flight.aborted", `${flight.code} aborted${reason ? `: ${reason.slice(0, 140)}` : ""}`, { flightId: flight.id, agentId });
 		return { ok: true, radio: this.drainRadio(flight.id) };
 	}
 
@@ -791,7 +813,9 @@ export class Tower extends DurableObject<Env> {
 		const flight = this.ownFlight(agentId, input.flight);
 		const agent = this.agentById(agentId);
 		this.touchAgent(agentId);
-		const targets = [...new Set(input.targets.map((t) => this.resolveTarget(normalizeTarget(t))).filter((t) => t.length > 0))].slice(0, 50);
+		const asked = Array.isArray(input.targets) ? input.targets.slice(0, 50) : [input.targets];
+		const targets = [...new Set(asked.map((t) => this.resolveTarget(normalizeTarget(String(t ?? "").slice(0, 300)))).filter((t) => t.length > 0))];
+		input = { ...input, reason: input.reason === undefined ? undefined : String(input.reason).slice(0, 500) };
 		if (targets.length === 0) throw new Error("name at least one target, e.g. src/cart.js#applyDiscount");
 		// "#subtotal" without its file would claim the whole repository.
 		const pathless = targets.filter((t) => parseTarget(t).path === "");
@@ -956,7 +980,7 @@ export class Tower extends DurableObject<Env> {
 		this.touchAgent(agentId);
 		const kind: ContrailKind = ["plan", "decision", "note", "handoff", "test"].includes(input.kind) ? input.kind : "note";
 		const text = input.text.slice(0, 4000);
-		const entry = this.addContrail(flight.id, agentId, kind, text, (input.refs ?? []).map(normalizeTarget).slice(0, 20));
+		const entry = this.addContrail(flight.id, agentId, kind, text, (input.refs ?? []).slice(0, 20).map((r) => normalizeTarget(String(r).slice(0, 300))));
 		if (kind === "plan") {
 			this.sql.exec("UPDATE flights SET plan = ?, updated_at = ? WHERE id = ?", text, now(), flight.id);
 			this.patch("flight", this.flightById(flight.id));
@@ -968,7 +992,7 @@ export class Tower extends DurableObject<Env> {
 	async radio(agentId: string, input: { to: string; text: string; flight?: string }): Promise<{ delivered: string[]; radio: RadioMessage[] }> {
 		const flight = this.ownFlight(agentId, input.flight);
 		const agent = this.agentById(agentId);
-		const to = input.to.trim().toUpperCase();
+		const to = oneLine(input.to, 40).toUpperCase();
 		const recipients = this.rows(
 			`SELECT f.* FROM flights f JOIN agents a ON a.id = f.agent_id WHERE f.status IN (${ACTIVE.map(() => "?").join(",")}) AND f.id != ? AND (? = 'ALL' OR f.code = ? OR a.callsign = ?)`,
 			...ACTIVE,
@@ -1109,7 +1133,7 @@ export class Tower extends DurableObject<Env> {
 			flightId: flight.id,
 			repo: flight.repo,
 			review: this.meta<{ review?: string[] }>("policy", {}).review ?? [],
-			approved: l.review?.decision === "approved",
+			approvedHead: l.review?.decision === "approved" ? (l.forkHead ?? undefined) : undefined,
 			heldByOthers: granted
 				.filter((c) => c.flightId !== flight.id)
 				.map((c) => {
@@ -1273,9 +1297,11 @@ export class Tower extends DurableObject<Env> {
 
 		if (o.status === "review") {
 			const review = { required: o.reviewRequired ?? [], decision: null, reviewer: null, comment: null, at: null };
+			// Back after an approval: the workspace moved on from the commit the human saw.
+			const moved = l.review?.decision === "approved" ? `The workspace moved after ${l.review.reviewer} approved it, so its new commits need a review too. ` : "";
 			this.finishLanding(l, { status: "review", forkHead: o.forkHead, trunkBefore: o.trunkBefore, changes: o.changes, tests: o.tests, unioned: o.unioned, review });
-			this.addContrail(flight.id, null, "note", `Green and ready, but policy requires a human review for ${review.required.join(", ")}. Waiting on the tower.`);
-			this.sendRadio(flight.id, "review", `Your landing passed merge and tests but touches ${review.required.join(", ")}, which needs a human review. Hold position; you will be told the decision.`);
+			this.addContrail(flight.id, null, "note", `${moved}Green and ready, but policy requires a human review for ${review.required.join(", ")}. Waiting on the tower.`);
+			this.sendRadio(flight.id, "review", `${moved}Your landing passed merge and tests but touches ${review.required.join(", ")}, which needs a human review. Hold position; you will be told the decision.`);
 			this.emit("landing.review", `${flight.code} needs a human review: touches ${review.required.join(", ")}`, { flightId: flight.id, agentId: agent.id, data: { landingId: l.id } });
 			this.bump("reviews");
 			return;
@@ -1392,10 +1418,11 @@ export class Tower extends DurableObject<Env> {
 
 	/** The landed intents, plans and decisions behind a piece of code. `askedBy` is set when an agent asks. */
 	async why(input: { path: string; line?: number; symbol?: string }, askedBy?: string): Promise<Record<string, unknown>> {
-		const path = normalizeTarget(input.path).split("#")[0];
+		const asked = String(input.path ?? "").slice(0, 300);
+		const path = normalizeTarget(asked).split("#")[0];
 		const trunk = this.meta<TrunkState>("trunk", { head: null, files: [], landedCount: 0 });
 		const file = trunk.files.find((f) => f.path === path);
-		let symbol = input.symbol ?? (input.path.includes("#") ? input.path.split("#")[1] : null);
+		let symbol = (input.symbol ? String(input.symbol).slice(0, 200) : null) ?? (asked.includes("#") ? asked.split("#")[1] : null);
 		if (!symbol && input.line && file) {
 			const hit = file.symbols.filter((s) => input.line! >= s.start && input.line! <= s.end).sort((a, b) => a.end - a.start - (b.end - b.start))[0];
 			symbol = hit?.name ?? "(top)";

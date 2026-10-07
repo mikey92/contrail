@@ -32,7 +32,7 @@ import type { AgentKind, CenterAgent, CenterInfo, CenterIntent, CenterSnapshot, 
 import { conventionalTestCommand, CROSSING_PROTOCOL, workspaceInstructions } from "../tower/briefing";
 import { normalizeTarget } from "../tower/clearance";
 import type { HoldInfo, RadioMessage, Workspace } from "../tower/tower";
-import { AGENT_KEY_TTL_MS, callsignFor, cloneUrl, errorMessage, keyCheck, now, randomId, randomToken, repoSafe, sha256, sleep } from "../util";
+import { AGENT_KEY_TTL_MS, AGENT_KINDS, callsignFor, cloneUrl, errorMessage, keyCheck, now, oneLine, randomId, randomToken, repoSafe, sha256, sleep } from "../util";
 import { checkPrefixes, composeTree, ownerOf, type PathChange, sectorChanges } from "./compose";
 import { sectorPart } from "./crossing";
 
@@ -311,10 +311,10 @@ export class Center extends DurableObject<Env> {
 	async join(input: { callsign?: string; kind?: AgentKind; model?: string }): Promise<{ agent: CenterAgent; key: string; expiresAt: number }> {
 		await this.info();
 		const n = await this.next("seq:agent");
-		const kind: AgentKind = input.kind ?? "other";
-		const callsign = (input.callsign ?? "").trim().toUpperCase().replace(/[^A-Z0-9-]/g, "").slice(0, 20) || callsignFor(kind, n);
+		const kind: AgentKind = AGENT_KINDS.includes(input.kind as AgentKind) ? (input.kind as AgentKind) : "other";
+		const callsign = String(input.callsign ?? "").trim().toUpperCase().replace(/[^A-Z0-9-]/g, "").slice(0, 20) || callsignFor(kind, n);
 		const key = randomToken("ct");
-		const agent: AgentRecord = { id: randomId(), callsign, kind, model: input.model?.slice(0, 60) ?? null, joinedAt: now(), lastSeenAt: now(), legs: {}, crossing: null };
+		const agent: AgentRecord = { id: randomId(), callsign, kind, model: oneLine(input.model, 60) || null, joinedAt: now(), lastSeenAt: now(), legs: {}, crossing: null };
 		await this.ctx.storage.put<unknown>({ [AGENT(agent.id)]: agent, [KEY(await sha256(key))]: agent.id });
 		return { agent: publicAgent(agent), key, expiresAt: agent.joinedAt + AGENT_KEY_TTL_MS };
 	}
@@ -668,6 +668,7 @@ export class Center extends DurableObject<Env> {
 	}
 
 	async abort(agentId: string, reason?: string) {
+		reason = reason === undefined ? undefined : String(reason).slice(0, 500);
 		return this.withCrossing(agentId, async (_agent, cx) => {
 			const why = `crossing ${cx.code} aborted${reason ? `: ${reason}` : ""}`;
 			await Promise.all(cx.legs.map((l) => this.tower(l.sector).closeLeg(l.agentId, why).catch(() => {})));

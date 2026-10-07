@@ -447,8 +447,10 @@ export class SampleReplay<S extends { t: number }> implements ReplayClock {
 
 /** A recording from this site only (e.g. /replays/ramda.jsonl.gz), as text; gzipped recordings are unpacked. */
 export async function fetchRecording(path: string | null): Promise<string> {
-	if (!path || !path.startsWith("/") || path.startsWith("//")) throw new Error("not a recording on this site");
-	const res = await fetch(path);
+	// Resolved first: "/\host/x" passes a plain prefix check but points at another site.
+	const url = path?.startsWith("/") ? new URL(path, location.href) : null;
+	if (!url || url.origin !== location.origin) throw new Error("not a recording on this site");
+	const res = await fetch(url);
 	if (!res.ok) throw new Error(`HTTP ${res.status}`);
 	const bytes = new Uint8Array(await res.arrayBuffer());
 	if (bytes[0] !== 0x1f || bytes[1] !== 0x8b) return new TextDecoder().decode(bytes);

@@ -233,13 +233,24 @@ edit(fe.dir, "src/money.js", (s) =>
 commitPush(fe.dir, "EUR and JPY");
 const le = await E.tool("request_landing", { summary: "Format EUR with € and JPY without decimals." });
 check(le.landing.status === "review" && le.landing.review?.required?.includes("src/money.js#formatMoney"), `${fe.flight.code} parked for human review by policy`);
-await call(`/api/p/${slug}/landings/${le.landing.id}/review`, { decision: "approve", comment: "Looks right; JPY has no minor unit.", reviewer: "smoke" }, admin);
-let le2;
-for (let i = 0; i < 20; i++) {
-  le2 = await E.tool("landing_status", {});
-  if (le2.landing.status === "landed") break;
-  await new Promise((r) => setTimeout(r, 1500));
-}
+const approve = () => call(`/api/p/${slug}/landings/${le.landing.id}/review`, { decision: "approve", comment: "Looks right; JPY has no minor unit.", reviewer: "smoke" }, admin);
+const afterReview = async () => {
+  let s;
+  for (let i = 0; i < 20; i++) {
+    s = await E.tool("landing_status", {});
+    if (!["queued", "merging", "verifying"].includes(s.landing.status)) break;
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+  return s;
+};
+// An approval covers the commit the human saw: one pushed after the review needs a review of its own.
+edit(fe.dir, "src/money.js", (s) => s.replace('  if (currency === "EUR")', () => '  if (currency === "GBP") return `£${dollars}`;\n  if (currency === "EUR")'));
+commitPush(fe.dir, "GBP too");
+await approve();
+const moved = await afterReview();
+check(moved.landing.status === "review" && moved.landing.forkHead !== le.landing.forkHead, `a commit pushed after the review goes back for review (${moved.landing.status})`);
+await approve();
+const le2 = await afterReview();
 check(le2.landing.status === "landed", `${fe.flight.code} landed after approval`);
 await call(`/api/p/${slug}/policy`, { review: [] }, admin);
 

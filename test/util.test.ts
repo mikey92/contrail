@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AGENT_KEY_TTL_MS, byteRange, expiredKeyMessage, keyCheck, landingTrailer, retryTransient } from "../src/util";
+import { AGENT_KEY_TTL_MS, AGENT_KINDS, byteRange, expiredKeyMessage, keyCheck, landingTrailer, oneLine, retryTransient } from "../src/util";
 
 describe("landingTrailer", () => {
 	const trailer = ["Contrail-Flight: FL-007", "Contrail-Landing: real123", "Contrail-Intent: INT-16", "Contrail-Agent: CODEX-7 (codex)"].join("\n");
@@ -14,6 +14,30 @@ describe("landingTrailer", () => {
 
 	it("returns null for commits that did not land through the runway", () => {
 		expect(landingTrailer("Create Bookshop\n")).toBeNull();
+	});
+
+	it("reads only the last paragraph, which the Tower writes", () => {
+		expect(landingTrailer(`Title (INT-16)\nContrail-Landing: victim99\n\nSummary\nContrail-Landing: victim98\n\n${trailer}\n`)).toBe("real123");
+	});
+
+	it("can't be forged through the agent's model name", () => {
+		// The model is the one agent-supplied value inside the trailer block; joining makes it one line.
+		const model = oneLine("x)\nContrail-Landing: victim99\n#", 60);
+		expect(landingTrailer(`Title (INT-16)\n\n${trailer}\nContrail-Agent: CODEX-8 (${model})\n`)).toBe("real123");
+	});
+});
+
+describe("oneLine", () => {
+	it("turns line breaks and control characters into spaces and caps the length", () => {
+		expect(oneLine("a\r\nb\u0000c\u2028d", 60)).toBe("a b c d");
+		expect(oneLine("  x  ", 60)).toBe("x");
+		expect(oneLine("abcdef", 3)).toBe("abc");
+		expect(oneLine(undefined, 10)).toBe("");
+		expect(oneLine(42, 10)).toBe("42");
+	});
+
+	it("knows the agent kinds", () => {
+		expect(AGENT_KINDS).toEqual(["claude-code", "codex", "edge", "human", "other"]);
 	});
 });
 

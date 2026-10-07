@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { airspaceViolations, findCollisions, normalizeTarget, parseTarget, targetsOverlap } from "../src/tower/clearance";
+import { airspaceViolations, findCollisions, normalizeTarget, parseTarget, policyTargetsTouched, targetsOverlap } from "../src/tower/clearance";
 
 describe("targetsOverlap", () => {
 	it.each([
@@ -51,5 +51,26 @@ describe("airspaceViolations", () => {
 	it("knows that a target without a file means the whole repository", () => {
 		expect(parseTarget("#subtotal").path).toBe("");
 		expect(targetsOverlap("#subtotal", "src/anything.js#x")).toBe(true);
+	});
+});
+
+describe("policyTargetsTouched", () => {
+	const policy = ["src/money.js#formatMoney", "src/payments/"];
+
+	it("finds the protected functions and directories a change touches", () => {
+		expect(policyTargetsTouched(policy, [{ path: "src/money.js", symbols: ["formatMoney"] }])).toEqual(["src/money.js#formatMoney"]);
+		expect(policyTargetsTouched(policy, [{ path: "src/payments/card.js", symbols: ["charge"] }])).toEqual(["src/payments/"]);
+	});
+
+	it("lets changes to other functions of the same file through", () => {
+		expect(policyTargetsTouched(policy, [{ path: "src/money.js", symbols: ["parseMoney"] }])).toEqual([]);
+		expect(policyTargetsTouched([], [{ path: "src/money.js", symbols: ["formatMoney"] }])).toEqual([]);
+	});
+
+	it("counts code outside any function as touching the whole file", () => {
+		// e.g. `formatMoney = () => "free";` at the top level overrides the protected function
+		expect(policyTargetsTouched(policy, [{ path: "src/money.js", symbols: ["(top)"] }])).toEqual(["src/money.js#formatMoney"]);
+		expect(policyTargetsTouched(policy, [{ path: "src/money.js", symbols: ["parseMoney", "(top)"] }])).toEqual(["src/money.js#formatMoney"]);
+		expect(policyTargetsTouched(policy, [{ path: "src/money.js", symbols: [] }])).toEqual(["src/money.js#formatMoney"]);
 	});
 });

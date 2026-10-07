@@ -9,7 +9,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../env";
 import { extractSymbols } from "../git/symbols";
-import { airspaceViolations, type HeldByOther, targetsOverlap } from "../tower/clearance";
+import { airspaceViolations, type HeldByOther, policyTargetsTouched } from "../tower/clearance";
 import type { ConflictReport, FileChange, TestReport, TrunkFile } from "../shared/types";
 import { errorMessage, landingTrailer, retryTransient } from "../util";
 import {
@@ -49,8 +49,8 @@ export interface LandingJob {
 	review?: string[];
 	/** Code other flights are cleared to change right now. Landing a change to it is an airspace violation. */
 	heldByOthers?: HeldByOther[];
-	/** A human approved this landing. */
-	approved?: boolean;
+	/** The workspace commit a human approved. Commits pushed after it need their own review. */
+	approvedHead?: string;
 }
 
 export interface LandingOutcome {
@@ -95,9 +95,7 @@ interface TrainOptions {
 function reviewRequired(policy: string[], changes: FileChange[]): string[] {
 	// The test gate's own configuration is always a human's call: it decides what every later landing must pass.
 	const gate = changes.some((c) => c.path === CONFIG_FILE) ? [CONFIG_FILE] : [];
-	if (!policy.length) return gate;
-	const touched = changes.flatMap((c) => (c.symbols.length ? c.symbols.map((sym) => `${c.path}#${sym}`) : [c.path]));
-	return [...gate, ...policy.filter((p) => touched.some((t) => targetsOverlap(p, t)))];
+	return [...gate, ...policyTargetsTouched(policy, changes)];
 }
 
 function failTests(outcome: LandingOutcome, tests: TestReport) {
@@ -337,7 +335,7 @@ export class Runway extends DurableObject<Env> {
 				const tree = await writeFlatTree(r, merged.files);
 				if (tree === (await commitTreeOid(r, tip))) throw new Error("nothing to land: trunk already contains these changes");
 
-				const required = job.approved ? [] : reviewRequired(job.review ?? [], merged.changes);
+				const required = job.approvedHead === head ? [] : reviewRequired(job.review ?? [], merged.changes);
 				if (required.length || opts.oneByOne) {
 					outcome.tests = await this.test(r, tree, merged.files, gate);
 					if (outcome.tests.failed > 0) {

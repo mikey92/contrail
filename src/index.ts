@@ -1,7 +1,7 @@
 // Contrail — air traffic control for coding agents.
 // Worker entry: REST API, MCP endpoint, live WebSocket feed, and the Radar UI (static assets).
 import { Hono } from "hono";
-import { CENTER_TOOL_BY_NAME, CENTER_TOOLS, TOOL_BY_NAME, TOOLS } from "./agent-api";
+import { boundArgs, CENTER_TOOL_BY_NAME, CENTER_TOOLS, TOOL_BY_NAME, TOOLS } from "./agent-api";
 import type { Env } from "./env";
 import { checkPrefixes } from "./center/compose";
 import { handleMcp } from "./mcp";
@@ -35,6 +35,9 @@ function isAdmin(c: { req: { raw: Request }; env: Env }): boolean {
 	const key = bearer(c.req.raw) ?? c.req.raw.headers.get("X-Contrail-Admin");
 	return !!key && !!c.env.CONTRAIL_ADMIN_KEY && safeEqual(key, c.env.CONTRAIL_ADMIN_KEY);
 }
+
+/** An agent's request body over 1 MB: a tool call never needs that much, so it is turned away unread. */
+const tooLarge = (req: Request) => Number(req.headers.get("content-length") ?? 0) > 1 << 20;
 
 // Where an agent with an expired key gets a new one.
 const renewProject = (c: { req: { url: string }; env: Env }, slug: string) =>
@@ -276,6 +279,8 @@ app.post("/api/p/:slug/resync", async (c) => {
 // ── edge agents (run on Workers AI inside Durable Objects) ──
 
 app.post("/api/p/:slug/edge/launch", async (c) => {
+	// An unknown slug must not wake (and create) a Tower.
+	if (!(await registry(c.env).get(c.req.param("slug")))) return c.json({ error: "not found" }, 404);
 	if (!isAdmin(c)) {
 		const body = await c.req.json<{ count?: number }>().catch(() => ({}) as { count?: number });
 		const res = await tower(c.env, c.req.param("slug")).launchEdgePublic({ count: Number(body.count ?? 3) });
@@ -304,8 +309,12 @@ app.post("/api/p/:slug/join", async (c) => {
 	const entry = await registry(c.env).get(slug);
 	if (!entry) return c.json({ error: "not found" }, 404);
 	const body = await c.req.json<{ joinCode?: string; callsign?: string; kind?: any; model?: string }>().catch(() => ({}) as any);
-	if (!isAdmin(c) && !(body.joinCode && safeEqual(body.joinCode, entry.joinCode))) return c.json({ error: "join code required" }, 401);
-	const { agent, key, expiresAt } = await tower(c.env, slug).join({ callsign: body.callsign, kind: body.kind, model: body.model });
+	const admin = isAdmin(c);
+	if (!admin && !(typeof body.joinCode === "string" && safeEqual(body.joinCode, entry.joinCode))) return c.json({ error: "join code required" }, 401);
+	const input = { callsign: body.callsign, kind: body.kind, model: body.model };
+	const joined = admin ? await tower(c.env, slug).join(input) : await tower(c.env, slug).joinWithCode(input);
+	if ("error" in joined) return c.json(joined, 429);
+	const { agent, key, expiresAt } = joined;
 	const origin = c.env.PUBLIC_ORIGIN ?? new URL(c.req.url).origin;
 	const mcpUrl = `${origin}/mcp/${slug}`;
 	return c.json({
@@ -323,6 +332,7 @@ app.post("/api/p/:slug/join", async (c) => {
 // ── agent REST API (same operations as the MCP tools) ─────
 
 app.use("/api/p/:slug/agent/*", async (c, next) => {
+	if (tooLarge(c.req.raw)) return c.json({ error: "request too large" }, 413);
 	const slug = c.req.param("slug");
 	// Look the project up first: an unknown slug must not wake (and create) a Tower.
 	if (!(await registry(c.env).get(slug))) return c.json({ error: "not found" }, 404);
@@ -340,12 +350,13 @@ app.post("/api/p/:slug/agent/:tool", async (c) => {
 	const tool = TOOL_BY_NAME.get(c.req.param("tool"));
 	if (!tool) return c.json({ error: "unknown tool" }, 404);
 	const args = await c.req.json<Record<string, unknown>>().catch(() => ({}));
-	return c.json(await tool.run(tower(c.env, c.req.param("slug")), c.get("agentId")!, args));
+	return c.json(await tool.run(tower(c.env, c.req.param("slug")), c.get("agentId")!, boundArgs(args)));
 });
 
 // ── MCP ───────────────────────────────────────────────────
 
 app.all("/mcp/:slug", async (c) => {
+	if (tooLarge(c.req.raw)) return c.json({ error: "request too large" }, 413);
 	const slug = c.req.param("slug");
 	const entry = await registry(c.env).get(slug);
 	if (!entry) return c.json({ error: "not found" }, 404);
@@ -482,6 +493,7 @@ app.post("/api/c/:slug/join", async (c) => {
 });
 
 app.use("/api/c/:slug/agent/*", async (c, next) => {
+	if (tooLarge(c.req.raw)) return c.json({ error: "request too large" }, 413);
 	const slug = c.req.param("slug");
 	if (!(await registry(c.env).getCenter(slug))) return c.json({ error: "not found" }, 404);
 	const key = bearer(c.req.raw);
@@ -498,10 +510,11 @@ app.post("/api/c/:slug/agent/:tool", async (c) => {
 	const tool = CENTER_TOOL_BY_NAME.get(c.req.param("tool"));
 	if (!tool) return c.json({ error: "unknown tool" }, 404);
 	const args = await c.req.json<Record<string, unknown>>().catch(() => ({}));
-	return c.json(await tool.run(center(c.env, c.req.param("slug")), c.get("agentId")!, args));
+	return c.json(await tool.run(center(c.env, c.req.param("slug")), c.get("agentId")!, boundArgs(args)));
 });
 
 app.all("/mcp/c/:slug", async (c) => {
+	if (tooLarge(c.req.raw)) return c.json({ error: "request too large" }, 413);
 	const slug = c.req.param("slug");
 	const info = await registry(c.env).getCenter(slug);
 	if (!info) return c.json({ error: "not found" }, 404);

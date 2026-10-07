@@ -20,6 +20,18 @@ export interface ToolDef<T = TowerStub> {
 
 const str = (description: string) => ({ type: "string", description });
 
+/**
+ * An agent's tool arguments, bounded before any tool sees them: strings of at most 8,000 characters,
+ * lists of at most 100 items, objects of at most 50 keys, three levels deep.
+ */
+export function boundArgs(value: unknown, depth = 0): any {
+	if (typeof value === "string") return value.slice(0, 8000);
+	if (Array.isArray(value)) return depth >= 3 ? [] : value.slice(0, 100).map((v) => boundArgs(v, depth + 1));
+	if (value && typeof value === "object")
+		return depth >= 3 ? {} : Object.fromEntries(Object.entries(value).slice(0, 50).map(([k, v]) => [k, boundArgs(v, depth + 1)]));
+	return value;
+}
+
 export const TOOLS: ToolDef[] = [
 	{
 		name: "take_off",

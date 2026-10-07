@@ -1,7 +1,7 @@
 // Minimal stateless MCP server (Streamable HTTP transport, JSON responses).
 // Each POST carries one JSON-RPC message (or a batch). The agent is identified by its Contrail
 // key in the Authorization header, so the server keeps no protocol session state.
-import type { ToolDef } from "./agent-api";
+import { boundArgs, type ToolDef } from "./agent-api";
 import { errorMessage } from "./util";
 
 const SUPPORTED = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
@@ -46,7 +46,7 @@ async function callTool(ctx: McpContext, name: string, args: Record<string, unkn
 			isError: true,
 		};
 	try {
-		const result = await tool.run(ctx.target, ctx.agentId, args ?? {});
+		const result = await tool.run(ctx.target, ctx.agentId, boundArgs(args ?? {}));
 		return { content: [{ type: "text", text: format(tool.summarize?.(result), result) }] };
 	} catch (err) {
 		return { content: [{ type: "text", text: `Error: ${errorMessage(err)}` }], isError: true };

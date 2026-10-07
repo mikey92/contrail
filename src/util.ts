@@ -1,3 +1,5 @@
+import type { AgentKind } from "./shared/types";
+
 export const now = () => Date.now();
 
 const ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz";
@@ -61,6 +63,8 @@ export function colorFor(index: number): string {
 
 const KIND_PREFIX: Record<string, string> = { "claude-code": "CLAUDE", codex: "CODEX", edge: "EDGE", human: "HUMAN", other: "AGENT" };
 
+export const AGENT_KINDS = Object.keys(KIND_PREFIX) as AgentKind[];
+
 export function callsignFor(kind: string, n: number): string {
 	return `${KIND_PREFIX[kind] ?? "AGENT"}-${n}`;
 }
@@ -98,11 +102,21 @@ export async function retryTransient<T>(fn: () => Promise<T>, attempts = 3): Pro
 }
 
 /**
- * The landing id in a trunk commit's trailer block. The Tower writes that block last, so only the last
- * Contrail-Landing line counts: look-alikes in an agent's summary above it cannot stand in for it.
+ * The landing id in a trunk commit's trailer block. The Tower writes that block last, so only the message's
+ * last paragraph counts, and in it the last Contrail-Landing line: look-alikes in an agent's summary or
+ * intent title above it cannot stand in for it.
  */
 export function landingTrailer(message: string): string | null {
-	return [...message.matchAll(/^Contrail-Landing: (\S+)$/gm)].at(-1)?.[1] ?? null;
+	const block = message.trimEnd().split(/\n[ \t]*\n/).at(-1) ?? "";
+	return [...block.matchAll(/^Contrail-Landing: (\S+)$/gm)].at(-1)?.[1] ?? null;
+}
+
+/** Text an agent supplied, as one line of at most `max` characters: control characters and line breaks become spaces. */
+export function oneLine(text: unknown, max: number): string {
+	return String(text ?? "")
+		.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ")
+		.trim()
+		.slice(0, max);
 }
 
 /**

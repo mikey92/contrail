@@ -81,3 +81,13 @@ export function airspaceViolations(held: HeldByOther[], changes: { path: string;
 	const touched = changes.flatMap((c) => (c.symbols.length ? c.symbols.map((sym) => `${c.path}#${sym}`) : [`${c.path}#(top)`]));
 	return held.filter((h) => touched.some((t) => targetsOverlap(h.target, t)));
 }
+
+/**
+ * The targets of a project's review policy that a landing's changes touch. Code outside any function
+ * can change what the functions of its file do, so it counts as touching the whole file.
+ */
+export function policyTargetsTouched(policy: string[], changes: { path: string; symbols: string[] }[]): string[] {
+	if (!policy.length) return [];
+	const touched = changes.flatMap((c) => (c.symbols.length && !c.symbols.includes("(top)") ? c.symbols.map((sym) => `${c.path}#${sym}`) : [c.path]));
+	return policy.filter((p) => touched.some((t) => targetsOverlap(p, t)));
+}
