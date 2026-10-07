@@ -167,9 +167,23 @@ export class EdgeAgent extends DurableObject<Env> {
 			state.errors = 0;
 		} catch (err) {
 			state.lastError = errorMessage(err);
-			state.errors = (state.errors ?? 0) + 1;
-			if (state.errors >= MAX_ERRORS) state.phase = "done";
-			delay = 5000;
+			if (state.flight && /no active flight/.test(state.lastError)) {
+				// The tower ended this flight (an operator, or no word for an hour): board the next one.
+				this.ws = null;
+				state.flight = null;
+				state.phase = "boarding";
+				delay = 1000;
+			} else {
+				state.errors = (state.errors ?? 0) + 1;
+				delay = 5000;
+				if (state.errors >= MAX_ERRORS) {
+					// Giving up: the flight goes back to the tower, so its intent can fly again.
+					if (state.flight) await this.giveUp(config, `${MAX_ERRORS} errors in a row: ${state.lastError}`).catch(() => {});
+					this.ws = null;
+					state.flight = null;
+					state.phase = "done";
+				}
+			}
 		}
 		// stop() may have run while this turn waited on the model or the tower: the stop wins, and a
 		// flight this turn took off on goes back to the tower.
@@ -303,7 +317,13 @@ export class EdgeAgent extends DurableObject<Env> {
 				result = `Error: ${errorMessage(err)}`;
 			}
 			state.messages.push({ role: "tool", tool_call_id: call.id, content: result.slice(0, MAX_TOOL_OUTPUT) });
-			if (state.phase === "boarding") break; // landed: the flight is over
+			if (/^Error: .*no active flight/.test(result)) {
+				// The tower ended this flight: no more model turns on it.
+				this.ws = null;
+				state.flight = null;
+				state.phase = "boarding";
+			}
+			if (state.phase === "boarding") break; // landed (or ended): the flight is over
 		}
 		return 50;
 	}

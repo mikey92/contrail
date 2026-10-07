@@ -88,3 +88,54 @@ describe("mergeText inserts", () => {
 		expect(r.conflicts[0].symbols).toEqual(["clamp"]);
 	});
 });
+
+describe("mergeText inserts, by language", () => {
+	const base = 'import { a } from "./a.js";\n\nexport function one() {\n  return a;\n}\n';
+	it("keeps both multi-line imports whole", () => {
+		const ours = base.replace('import { a } from "./a.js";\n', 'import { a } from "./a.js";\nimport {\n  x,\n} from "./x.js";\n');
+		const theirs = base.replace('import { a } from "./a.js";\n', 'import { a } from "./a.js";\nimport {\n  y,\n} from "./y.js";\n');
+		const r = mergeText("m.js", base, ours, theirs);
+		expect(r.clean).toBe(true);
+		expect(r.text).toContain('import {\n  x,\n} from "./x.js";');
+		expect(r.text).toContain('import {\n  y,\n} from "./y.js";');
+	});
+	it("does not take two const enums for the same name", () => {
+		const ours = `${base}\nexport const enum Color {\n  Red,\n}\n`;
+		const theirs = `${base}\nexport const enum Size {\n  Small,\n}\n`;
+		const r = mergeText("m.ts", base, ours, theirs);
+		expect(r.clean).toBe(true);
+		expect(r.text).toContain("enum Color");
+		expect(r.text).toContain("enum Size");
+	});
+	it("reads declarations in the file's own language only", () => {
+		// Prose that starts with "let" declares nothing.
+		const r = mergeText("NOTES.md", "# Notes\n", "# Notes\nlet me know first\n", "# Notes\nlet me in later\n");
+		expect(r.clean).toBe(true);
+		const py = mergeText("m.py", "import os\n", "import os\n\ndef clamp(x):\n    return max(0, x)\n", "import os\n\ndef clamp(x):\n    return min(1, x)\n");
+		expect(py.clean).toBe(false);
+		expect(py.conflicts[0].symbols).toEqual(["clamp"]);
+	});
+});
+
+describe("mergeText inserts that share an import", () => {
+	it("keeps a multi-line import both sides added once, with both sides' code", () => {
+		const base = "export const k = 1;\n";
+		const ours = `${base}import {\n  a,\n} from "./a.js";\nexport function fa() {\n  return a;\n}\n`;
+		const theirs = `${base}import {\n  a,\n} from "./a.js";\nexport function fb() {\n  return a;\n}\n`;
+		const r = mergeText("src/x.js", base, ours, theirs);
+		expect(r.clean).toBe(true);
+		expect(r.text.match(/from "\.\/a\.js"/g)).toHaveLength(1);
+		expect(r.text).toContain('import {\n  a,\n} from "./a.js";\nexport function fa()');
+		expect(r.text).toContain("export function fb()");
+	});
+	it("keeps a parenthesized Python import both sides added once", () => {
+		const base = "x = 1\n";
+		const ours = `${base}from helpers import (\n    alpha,\n)\ndef test_a():\n    assert alpha()\n`;
+		const theirs = `${base}from helpers import (\n    alpha,\n)\ndef test_b():\n    assert alpha()\n`;
+		const r = mergeText("tests/test_x.py", base, ours, theirs);
+		expect(r.clean).toBe(true);
+		expect(r.text.match(/from helpers import/g)).toHaveLength(1);
+		expect(r.text).toContain("def test_a():");
+		expect(r.text).toContain("def test_b():");
+	});
+});

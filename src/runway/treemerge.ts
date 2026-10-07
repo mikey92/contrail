@@ -1,7 +1,7 @@
 // Three-way merge of whole trees: trunk ("ours") × a flight's workspace ("theirs") over their merge base.
 import { lineChanges, mergeText, touchedSymbols } from "../git/merge";
 import type { ConflictReport, FileChange } from "../shared/types";
-import { type FlatTree, listTree, readText, type Repo, type TreeItem, writeText } from "./gitops";
+import { type FlatTree, listTree, readItemText, type Repo, type TreeItem, writeText } from "./gitops";
 
 export interface TreeMergeResult {
 	files: FlatTree;
@@ -37,8 +37,8 @@ export async function describeChanges(repo: Repo, base: FlatTree, next: FlatTree
 		const b = base.get(path);
 		const n = next.get(path);
 		if (same(b, n)) continue;
-		const before = b ? await readText(repo, b.oid) : null;
-		const after = n ? await readText(repo, n.oid) : null;
+		const before = b ? await readItemText(repo, b) : null;
+		const after = n ? await readItemText(repo, n) : null;
 		const status: FileChange["status"] = !b ? "added" : !n ? "deleted" : "modified";
 		let additions = 0;
 		let deletions = 0;
@@ -82,7 +82,7 @@ export async function mergeTrees(repo: Repo, baseOid: string, oursOid: string, t
 			conflicts.push({ path, kind: "modify/delete", hunks: [], causedBy: [] });
 			continue;
 		}
-		const [bText, oText, tText] = await Promise.all([b ? readText(repo, b.oid) : "", readText(repo, o.oid), readText(repo, t.oid)]);
+		const [bText, oText, tText] = await Promise.all([b ? readItemText(repo, b) : "", readItemText(repo, o), readItemText(repo, t)]);
 		if (bText === null || oText === null || tText === null) {
 			conflicts.push({ path, kind: "binary", hunks: [], causedBy: [] });
 			continue;

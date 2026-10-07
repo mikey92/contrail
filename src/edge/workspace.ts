@@ -5,7 +5,7 @@ import { Buffer } from "node:buffer";
 import git from "isomorphic-git";
 import http from "isomorphic-git/http/web";
 import { MemoryFS } from "../git/memfs";
-import { type FlatTree, listTree, mergeBase, type Repo, writeFlatTree } from "../runway/gitops";
+import { type FlatTree, GITLINK, listTree, mergeBase, type Repo, writeFlatTree } from "../runway/gitops";
 import { mergeTrees } from "../runway/treemerge";
 
 const DIR = "/w";
@@ -153,7 +153,7 @@ export class Workspace {
 		const beforeTree = await this.flat(head);
 		const changed: string[] = [];
 		for (const [path, item] of merged.files) {
-			if (beforeTree.get(path)?.oid === item.oid) continue;
+			if (beforeTree.get(path)?.oid === item.oid || item.mode === GITLINK) continue;
 			const { blob } = await git.readBlob({ fs, dir, oid: item.oid, cache });
 			await this.write(path, new TextDecoder().decode(blob));
 			changed.push(path);

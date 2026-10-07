@@ -35,6 +35,8 @@ function isAdmin(c: { req: { raw: Request }; env: Env }): boolean {
 
 /** An agent's request body over 1 MB: a tool call never needs that much, so it is turned away unread. */
 const tooLarge = (req: Request) => Number(req.headers.get("content-length") ?? 0) > 1 << 20;
+/** The most a request anyone may send without a key (joining, launching edge agents) is read: a few fields. */
+const PUBLIC_BODY_MAX = 64 << 10;
 
 /** What an agent is told when its key no longer works: expired (with where to get a new one) or revoked. */
 function keyRefused(found: { expiredAt: number } | { revokedAt: number }, renew: string): string {
@@ -310,7 +312,7 @@ app.post("/api/p/:slug/edge/launch", async (c) => {
 	// An unknown slug must not wake (and create) a Tower.
 	if (!(await registry(c.env).get(c.req.param("slug")))) return c.json({ error: "not found" }, 404);
 	if (!isAdmin(c)) {
-		const body = await c.req.json<{ count?: number }>().catch(() => ({}) as { count?: number });
+		const body = await readJson<{ count?: number }>(c.req.raw, PUBLIC_BODY_MAX, {});
 		const res = await tower(c.env, c.req.param("slug")).launchEdgePublic({ count: Number(body.count ?? 3) });
 		return "error" in res ? c.json(res, 429) : c.json(res);
 	}
@@ -336,7 +338,7 @@ app.post("/api/p/:slug/join", async (c) => {
 	const slug = c.req.param("slug");
 	const entry = await registry(c.env).get(slug);
 	if (!entry) return c.json({ error: "not found" }, 404);
-	const body = await c.req.json<{ joinCode?: string; callsign?: string; kind?: any; model?: string }>().catch(() => ({}) as any);
+	const body = await readJson<{ joinCode?: string; callsign?: string; kind?: any; model?: string }>(c.req.raw, PUBLIC_BODY_MAX, {});
 	const admin = isAdmin(c);
 	if (!admin && !(typeof body.joinCode === "string" && safeEqual(body.joinCode, entry.joinCode))) return c.json({ error: "join code required" }, 401);
 	const input = { callsign: body.callsign, kind: body.kind, model: body.model };

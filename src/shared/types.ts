@@ -234,8 +234,9 @@ export interface CenterSnapshot {
 	behind: number;
 	compositions: number;
 	sectors: (SectorInfo & { summary: SectorSummary | null })[];
-	/** The latest crossings, newest first, and how many crossing intents wait for an agent. */
+	/** The latest crossings, newest first; how many crossings landed in all; how many crossing intents wait for an agent. */
 	crossings: Crossing[];
+	landedCrossings: number;
 	openIntents: number;
 }
 
@@ -308,6 +309,8 @@ export interface Crossing {
 	updatedAt: number;
 	landedAt: number | null;
 	retiredAt: number | null;
+	/** It landed over more than one attempt (a sector's runway restarted between the two phases), so not at once. */
+	inParts?: boolean;
 }
 
 /** Everything the Radar UI needs to render a project. */

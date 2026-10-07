@@ -177,7 +177,10 @@ export async function findSubtree(repo: Repo, head: string, dir: string, want: s
 	return null;
 }
 
-/** All blobs of a commit's tree, keyed by path. */
+/** The mode of a submodule (gitlink) entry: it names a commit of another repository, not a blob of this one. */
+export const GITLINK = "160000";
+
+/** All blobs (and submodule gitlinks) of a commit's tree, keyed by path. */
 export async function listTree(repo: Repo, commitOrTree: string): Promise<FlatTree> {
 	const out: FlatTree = new Map();
 	const walkTree = async (treeOid: string, prefix: string) => {
@@ -186,6 +189,8 @@ export async function listTree(repo: Repo, commitOrTree: string): Promise<FlatTr
 			const path = prefix ? `${prefix}/${entry.path}` : entry.path;
 			if (entry.type === "tree") await walkTree(entry.oid, path);
 			else if (entry.type === "blob") out.set(path, { oid: entry.oid, mode: entry.mode });
+			// A submodule is kept as it is: dropping it would delete it from trunk with the next landing.
+			else if (entry.type === "commit") out.set(path, { oid: entry.oid, mode: GITLINK });
 		}
 	};
 	const { type } = await git.readObject({ fs: repo.fs, dir: repo.dir, oid: commitOrTree, format: "parsed", cache: repo.cache });
@@ -209,6 +214,11 @@ export async function readText(repo: Repo, oid: string): Promise<string | null> 
 	} catch {
 		return null;
 	}
+}
+
+/** A tree entry as UTF-8 text, or null for a binary file or a submodule (whose commit isn't in this repository). */
+export async function readItemText(repo: Repo, item: TreeItem): Promise<string | null> {
+	return item.mode === GITLINK ? null : readText(repo, item.oid);
 }
 
 export async function writeText(repo: Repo, text: string): Promise<string> {
@@ -236,9 +246,9 @@ export async function writeFlatTree(repo: Repo, files: FlatTree): Promise<string
 		d.blobs.set(parts[parts.length - 1], item);
 	}
 	const write = async (d: Dir): Promise<string> => {
-		const entries: { mode: string; path: string; oid: string; type: "blob" | "tree" }[] = [];
+		const entries: { mode: string; path: string; oid: string; type: "blob" | "tree" | "commit" }[] = [];
 		for (const [name, sub] of d.dirs) entries.push({ mode: "040000", path: name, oid: await write(sub), type: "tree" });
-		for (const [name, item] of d.blobs) entries.push({ mode: item.mode, path: name, oid: item.oid, type: "blob" });
+		for (const [name, item] of d.blobs) entries.push({ mode: item.mode, path: name, oid: item.oid, type: item.mode === GITLINK ? "commit" : "blob" });
 		return git.writeTree({ fs: repo.fs, dir: repo.dir, tree: entries });
 	};
 	return write(root);

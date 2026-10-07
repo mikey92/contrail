@@ -18,9 +18,9 @@ import {
 	commit,
 	commitTreeOid,
 	fetchFork,
-	type FlatTree,
 	fetchMain,
 	fetchNotes,
+	type FlatTree,
 	listTree,
 	log,
 	mergeBase,
@@ -28,6 +28,7 @@ import {
 	type Person,
 	pushMain,
 	pushNotes,
+	readItemText,
 	readText,
 	type Repo,
 	seed,
@@ -51,6 +52,8 @@ export interface LandingJob {
 	heldByOthers?: HeldByOther[];
 	/** The workspace commit a human approved. Commits pushed after it need their own review. */
 	approvedHead?: string;
+	/** A sector's directory: a change outside it would never reach the monorepo, so it doesn't land. */
+	prefix?: string;
 	/** The flight's code and when it took off: a change of its already on trunk under an earlier landing id is its landing. */
 	flight?: { code: string; since: number };
 }
@@ -109,6 +112,8 @@ function failTests(outcome: LandingOutcome, tests: TestReport) {
 interface Gate {
 	config: TestConfig;
 	tests: number;
+	/** The trunk commit it was read from. */
+	commit: string;
 }
 
 const MAX_SUMMARY_FILE_BYTES = 256 * 1024;
@@ -159,15 +164,22 @@ export class Runway extends DurableObject<Env> {
 	private async sync(trunk: string): Promise<string> {
 		const token = await this.trunkToken(trunk);
 		if (this.repo && this.trunkName === trunk && this.repo.fs.byteSize < MAX_REPO_BYTES) {
-			const head = await fetchMain(this.repo, token);
-			await setMain(this.repo, head);
-			return head;
+			try {
+				const head = await fetchMain(this.repo, token);
+				await setMain(this.repo, head);
+				return head;
+			} catch (err) {
+				this.repo = null; // start over from a clean clone next time
+				throw err;
+			}
 		}
-		this.repo = newRepo();
-		this.trunkName = trunk;
-		const head = await cloneMain(this.repo, this.remote!, token);
-		const repo = this.repo;
+		// The clone is kept only once it is whole: a half-made one would pass for a warm clone next time.
+		this.repo = null;
+		const repo = newRepo();
+		const head = await cloneMain(repo, this.remote!, token);
 		await retryTransient(() => fetchNotes(repo, token));
+		this.repo = repo;
+		this.trunkName = trunk;
 		return head;
 	}
 
@@ -326,6 +338,11 @@ export class Runway extends DurableObject<Env> {
 				outcome.changes = merged.changes;
 				outcome.unioned = merged.unioned;
 				if (merged.changes.length === 0) throw new Error("nothing to land: the workspace makes no changes");
+				const outside = job.prefix ? merged.changes.filter((c) => !c.path.startsWith(job.prefix!)) : [];
+				if (outside.length)
+					throw new Error(
+						`this sector owns ${job.prefix} only, and ${outside.slice(0, 3).map((c) => c.path).join(", ")}${outside.length > 3 ? ` and ${outside.length - 3} more` : ""} ${outside.length > 1 ? "are" : "is"} outside it: change other sectors through the monorepo's Center (a crossing)`,
+					);
 				const violations = airspaceViolations(job.heldByOthers ?? [], merged.changes);
 				if (violations.length) {
 					outcome.violations = violations;
@@ -431,7 +448,9 @@ export class Runway extends DurableObject<Env> {
 				if (opts.retry < 1) return this.landTrain(trunk, jobs, { ...opts, retry: opts.retry + 1, heads: new Map() });
 				throw err;
 			}
-			await pushNotes(r, token).catch(() => {});
+			// Notes that trunk turned down (they don't build on its own) mean this clone's notes are stale: clone again next time.
+			const notes = await pushNotes(r, token).catch(() => null);
+			if (!notes?.ok) this.repo = null;
 		}
 		// A replayed train whose landings were all on trunk already still reports trunk: the Tower may not have heard.
 		const moved = tip !== start || opts.retry > 0 || outcomes.some((o) => o.status === "landed");
@@ -440,13 +459,28 @@ export class Runway extends DurableObject<Env> {
 
 	/** Runs the test suite of `tree` in a Dynamic Worker. */
 	private async test(r: Repo, tree: string, files: FlatTree, gate: Gate): Promise<TestReport> {
+		const report = await verifyTree(this.env.LOADER, tree, await this.texts(r, files), gate.config, gate.tests > 0);
+		// "No tests ran" holds a change to trunk's own standard: a trunk whose suite runs nothing either can't drop tests.
+		if (report.error?.startsWith("no tests ran") && !(await this.trunkRunsTests(r, gate))) return { passed: 0, failed: 0, results: [], ms: report.ms };
+		return report;
+	}
+
+	/** The JavaScript and JSON files of a tree as text, for the test runner. */
+	private async texts(r: Repo, files: FlatTree): Promise<Map<string, string>> {
 		const texts = new Map<string, string>();
 		for (const [path, item] of files) {
 			if (!/\.(m?js|cjs|json)$/.test(path)) continue;
-			const text = await readText(r, item.oid);
+			const text = await readItemText(r, item);
 			if (text !== null) texts.set(path, text);
 		}
-		return verifyTree(this.env.LOADER, tree, texts, gate.config, gate.tests > 0);
+		return texts;
+	}
+
+	/** Whether trunk's own suite (at the gate's commit) runs at least one test. */
+	private async trunkRunsTests(r: Repo, gate: Gate): Promise<boolean> {
+		const tree = await commitTreeOid(r, gate.commit);
+		const report = await verifyTree(this.env.LOADER, tree, await this.texts(r, await listTree(r, gate.commit)), gate.config, false);
+		return report.passed + report.failed > 0;
 	}
 
 	/** The test gate as trunk defines it: its contrail.json and how many test files it runs. */
@@ -455,22 +489,28 @@ export class Runway extends DurableObject<Env> {
 		const item = tree.get(CONFIG_FILE);
 		const text = item ? await readText(r, item.oid) : null;
 		const config = testConfig(new Map(text === null ? [] : [[CONFIG_FILE, text]]));
-		return { config, tests: testFiles(config, tree.keys()).length };
+		return { config, tests: testFiles(config, tree.keys()).length, commit: commitOid };
 	}
 
 	/**
 	 * Puts trunk's first tree back as a new commit on top of its history, so a playground can start over
 	 * without rewriting anything. Returns the new head (or the current one if trunk is already there).
 	 */
-	async restoreFirstTree(trunk: string, message: string, author: Person): Promise<string> {
+	async restoreFirstTree(trunk: string, message: string, author: Person, from: string | null = null): Promise<string> {
 		return this.exclusive(async () => {
 			const start = await this.sync(trunk);
 			const r = this.repo!;
-			const history = await log(r, start, 10_000);
-			const first = history[history.length - 1];
-			if (!first || first.commit.parent.length > 0) throw new Error("trunk's first commit is out of reach");
-			if (first.commit.tree === (await commitTreeOid(r, start))) return start;
-			const head = await commit(r, { tree: first.commit.tree, parents: [start], message, author });
+			// The commit the project started from (an import's head); trunk's first commit for projects older than that.
+			let tree: string;
+			if (from) tree = await commitTreeOid(r, from);
+			else {
+				const history = await log(r, start, 10_000);
+				const first = history[history.length - 1];
+				if (!first || first.commit.parent.length > 0) throw new Error("trunk's first commit is out of reach");
+				tree = first.commit.tree;
+			}
+			if (tree === (await commitTreeOid(r, start))) return start;
+			const head = await commit(r, { tree, parents: [start], message, author });
 			await setMain(r, head);
 			try {
 				await pushMain(r, await this.trunkToken(trunk));
@@ -497,7 +537,7 @@ export class Runway extends DurableObject<Env> {
 			let lines = this.lineCache.get(item.oid);
 			let symbols = this.symbolCache.get(item.oid);
 			if (lines === undefined || symbols === undefined) {
-				const text = await readText(r, item.oid);
+				const text = await readItemText(r, item);
 				if (text === null || text.length > MAX_SUMMARY_FILE_BYTES) {
 					lines = 0;
 					symbols = [];

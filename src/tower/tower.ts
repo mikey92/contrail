@@ -486,6 +486,8 @@ export class Tower extends DurableObject<Env> {
 		if (!existing) this.bump("repos");
 		this.emit("project.created", `Trunk repo ${trunkRepo} is ready`, { data: { trunkRepo } });
 		await this.refreshTrunk();
+		// What a playground goes back to when it starts over: trunk as the project began (an import's head, not its first commit).
+		if (!this.meta<string | null>("startCommit", null)) this.setMeta("startCommit", this.meta<TrunkState>("trunk", { head: null, files: [], landedCount: 0 }).head);
 		await this.readTestCommand();
 		this.setMeta("ready", true);
 		return info;
@@ -595,6 +597,8 @@ export class Tower extends DurableObject<Env> {
 		const active = this.row(`SELECT * FROM flights WHERE agent_id = ? AND status IN (${ACTIVE.map(() => "?").join(",")})`, agent.id, ...ACTIVE);
 		if (active && !this.row("SELECT id FROM landings WHERE flight_id = ? AND status IN ('merging', 'verifying')", active.id as string))
 			this.endFlight(this.toFlight(active), null, "its agent's key was revoked");
+		// An edge agent flies on its own, without a key: stop it.
+		if (agent.kind === "edge") this.ctx.waitUntil(this.edgeStub(agent.id).stop().catch(() => {}));
 		this.emit("agent.revoked", `${agent.callsign}'s key was revoked by the operator`, { agentId: agent.id });
 		return { revoked: agent.callsign };
 	}
@@ -662,7 +666,10 @@ export class Tower extends DurableObject<Env> {
 
 	/** Agents can file follow-up work for other agents. */
 	async fileIntent(agentId: string, input: { title: string; body?: string; priority?: number }): Promise<Intent> {
+		// A playground starting over takes no new work until it has.
+		if (this.restarting) await this.restarting.catch(() => false);
 		const agent = this.agentById(agentId);
+		this.touchAgent(agentId);
 		const recent = this.row<{ c: number }>("SELECT COUNT(*) AS c FROM intents WHERE created_by != 'operator' AND created_at > ?", now() - 3600_000)?.c ?? 0;
 		if (recent >= 30) throw new Error("agents have filed 30 intents in the last hour; ask the operator to file more");
 		if (!oneLine(input.title, 200)) throw new Error("an intent needs a title");
@@ -724,7 +731,10 @@ export class Tower extends DurableObject<Env> {
 	// ───────────────────────── flights ─────────────────────────
 
 	async takeOff(agentId: string, opts: { intent?: string | number | null; leg?: boolean } = {}): Promise<TakeOffResult | { idle: true; message: string; radio: RadioMessage[] }> {
+		// A playground starting over takes no new flights until it has.
+		if (this.restarting) await this.restarting.catch(() => false);
 		const agent = this.agentById(agentId);
+		if (this.row<{ revoked_at: number | null }>("SELECT revoked_at FROM agents WHERE id = ?", agentId)?.revoked_at) throw new Error("this agent's key was revoked by the operator");
 		this.touchAgent(agentId);
 		const active = this.row(`SELECT * FROM flights WHERE agent_id = ? AND status IN (${ACTIVE.map(() => "?").join(",")})`, agentId, ...ACTIVE);
 		if (active) {
@@ -826,9 +836,10 @@ export class Tower extends DurableObject<Env> {
 			if (!workspace) throw new Error("workspace fork did not become ready");
 			const upstream = await this.mintWorkspace(project.trunkRepo, "read");
 			this.bump("repos");
-			// Aborted while its workspace was being made: it stays aborted.
-			if (this.flightById(flightId).status !== "taxiing") throw new Error("the flight was aborted while its workspace was being made");
-			this.setFlightStatus(flightId, "airborne");
+			// Aborted while its workspace was being made: it stays aborted. (Holding for code it asked for meanwhile is fine.)
+			const status = this.flightById(flightId).status;
+			if (status === "aborted") throw new Error("the flight was aborted while its workspace was being made");
+			if (status === "taxiing") this.setFlightStatus(flightId, "airborne");
 			this.addContrail(flightId, agentId, "intent", `INT-${intent.seq} ${intent.title}${intent.body ? `\n\n${intent.body}` : ""}`);
 			const flight = this.flightById(flightId);
 			this.patch("flight", flight);
@@ -863,6 +874,7 @@ export class Tower extends DurableObject<Env> {
 			};
 		} catch (err) {
 			this.setFlightStatus(flightId, "aborted");
+			this.releaseAll(flightId);
 			this.sql.exec("UPDATE intents SET status = 'open', flight_id = NULL WHERE id = ? AND flight_id = ?", intent.id, flightId);
 			this.patch("flight", this.flightById(flightId));
 			this.patch("intent", this.intentById(intent.id));
@@ -874,6 +886,7 @@ export class Tower extends DurableObject<Env> {
 
 	async refreshWorkspace(agentId: string, flightRef?: string): Promise<{ workspace: Workspace; upstream: Workspace }> {
 		const flight = this.ownFlight(agentId, flightRef);
+		this.touchAgent(agentId);
 		return { workspace: await this.mintWorkspace(flight.repo, "write"), upstream: await this.mintWorkspace(this.project().trunkRepo, "read") };
 	}
 
@@ -1069,6 +1082,7 @@ export class Tower extends DurableObject<Env> {
 
 	async releaseClearance(agentId: string, input: { targets?: string[]; flight?: string }): Promise<{ released: string[]; radio: RadioMessage[] }> {
 		const flight = this.ownFlight(agentId, input.flight);
+		this.touchAgent(agentId);
 		const targets = input.targets?.map(normalizeTarget);
 		const mine = this.rows<{ id: string; target: string }>("SELECT id, target FROM clearances WHERE flight_id = ?", flight.id);
 		const released = mine.filter((c) => !targets || targets.includes(c.target));
@@ -1130,6 +1144,7 @@ export class Tower extends DurableObject<Env> {
 	async radio(agentId: string, input: { to: string; text: string; flight?: string }): Promise<{ delivered: string[]; radio: RadioMessage[] }> {
 		const flight = this.ownFlight(agentId, input.flight);
 		const agent = this.agentById(agentId);
+		this.touchAgent(agentId);
 		const to = oneLine(input.to, 40).toUpperCase();
 		const recipients = this.rows(
 			`SELECT f.* FROM flights f JOIN agents a ON a.id = f.agent_id WHERE f.status IN (${ACTIVE.map(() => "?").join(",")}) AND f.id != ? AND (? = 'ALL' OR f.code = ? OR a.callsign = ?)`,
@@ -1221,6 +1236,7 @@ export class Tower extends DurableObject<Env> {
 	}
 
 	async landingStatus(agentId: string, input: { flight?: string }): Promise<LandingView> {
+		this.touchAgent(agentId);
 		let flight: Flight;
 		try {
 			flight = this.ownFlight(agentId, input.flight);
@@ -1273,6 +1289,7 @@ export class Tower extends DurableObject<Env> {
 			review: this.meta<{ review?: string[] }>("policy", {}).review ?? [],
 			approvedHead: l.review?.decision === "approved" ? (l.forkHead ?? undefined) : undefined,
 			flight: { code: flight.code, since: flight.createdAt },
+			prefix: this.project().prefix,
 			heldByOthers: granted
 				.filter((c) => c.flightId !== flight.id)
 				.map((c) => {
@@ -1337,7 +1354,7 @@ export class Tower extends DurableObject<Env> {
 						result = await this.runway().land(project.trunkRepo, jobs);
 					} catch (err) {
 						if (jobs.length === 1) {
-							this.finishLanding(queued[0], { status: "failed", error: `runway error: ${errorMessage(err)}` });
+							this.failOnRunway(queued[0], err);
 							continue;
 						}
 						// One landing can be what brings the runway down (a workspace too big to take in, say):
@@ -1348,7 +1365,7 @@ export class Tower extends DurableObject<Env> {
 								for (const outcome of alone.outcomes) this.applyOutcome(queued[i], outcome);
 								await this.trunkMoved(alone);
 							} catch (one) {
-								this.finishLanding(queued[i], { status: "failed", error: `runway error: ${errorMessage(one)}` });
+								this.failOnRunway(queued[i], one);
 							}
 						}
 						continue;
@@ -1363,6 +1380,15 @@ export class Tower extends DurableObject<Env> {
 		} finally {
 			this.processing = false;
 		}
+	}
+
+	/** A landing the runway failed on: the flight is diverted, so its agent fixes and asks again. */
+	private failOnRunway(l: Landing, err: unknown) {
+		this.finishLanding(l, { status: "failed", error: `runway error: ${errorMessage(err)}` });
+		const flight = this.flightById(l.flightId);
+		if (flight.status !== "approach") return;
+		this.setFlightStatus(flight.id, "diverted");
+		this.patch("flight", this.flightById(flight.id));
 	}
 
 	/** Records what a train left on trunk; a sector tells its Center, which folds the new trunk into the monorepo. */
@@ -1578,6 +1604,7 @@ export class Tower extends DurableObject<Env> {
 
 	/** The landed intents, plans and decisions behind a piece of code. `askedBy` is set when an agent asks. */
 	async why(input: { path: string; line?: number; symbol?: string }, askedBy?: string): Promise<Record<string, unknown>> {
+		if (askedBy) this.touchAgent(askedBy);
 		const asked = String(input.path ?? "").slice(0, 300);
 		const path = normalizeTarget(asked).split("#")[0];
 		const trunk = this.meta<TrunkState>("trunk", { head: null, files: [], landedCount: 0 });
@@ -1798,10 +1825,10 @@ export class Tower extends DurableObject<Env> {
 				maxFlights: input.maxFlights ?? 6,
 				mode: scripted ? "scripted" : "llm",
 			});
-			fleet.push(agent.id);
 			launched.push(agent);
 		}
-		this.setMeta("edgeFleet", fleet);
+		// Read again: another launch may have added agents while this one awaited.
+		this.setMeta("edgeFleet", [...new Set([...this.meta<string[]>("edgeFleet", []), ...launched.map((a) => a.id)])]);
 		if (launched.length)
 			this.emit(
 				"edge.launched",
@@ -1844,15 +1871,16 @@ export class Tower extends DurableObject<Env> {
 				project.trunkRepo,
 				"Playground: back to the starting code\n\nEvery intent had landed, so the playground starts over for the next visitor.",
 				{ name: "Contrail Tower", email: "tower@contrail.dev" },
+				this.meta<string | null>("startCommit", null),
 			);
-			this.setMeta("stats", { repos: 1 });
 			await this.refreshTrunk();
-			// The finished round's workspace forks go with its flights.
-			const forks = await this.liveForks();
-			this.ctx.waitUntil(Promise.all(forks.map((name) => this.env.ARTIFACTS.delete(name).catch(() => false))));
 			// No awaits from here on: no take-off can see the intents reopen before trunk and the tables are reset.
-			// A flight that took off meanwhile (on an intent an agent filed) keeps this round going.
+			// (Take-offs and new intents wait while a restart is under way; this is a last check all the same.)
 			if (this.row(`SELECT id FROM flights WHERE status IN (${ACTIVE.map(() => "?").join(",")}) LIMIT 1`, ...ACTIVE)) return false;
+			// The finished round's workspace forks go with its flights.
+			const forks = this.rows<{ repo: string }>("SELECT repo FROM flights WHERE retired_at IS NULL").map((r) => r.repo);
+			this.ctx.waitUntil(Promise.all(forks.map((name) => this.env.ARTIFACTS.delete(name).catch(() => false))));
+			this.setMeta("stats", { repos: 1 });
 			this.sql.exec("DELETE FROM intents WHERE created_by != 'operator'");
 			this.sql.exec("UPDATE intents SET status = 'open', flight_id = NULL, landed_commit = NULL");
 			for (const table of ["flights", "clearances", "landings", "contrail", "inbox", "symbol_history", "events"]) this.sql.exec(`DELETE FROM ${table}`);
@@ -2115,6 +2143,12 @@ export class Tower extends DurableObject<Env> {
 
 	async alarm() {
 		this.abortStale();
+		// A flight waiting on its landing (the runway, a reviewer) keeps what it is cleared for meanwhile.
+		this.sql.exec(
+			"UPDATE clearances SET expires_at = ? WHERE expires_at <= ? AND flight_id IN (SELECT flight_id FROM landings WHERE status IN ('queued', 'merging', 'verifying', 'review'))",
+			now() + CLEARANCE_TTL_MS,
+			now(),
+		);
 		this.sql.exec("DELETE FROM clearances WHERE expires_at <= ?", now());
 		// Radio messages an agent has read are kept a day, not forever.
 		this.sql.exec("DELETE FROM inbox WHERE delivered = 1 AND at < ?", now() - 86_400_000);
@@ -2135,14 +2169,17 @@ export class Tower extends DurableObject<Env> {
 			RETIRE_BATCH,
 		);
 		if (!due.length) return;
-		// delete() is false when the repo is already gone, which counts as retired too; a throw is retried next time.
-		const retired = (await Promise.all(due.map((f) => this.env.ARTIFACTS.delete(f.repo).then(() => f.id, () => null)))).filter((id): id is string => id !== null);
+		// delete() is false when the repo is already gone (its fork never got made, say): retired too, but it was
+		// never counted. A throw is retried next time.
+		const results = await Promise.all(due.map((f) => this.env.ARTIFACTS.delete(f.repo).then((existed) => ({ id: f.id, existed }), () => null)));
+		const retired = results.filter((r): r is { id: string; existed: boolean } => r !== null);
 		const t = now();
-		for (const id of retired) {
+		for (const { id } of retired) {
 			this.sql.exec("UPDATE flights SET retired_at = ? WHERE id = ?", t, id);
 			this.patch("flight", this.flightById(id));
 		}
-		if (retired.length) this.bump("repos", -retired.length);
+		const removed = retired.filter((r) => r.existed).length;
+		if (removed) this.bump("repos", -removed);
 	}
 
 	/** Workspace forks this project still has (for the orphan sweep): every flight whose fork was not retired. */

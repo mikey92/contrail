@@ -45,6 +45,7 @@ function toSnapshot(header: Header, x: Sample): CenterSnapshot {
 			return { ...sector, summary: row ? (Object.fromEntries(header.fields.map((f, j) => [f, row[j]])) as unknown as SectorSummary) : null };
 		}),
 		crossings: [],
+		landedCrossings: 0,
 		openIntents: 0,
 	};
 }
@@ -210,10 +211,16 @@ function CenterView({
 	sectorHref?: (sector: string) => string;
 	children?: preact.ComponentChildren;
 }) {
-	const [clone, setClone] = useState<string[] | null>(null);
+	// The clone commands, or why they could not be had.
+	const [clone, setClone] = useState<{ commands: string[] } | { error: string } | null>(null);
 	const openClone = async () => {
-		const res = await fetch(`/api/c/${slug}/clone`);
-		if (res.ok) setClone(((await res.json()) as { commands: string[] }).commands);
+		try {
+			const res = await fetch(`/api/c/${slug}/clone`);
+			const d = (await res.json().catch(() => ({}))) as { commands?: string[]; error?: string };
+			setClone(res.ok && d.commands ? { commands: d.commands } : { error: `The clone commands aren’t available right now${d.error ? ` (${d.error})` : ""}. Try again in a moment.` });
+		} catch {
+			setClone({ error: "The clone commands couldn’t be loaded. Check your connection and try again." });
+		}
 	};
 
 	const sum = (k: "inAir" | "holding" | "landed" | "intents" | "agents") => snap.sectors.reduce((total, s) => total + (s.summary?.[k] ?? 0), 0);
@@ -236,8 +243,8 @@ function CenterView({
 				</a>
 				<div class="proj">
 					<h1 class="proj-name">{snap.center.name}</h1>
-					<div class="proj-sub" title={`The monorepo trunk is at ${snap.head ?? "—"}, composed from ${snap.sectors.length} sectors ${n(snap.compositions)} time${snap.compositions === 1 ? "" : "s"}.`}>
-						<span class="mono">monorepo @ {snap.head?.slice(0, 8) ?? "—"}</span> · {snap.sectors.length} sectors · {n(snap.compositions)} composition{snap.compositions === 1 ? "" : "s"}
+					<div class="proj-sub" title={`The monorepo trunk is at ${snap.head ?? "—"}, composed from ${sectors(snap.sectors.length)} ${n(snap.compositions)} time${snap.compositions === 1 ? "" : "s"}.`}>
+						<span class="mono">monorepo @ {snap.head?.slice(0, 8) ?? "—"}</span> · {sectors(snap.sectors.length)} · {n(snap.compositions)} composition{snap.compositions === 1 ? "" : "s"}
 					</div>
 				</div>
 				<div class="stats">
@@ -319,7 +326,13 @@ function CenterView({
 				<Dialog kicker="Read-only, valid for an hour" title="Clone Monorepo" onClose={() => setClone(null)}>
 					<div class="connect">
 						<p>The composed trunk: every sector’s directory at its latest landing. Each commit names the sector heads it folded in.</p>
-						<Command text={clone.join("\n")} />
+						{"commands" in clone ? (
+							<Command text={clone.commands.join("\n")} />
+						) : (
+							<div class="muted" role="alert">
+								{clone.error}
+							</div>
+						)}
 					</div>
 				</Dialog>
 			)}
@@ -327,14 +340,18 @@ function CenterView({
 	);
 }
 
+const sectors = (n: number) => `${n} ${n === 1 ? "sector" : "sectors"}`;
+
 /** A crossing's state in a few words, with the status chip's tone. */
 function crossingState(cx: Crossing): { label: string; tone: string } {
-	if (cx.status === "landed") return { label: `Landed in ${cx.legs.filter((l) => l.landing?.status === "landed").length} sectors at once`, tone: "landed" };
+	const landed = cx.legs.filter((l) => l.landing?.status === "landed").length;
+	if (cx.status === "landed") return { label: `Landed in ${sectors(landed)}${cx.inParts ? "" : " at once"}`, tone: "landed" };
 	if (cx.status === "aborted") return { label: "Aborted", tone: "aborted" };
 	if (cx.landing?.status === "landing") return { label: "Landing", tone: "approach" };
 	if (cx.status === "diverted") {
-		const landed = cx.legs.filter((l) => l.landing?.status === "landed").length;
-		return { label: landed ? `Landed in ${landed} of ${cx.legs.length} sectors` : "Landed nowhere", tone: "diverted" };
+		// Out of the legs that tried to land: a leg that only asked for clearance had nothing to land.
+		const tried = cx.legs.filter((l) => l.landing).length;
+		return { label: landed ? `Landed in ${landed} of ${sectors(tried)}` : "Landed nowhere", tone: "diverted" };
 	}
 	return { label: "In the air", tone: "airborne" };
 }
@@ -354,7 +371,7 @@ function legState(leg: CrossingLeg): { label: string; tone: string } {
 /** Changes that span sectors: each flies a leg in every sector it touches and lands in all of them, or in none. */
 function Crossings({ snap, now }: { snap: CenterSnapshot; now: number }) {
 	const order = (leg: CrossingLeg) => snap.center.sectors.findIndex((s) => s.slug === leg.sector);
-	const landed = snap.crossings.filter((cx) => cx.status === "landed").length;
+	const landed = snap.landedCrossings ?? snap.crossings.filter((cx) => cx.status === "landed").length;
 	return (
 		<section class="crossings">
 			<h2 class="crossings-title" id="crossings">
