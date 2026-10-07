@@ -38,11 +38,34 @@ export async function fetchMain(repo: Repo, token: string): Promise<string> {
 	return git.resolveRef({ fs: repo.fs, dir: repo.dir, ref: "refs/remotes/origin/main" });
 }
 
+/** The most a workspace fork may send when it is fetched to land: an agent decides what is in it. */
+export const MAX_FORK_FETCH_BYTES = 32 * 1024 * 1024;
+
+/** isomorphic-git's HTTP client, turning down a response body over `max` bytes as it streams in. */
+export function boundedHttp(max: number): typeof http {
+	return {
+		async request(args) {
+			const res = await http.request(args);
+			const body = res.body;
+			if (!body) return res;
+			let total = 0;
+			res.body = (async function* () {
+				for await (const chunk of body) {
+					total += chunk.byteLength;
+					if (total > max) throw new Error(`the workspace sent more than ${Math.round(max / 1048576)} MB, too much to land`);
+					yield chunk;
+				}
+			})();
+			return res;
+		},
+	};
+}
+
 /** Fetches `main` of another Artifacts repo (an agent's workspace fork) into refs/remotes/<name>/main. */
 export async function fetchFork(repo: Repo, name: string, url: string, token: string): Promise<string> {
 	await git.addRemote({ fs: repo.fs, dir: repo.dir, remote: name, url, force: true });
 	try {
-		await git.fetch({ fs: repo.fs, http, dir: repo.dir, remote: name, ref: "main", singleBranch: true, headers: headers(token), cache: repo.cache });
+		await git.fetch({ fs: repo.fs, http: boundedHttp(MAX_FORK_FETCH_BYTES), dir: repo.dir, remote: name, ref: "main", singleBranch: true, headers: headers(token), cache: repo.cache });
 		return await git.resolveRef({ fs: repo.fs, dir: repo.dir, ref: `refs/remotes/${name}/main` });
 	} finally {
 		await git.deleteRemote({ fs: repo.fs, dir: repo.dir, remote: name }).catch(() => {});

@@ -45,6 +45,8 @@ const MAX_EVENTS = 1000;
 const MAX_AGENTS = 2000;
 /** A flight whose agent has not been heard from for this long is aborted, so its intent can fly again. */
 const STALE_FLIGHT_MS = 60 * 60_000;
+/** Radar viewers one airspace serves at once; more are asked to come back in a minute. */
+const MAX_VIEWERS = 500;
 /** Bumped when the way readTestCommand finds a command changes, so existing projects look again. */
 const TEST_COMMAND_CHECK = 2;
 /** A flight's workspace fork is kept this long after the flight lands or aborts, for inspection. */
@@ -547,10 +549,46 @@ export class Tower extends DurableObject<Env> {
 		return this.join(input);
 	}
 
-	/** The agent a key belongs to, or when the key expired. */
-	async authenticate(key: string): Promise<{ agent: Agent } | { expiredAt: number } | null> {
+	/** The agent a key belongs to, or when the key expired or was revoked. */
+	async authenticate(key: string): Promise<{ agent: Agent } | { expiredAt: number } | { revokedAt: number } | null> {
 		const r = this.row("SELECT * FROM agents WHERE key_hash = ?", await sha256(key));
-		return r ? keyCheck(this.toAgent(r)) : null;
+		if (!r) return null;
+		if (r.revoked_at) return { revokedAt: r.revoked_at as number };
+		return keyCheck(this.toAgent(r));
+	}
+
+	/**
+	 * An operator revokes an agent's key (by agent id or callsign): it stops working at once, and the agent's
+	 * flight is aborted unless the runway is landing it.
+	 */
+	async revokeKey(ref: string): Promise<{ revoked: string }> {
+		const r = this.row("SELECT * FROM agents WHERE id = ? OR callsign = ?", ref, ref.toUpperCase());
+		if (!r) throw new Error(`no agent ${ref}`);
+		const agent = this.toAgent(r);
+		this.sql.exec("UPDATE agents SET revoked_at = COALESCE(revoked_at, ?) WHERE id = ?", now(), agent.id);
+		const active = this.row(`SELECT * FROM flights WHERE agent_id = ? AND status IN (${ACTIVE.map(() => "?").join(",")})`, agent.id, ...ACTIVE);
+		if (active && !this.row("SELECT id FROM landings WHERE flight_id = ? AND status IN ('merging', 'verifying')", active.id as string))
+			this.endFlight(this.toFlight(active), null, "its agent's key was revoked");
+		this.emit("agent.revoked", `${agent.callsign}'s key was revoked by the operator`, { agentId: agent.id });
+		return { revoked: agent.callsign };
+	}
+
+	/** One-minute, single-use tickets for an operator's live feed of a private airspace: a URL never carries the admin key. */
+	private liveTickets = new Map<string, number>();
+
+	async liveTicket(): Promise<{ ticket: string; expiresAt: number }> {
+		for (const [k, until] of this.liveTickets) if (until < now()) this.liveTickets.delete(k);
+		const ticket = randomToken("lt");
+		const expiresAt = now() + 60_000;
+		this.liveTickets.set(await sha256(ticket), expiresAt);
+		return { ticket, expiresAt };
+	}
+
+	async redeemLiveTicket(ticket: string): Promise<boolean> {
+		const key = await sha256(ticket);
+		const until = this.liveTickets.get(key);
+		this.liveTickets.delete(key);
+		return until !== undefined && until > now();
 	}
 
 	// ───────────────────────── intents ─────────────────────────
@@ -1253,7 +1291,21 @@ export class Tower extends DurableObject<Env> {
 					try {
 						result = await this.runway().land(project.trunkRepo, jobs);
 					} catch (err) {
-						for (const l of queued) this.finishLanding(l, { status: "failed", error: `runway error: ${errorMessage(err)}` });
+						if (jobs.length === 1) {
+							this.finishLanding(queued[0], { status: "failed", error: `runway error: ${errorMessage(err)}` });
+							continue;
+						}
+						// One landing can be what brings the runway down (a workspace too big to take in, say):
+						// each lands on its own now, so only that one fails.
+						for (const [i, job] of jobs.entries()) {
+							try {
+								const alone = await this.runway().land(project.trunkRepo, [job]);
+								for (const outcome of alone.outcomes) this.applyOutcome(queued[i], outcome);
+								await this.trunkMoved(alone);
+							} catch (one) {
+								this.finishLanding(queued[i], { status: "failed", error: `runway error: ${errorMessage(one)}` });
+							}
+						}
 						continue;
 					}
 				}
@@ -1810,6 +1862,7 @@ export class Tower extends DurableObject<Env> {
 
 	async fetch(request: Request): Promise<Response> {
 		if (request.headers.get("Upgrade") !== "websocket") return new Response("expected websocket", { status: 426 });
+		if (this.ctx.getWebSockets().length >= MAX_VIEWERS) return new Response("this radar has as many viewers as it can serve; try again in a minute", { status: 503 });
 		const pair = new WebSocketPair();
 		this.ctx.acceptWebSocket(pair[1]);
 		pair[1].send(JSON.stringify({ kind: "snapshot", snapshot: await this.snapshot() }));

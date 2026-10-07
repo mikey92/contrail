@@ -25,10 +25,7 @@ const center = (env: Env, slug: string) => env.CENTER.get(env.CENTER.idFromName(
 
 function bearer(req: Request): string | null {
 	const h = req.headers.get("Authorization");
-	if (h?.startsWith("Bearer ")) return h.slice(7).trim();
-	// Browsers can't set headers on a WebSocket, so only the live feed takes a key from the URL.
-	const url = new URL(req.url);
-	return url.pathname.endsWith("/live") ? url.searchParams.get("key") : null;
+	return h?.startsWith("Bearer ") ? h.slice(7).trim() : null;
 }
 
 function isAdmin(c: { req: { raw: Request }; env: Env }): boolean {
@@ -39,12 +36,23 @@ function isAdmin(c: { req: { raw: Request }; env: Env }): boolean {
 /** An agent's request body over 1 MB: a tool call never needs that much, so it is turned away unread. */
 const tooLarge = (req: Request) => Number(req.headers.get("content-length") ?? 0) > 1 << 20;
 
+/** What an agent is told when its key no longer works: expired (with where to get a new one) or revoked. */
+function keyRefused(found: { expiredAt: number } | { revokedAt: number }, renew: string): string {
+	if ("expiredAt" in found) return expiredKeyMessage(found.expiredAt, renew);
+	return `This agent key was revoked by the operator on ${new Date(found.revokedAt).toISOString().slice(0, 16).replace("T", " ")} UTC.`;
+}
+
 // Where an agent with an expired key gets a new one.
 const renewProject = (c: { req: { url: string }; env: Env }, slug: string) =>
 	`Get a new one with Connect an Agent… on ${c.env.PUBLIC_ORIGIN ?? new URL(c.req.url).origin}/p/${slug} (or POST /api/p/${slug}/join with the join code)`;
 const renewCenter = (slug: string) => `Ask the operator for a new one (POST /api/c/${slug}/join with the admin key)`;
 
-app.onError((err, c) => c.json({ error: errorMessage(err) }, 400));
+app.onError((err, c) => {
+	const message = errorMessage(err);
+	// A Durable Object restarting or a platform hiccup is worth a retry, unlike a request the tower turned down.
+	const transient = /internal error|network connection|connection (?:reset|lost)|Durable Object reset|overloaded|exceeded|try again|HTTP Error: 5\d\d/i.test(message);
+	return c.json({ error: message }, transient ? 503 : 400);
+});
 
 app.get("/api/health", (c) => c.json({ ok: true, service: "contrail" }));
 
@@ -176,8 +184,27 @@ app.get("/api/p/:slug/snapshot", async (c) => {
 
 app.get("/api/p/:slug/live", async (c) => {
 	const slug = c.req.param("slug");
-	if (!(await canView(c, slug))) return c.json({ error: "not found" }, 404);
+	// A private airspace's feed opens with the admin key in a header, or with a ticket bought with it: a browser's
+	// WebSocket can't send headers, and a key in a URL ends up in logs.
+	const ticket = new URL(c.req.url).searchParams.get("ticket");
+	const entry = await registry(c.env).get(slug);
+	const allowed = !!entry && (entry.info.public || isAdmin(c) || (!!ticket && (await tower(c.env, slug).redeemLiveTicket(ticket))));
+	if (!allowed) return c.json({ error: "not found" }, 404);
 	return tower(c.env, slug).fetch(c.req.raw);
+});
+
+app.post("/api/p/:slug/live-ticket", async (c) => {
+	if (!isAdmin(c)) return c.json({ error: "admin key required" }, 401);
+	const slug = c.req.param("slug");
+	if (!(await registry(c.env).get(slug))) return c.json({ error: "not found" }, 404);
+	return c.json(await tower(c.env, slug).liveTicket());
+});
+
+app.post("/api/p/:slug/agents/:agent/revoke", async (c) => {
+	if (!isAdmin(c)) return c.json({ error: "admin key required" }, 401);
+	const slug = c.req.param("slug");
+	if (!(await registry(c.env).get(slug))) return c.json({ error: "not found" }, 404);
+	return c.json(await tower(c.env, slug).revokeKey(c.req.param("agent")));
 });
 
 app.get("/api/p/:slug/flights/:ref", async (c) => {
@@ -338,7 +365,7 @@ app.use("/api/p/:slug/agent/*", async (c, next) => {
 	if (!(await registry(c.env).get(slug))) return c.json({ error: "not found" }, 404);
 	const key = bearer(c.req.raw);
 	const found = key ? await tower(c.env, slug).authenticate(key) : null;
-	if (found && "expiredAt" in found) return c.json({ error: expiredKeyMessage(found.expiredAt, renewProject(c, slug)) }, 401);
+	if (found && !("agent" in found)) return c.json({ error: keyRefused(found, renewProject(c, slug)) }, 401);
 	if (!found) return c.json({ error: "agent key required (Authorization: Bearer ct_…)" }, 401);
 	c.set("agentId", found.agent.id);
 	await next();
@@ -367,7 +394,7 @@ app.all("/mcp/:slug", async (c) => {
 		tools: TOOLS,
 		target: t,
 		agentId: found && "agent" in found ? found.agent.id : null,
-		expired: found && "expiredAt" in found ? expiredKeyMessage(found.expiredAt, renewProject(c, slug)) : undefined,
+		refused: found && !("agent" in found) ? keyRefused(found, renewProject(c, slug)) : undefined,
 		projectName: entry.info.name,
 		instructions: PROTOCOL,
 	});
@@ -498,7 +525,7 @@ app.use("/api/c/:slug/agent/*", async (c, next) => {
 	if (!(await registry(c.env).getCenter(slug))) return c.json({ error: "not found" }, 404);
 	const key = bearer(c.req.raw);
 	const found = key ? await center(c.env, slug).authenticate(key) : null;
-	if (found && "expiredAt" in found) return c.json({ error: expiredKeyMessage(found.expiredAt, renewCenter(slug)) }, 401);
+	if (found && !("agent" in found)) return c.json({ error: keyRefused(found, renewCenter(slug)) }, 401);
 	if (!found) return c.json({ error: "agent key required (Authorization: Bearer ct_…)" }, 401);
 	c.set("agentId", found.agent.id);
 	await next();
@@ -513,6 +540,13 @@ app.post("/api/c/:slug/agent/:tool", async (c) => {
 	return c.json(await tool.run(center(c.env, c.req.param("slug")), c.get("agentId")!, boundArgs(args)));
 });
 
+app.post("/api/c/:slug/agents/:agent/revoke", async (c) => {
+	if (!isAdmin(c)) return c.json({ error: "admin key required" }, 401);
+	const slug = c.req.param("slug");
+	if (!(await registry(c.env).getCenter(slug))) return c.json({ error: "not found" }, 404);
+	return c.json(await center(c.env, slug).revokeKey(c.req.param("agent")));
+});
+
 app.all("/mcp/c/:slug", async (c) => {
 	if (tooLarge(c.req.raw)) return c.json({ error: "request too large" }, 413);
 	const slug = c.req.param("slug");
@@ -525,7 +559,7 @@ app.all("/mcp/c/:slug", async (c) => {
 		tools: CENTER_TOOLS,
 		target,
 		agentId: found && "agent" in found ? found.agent.id : null,
-		expired: found && "expiredAt" in found ? expiredKeyMessage(found.expiredAt, renewCenter(slug)) : undefined,
+		refused: found && !("agent" in found) ? keyRefused(found, renewCenter(slug)) : undefined,
 		projectName: info.name,
 		instructions: CROSSING_PROTOCOL,
 	});

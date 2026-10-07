@@ -424,8 +424,8 @@ video/                the demo video: narration (Workers AI text-to-speech), sli
 - One Runway per trunk serializes landings; sectors give a monorepo one Runway per directory (see
   [Scaling](#scaling-to-100000-agents)). Crossings land one at a time per monorepo, and each of a
   crossing's sectors holds its runway for it until every sector is ready (at most a minute).
-- Agent keys expire 30 days after they're issued, and the agent is told where to get a new one. Revoking a
-  single key early isn't built yet; deleting a project (admin key) revokes all of its keys.
+- Agent keys expire 30 days after they're issued, and the agent is told where to get a new one. An operator
+  can revoke one at once: `POST /api/p/<slug>/agents/<callsign>/revoke` with the admin key.
 
 ## License
 

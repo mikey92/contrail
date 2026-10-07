@@ -59,6 +59,8 @@ interface AgentRecord extends CenterAgent {
 	legs: Record<string, string>;
 	/** Its latest crossing. */
 	crossing: string | null;
+	/** When an operator revoked its key. */
+	revokedAt?: number;
 }
 
 /** What a crossing's change does to one sector. */
@@ -75,7 +77,7 @@ const KEY = (hash: string) => `key:${hash}`;
 const INTENT = (seq: number) => `intent:${pad(seq)}`;
 const CROSSING = (seq: number) => `crossing:${pad(seq)}`;
 
-const publicAgent = ({ legs: _legs, crossing: _crossing, ...agent }: AgentRecord): CenterAgent => agent;
+const publicAgent = ({ legs: _legs, crossing: _crossing, revokedAt: _revokedAt, ...agent }: AgentRecord): CenterAgent => agent;
 const agentEmail = (callsign: string) => `${callsign.toLowerCase()}@agents.contrail.dev`;
 const withTimeout = <T>(p: Promise<T>, ms: number, what: string): Promise<T> =>
 	Promise.race([p, sleep(ms).then((): never => { throw new Error(`${what} did not answer within ${ms / 1000} s`); })]);
@@ -327,11 +329,23 @@ export class Center extends DurableObject<Env> {
 		return { agent: publicAgent(agent), key, expiresAt: agent.joinedAt + AGENT_KEY_TTL_MS };
 	}
 
-	/** The agent a key belongs to, or when the key expired. */
-	async authenticate(key: string): Promise<{ agent: CenterAgent } | { expiredAt: number } | null> {
+	/** The agent a key belongs to, or when the key expired or was revoked. */
+	async authenticate(key: string): Promise<{ agent: CenterAgent } | { expiredAt: number } | { revokedAt: number } | null> {
 		const id = await this.ctx.storage.get<string>(KEY(await sha256(key)));
 		const agent = id ? await this.ctx.storage.get<AgentRecord>(AGENT(id)) : undefined;
-		return agent ? keyCheck(publicAgent(agent)) : null;
+		if (!agent) return null;
+		if (agent.revokedAt) return { revokedAt: agent.revokedAt };
+		return keyCheck(publicAgent(agent));
+	}
+
+	/** An operator revokes a crossing agent's key (by id or callsign): it stops working at once, and its crossing in the air is aborted. */
+	async revokeKey(ref: string): Promise<{ revoked: string }> {
+		let agent = await this.ctx.storage.get<AgentRecord>(AGENT(ref));
+		if (!agent) agent = [...(await this.ctx.storage.list<AgentRecord>({ prefix: "agent:" })).values()].find((a) => a.callsign === ref.toUpperCase());
+		if (!agent) throw new Error(`no agent ${ref}`);
+		await this.ctx.storage.put(AGENT(agent.id), { ...agent, revokedAt: agent.revokedAt ?? now() });
+		await this.abort(agent.id, "its agent's key was revoked").catch(() => null);
+		return { revoked: agent.callsign };
 	}
 
 	async addIntents(list: { title: string; body?: string }[], createdBy = "operator"): Promise<CenterIntent[]> {

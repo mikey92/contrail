@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Workspace } from "../src/edge/workspace";
-import { addNote, cloneMain, fetchNotes, newRepo, pushNotes } from "../src/runway/gitops";
+import { addNote, boundedHttp, cloneMain, fetchNotes, newRepo, pushNotes } from "../src/runway/gitops";
+import * as iso from "isomorphic-git";
 
 // Edge workspaces and the runway's landing notes against real git over smart HTTP (git-http-backend behind
 // a tiny CGI bridge).
@@ -129,5 +130,17 @@ describe("landing notes", () => {
 
 		expect(git(bare, "notes", "--ref=contrail", "show", one)).toBe("first landing");
 		expect(git(bare, "notes", "--ref=contrail", "show", two)).toBe("second landing");
+	}, 30_000);
+});
+
+describe("fetching a workspace", () => {
+	it("stops a download over its limit", async () => {
+		const { url } = makeRepo("big", { "blob.bin": "x".repeat(200_000) + Math.random() });
+		const repo = newRepo();
+		await iso.init({ fs: repo.fs, dir: repo.dir, defaultBranch: "main" });
+		await iso.addRemote({ fs: repo.fs, dir: repo.dir, remote: "fork", url });
+		const fetch = (max: number) => iso.fetch({ fs: repo.fs, http: boundedHttp(max), dir: repo.dir, remote: "fork", ref: "main", singleBranch: true, cache: repo.cache });
+		await expect(fetch(1000)).rejects.toThrow(/too much to land/);
+		await expect(fetch(10 * 1024 * 1024)).resolves.toBeTruthy();
 	}, 30_000);
 });

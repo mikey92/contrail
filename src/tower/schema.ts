@@ -41,4 +41,6 @@ export const SCHEMA = [
 	`ALTER TABLE flights ADD COLUMN retired_at INTEGER`,
 	// The crossing (a change landing in several sectors at once) this landing is one leg of.
 	`ALTER TABLE landings ADD COLUMN crossing TEXT`,
+	// When an operator revoked the agent's key.
+	`ALTER TABLE agents ADD COLUMN revoked_at INTEGER`,
 ];

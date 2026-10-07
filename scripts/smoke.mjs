@@ -310,6 +310,27 @@ const cr3 = await R.tool("request_clearance", { targets: ["src/catalog.js#findBy
 check(cr3.granted.includes("src/catalog.js#findByIsbn"), "then the later claim is cleared");
 for (const a of [Q, Pw, R]) await a.tool("abort", { reason: "smoke test done" });
 
+// ── 5c. operators: revoking one key, and a private airspace's live feed without the key in a URL ─────
+const revoked = await call(`/api/p/${slug}/agents/SMOKE-R/revoke`, {}, admin);
+const refused = await fetch(`${base}/api/p/${slug}/agent/radar`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${R.key}` }, body: "{}" });
+const refusedBody = await refused.json().catch(() => ({}));
+check(revoked.revoked === "SMOKE-R" && refused.status === 401 && /revoked by the operator/.test(refusedBody.error ?? ""), "a revoked key stops working at once, and says why");
+const live = (ticket) =>
+  new Promise((resolve) => {
+    const ws = new WebSocket(`${base.replace(/^http/, "ws")}/api/p/${slug}/live?ticket=${encodeURIComponent(ticket)}`);
+    const done = (v) => {
+      resolve(v);
+      try { ws.close(); } catch {}
+    };
+    ws.onmessage = (m) => done(JSON.parse(m.data).kind);
+    ws.onerror = () => done("refused");
+    setTimeout(() => done("timeout"), 10_000);
+  });
+const { ticket } = await call(`/api/p/${slug}/live-ticket`, {}, admin);
+const firstUse = await live(ticket);
+const secondUse = await live(ticket);
+check(firstUse === "snapshot" && secondUse === "refused", `a one-minute ticket opens the private feed once (${firstUse}, then ${secondUse})`);
+
 // ── 6. a playground starts over once all of its work has landed ─────
 const pg = `${slug}-pg`;
 await createProject(pg, { playground: true, intents: 1 });
