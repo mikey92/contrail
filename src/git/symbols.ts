@@ -100,13 +100,37 @@ export function languageOf(path: string): Lang {
 	return "other";
 }
 
+/** Characters after which a `/` in JavaScript starts a regular expression rather than a division (not `<`: `</` closes a JSX tag). */
+const BEFORE_REGEX = new Set("(,=:[!&|?{};+-*%>~^");
+const KEYWORDS_BEFORE_REGEX = new Set(["return", "typeof", "case", "do", "else", "in", "of", "new", "delete", "void", "throw", "yield", "await", "instanceof"]);
+
+/** Index of the `/` that closes a regular expression literal opened at `i`, or -1 if none on this line. */
+function regexEnd(line: string, i: number): number {
+	let inClass = false;
+	for (let j = i + 1; j < line.length; j++) {
+		const c = line[j];
+		if (c === "\\") j++;
+		else if (c === "[") inClass = true;
+		else if (c === "]") inClass = false;
+		else if (c === "/" && !inClass) return j;
+	}
+	return -1;
+}
+
 /** Brace depth after each line, ignoring braces inside strings and comments (approximate). */
 function braceDepths(lines: string[], lang: Lang): number[] {
 	const depths: number[] = [];
 	let depth = 0;
 	let inBlockComment = false;
 	let quote: string | null = null; // ', ", or ` (template literals may span lines)
+	// JavaScript: open `${…}` expressions of template literals, innermost last, each with the braces opened inside it.
+	const expressions: number[] = [];
+	// JavaScript: the last character of code and the word it ends, which tell a regular expression from a division.
+	let last = "";
+	let word = "";
+	let inWord = false;
 	for (const line of lines) {
+		inWord = false;
 		for (let i = 0; i < line.length; i++) {
 			const ch = line[i];
 			const next = line[i + 1];
@@ -120,9 +144,16 @@ function braceDepths(lines: string[], lang: Lang): number[] {
 			if (quote) {
 				if (ch === "\\") {
 					i++;
+				} else if (quote === "`" && lang === "js" && ch === "$" && next === "{") {
+					expressions.push(0);
+					quote = null;
+					last = "{";
+					i++;
 				} else if (ch === quote) {
 					quote = null;
+					last = ch;
 				}
+				inWord = false;
 				continue;
 			}
 			if (ch === "/" && next === "/") break;
@@ -132,6 +163,17 @@ function braceDepths(lines: string[], lang: Lang): number[] {
 				i++;
 				continue;
 			}
+			if (ch === "/" && lang === "js" && (last === "" || BEFORE_REGEX.has(last) || KEYWORDS_BEFORE_REGEX.has(word))) {
+				// A regular expression literal: `/^https?:\/\//` holds no comment and no braces.
+				const end = regexEnd(line, i);
+				if (end > i) {
+					i = end;
+					last = ")";
+					word = "";
+					inWord = false;
+					continue;
+				}
+			}
 			if (ch === "'" && lang !== "js") {
 				// Character literals ('{', '\n'); a lone quote is a Rust lifetime or a generic, not a string.
 				const close = line.indexOf("'", i + 1);
@@ -140,16 +182,61 @@ function braceDepths(lines: string[], lang: Lang): number[] {
 			}
 			if (ch === '"' || ch === "'" || (ch === "`" && (lang === "js" || lang === "go"))) {
 				quote = ch;
+				inWord = false;
 				continue;
 			}
-			if (ch === "{") depth++;
-			else if (ch === "}") depth = Math.max(0, depth - 1);
+			if (ch === "{") {
+				if (expressions.length) expressions[expressions.length - 1]++;
+				else depth++;
+			} else if (ch === "}") {
+				if (expressions.length && expressions[expressions.length - 1] === 0) {
+					// The `${…}` expression closes: back inside its template literal.
+					expressions.pop();
+					quote = "`";
+					continue;
+				}
+				if (expressions.length) expressions[expressions.length - 1]--;
+				else depth = Math.max(0, depth - 1);
+			}
+			if (/\s/.test(ch)) {
+				inWord = false;
+				continue;
+			}
+			const wordChar = /[\w$]/.test(ch);
+			word = wordChar ? (inWord ? word + ch : ch) : "";
+			inWord = wordChar;
+			last = ch;
 		}
 		// Single-quoted and double-quoted strings never span lines.
 		if (quote === '"' || quote === "'") quote = null;
 		depths.push(depth);
 	}
 	return depths;
+}
+
+/** Decorators and annotations stacked on a declaration, by language: they belong to it, not to `(top)`. */
+const DECORATOR: Partial<Record<Lang, RegExp>> = {
+	js: /^@[\w$.]+/,
+	py: /^@[\w.]+/,
+	java: /^(?:@[\w.]+|#\[|\[[A-Z][\w.]*(?:\(.*\))?\]\s*$)/,
+	rust: /^#\[/,
+};
+
+/** First line (0-based) of the decorators or annotations stacked right above the declaration at line `i`. */
+function decoratedFrom(lines: string[], i: number, lang: Lang): number {
+	const re = DECORATOR[lang];
+	if (!re) return i;
+	const indent = lines[i].length - lines[i].trimStart().length;
+	let start = i;
+	for (let j = i - 1; j >= Math.max(0, i - 40); j--) {
+		const text = lines[j].trimStart();
+		const at = lines[j].length - text.length;
+		if (!text) break;
+		if (at === indent && re.test(text)) start = j;
+		// A decorator's arguments may span lines; anything else above ends the stack.
+		else if (!(at > indent || (at === indent && /^[)\]}]/.test(text)))) break;
+	}
+	return start;
 }
 
 function extractBraces(lines: string[], lang: Lang, decls: Decl[], member: RegExp | null): SymbolSpan[] {
@@ -182,7 +269,7 @@ function extractBraces(lines: string[], lang: Lang, decls: Decl[], member: RegEx
 			if (!m) continue;
 			const name = decl.name ? decl.name(m) : m[m.length - 1];
 			const end = blockEnd(i, 0);
-			out.push({ name, kind: decl.kind, start: i + 1, end: end + 1 });
+			out.push({ name, kind: decl.kind, start: decoratedFrom(lines, i, lang) + 1, end: end + 1 });
 			if (decl.container && member) {
 				for (let j = i + 1; j < end; j++) {
 					if (depthBefore(j) !== 1) continue;
@@ -192,7 +279,7 @@ function extractBraces(lines: string[], lang: Lang, decls: Decl[], member: RegEx
 					const keyword = lang === "rust" || (lang === "java" && mm?.[1] !== undefined);
 					if (!memberName || (!keyword && CONTROL.has(memberName)) || /;\s*$/.test(lines[j])) continue;
 					const mEnd = blockEnd(j, 1);
-					out.push({ name: `${name}.${memberName}`, kind: "method", start: j + 1, end: mEnd + 1 });
+					out.push({ name: `${name}.${memberName}`, kind: "method", start: decoratedFrom(lines, j, lang) + 1, end: mEnd + 1 });
 					j = mEnd;
 				}
 			}
@@ -219,20 +306,34 @@ function extractIndented(lines: string[], lang: "py" | "ruby"): SymbolSpan[] {
 		}
 		return last;
 	};
+	/** Where a Python header starting at line `i` ends: a signature may run over several lines until its brackets close. */
+	const headerEnd = (i: number) => {
+		if (lang !== "py") return i;
+		let depth = 0;
+		for (let j = i; j < Math.min(lines.length, i + 60); j++) {
+			const code = lines[j].replace(/(["'])(?:\\.|(?!\1).)*\1/g, '""').replace(/#.*$/, "");
+			for (const ch of code) {
+				if (ch === "(" || ch === "[" || ch === "{") depth++;
+				else if (ch === ")" || ch === "]" || ch === "}") depth--;
+			}
+			if (depth <= 0) return j;
+		}
+		return i;
+	};
 	const top = lang === "py" ? /^(?:async\s+)?(def|class)\s+([A-Za-z_]\w*)/ : /^(def|class|module)\s+(?:self\.)?([A-Za-z_][\w:]*[?!=]?)/;
 	const inner = lang === "py" ? /^(\s+)(?:async\s+)?def\s+([A-Za-z_]\w*)/ : /^(\s+)def\s+(?:self\.)?([A-Za-z_]\w*[?!=]?)/;
 	for (let i = 0; i < lines.length; i++) {
 		const m = lines[i].match(top);
 		if (!m) continue;
-		const end = endOf(i, 0);
+		const end = endOf(headerEnd(i), 0);
 		const container = m[1] !== "def";
-		out.push({ name: m[2], kind: container ? "class" : "function", start: i + 1, end: end + 1 });
+		out.push({ name: m[2], kind: container ? "class" : "function", start: decoratedFrom(lines, i, lang) + 1, end: end + 1 });
 		if (container) {
 			for (let j = i + 1; j <= end; j++) {
 				const mm = lines[j].match(inner);
 				if (!mm) continue;
-				const mEnd = endOf(j, mm[1].length);
-				out.push({ name: `${m[2]}.${mm[2]}`, kind: "method", start: j + 1, end: mEnd + 1 });
+				const mEnd = endOf(headerEnd(j), mm[1].length);
+				out.push({ name: `${m[2]}.${mm[2]}`, kind: "method", start: decoratedFrom(lines, j, lang) + 1, end: mEnd + 1 });
 				j = mEnd;
 			}
 		}

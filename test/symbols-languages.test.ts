@@ -155,3 +155,94 @@ end
 		expect(symbolAt(syms, 8)).toBe("Cart.add");
 	});
 });
+
+describe("symbol extents in tricky code", () => {
+	const spans = (path: string, text: string) => Object.fromEntries(extractSymbols(path, text).map((s) => [s.name, [s.start, s.end]]));
+
+	it("JavaScript regular expressions with // and divisions", () => {
+		const js = [
+			"export function isUrl(u) {",
+			"  if (/^https?:\\/\\//.test(u)) {",
+			"    return true;",
+			"  }",
+			"  return /[/{]/.test(u) || u.split(/\\//).length > 2;",
+			"}",
+			"",
+			"export function ratio(a, b) {",
+			"  const r = a / b / 2;",
+			"  return { r };",
+			"}",
+			"",
+			"export function next() {",
+			"  return 1;",
+			"}",
+		].join("\n");
+		expect(spans("u.js", js)).toEqual({ isUrl: [1, 6], ratio: [8, 11], next: [13, 15] });
+	});
+
+	it("JavaScript template literals with braces and nested templates", () => {
+		const js = [
+			"export function f(a) {",
+			'  return `${a ? `{` : ""}x`;',
+			"}",
+			"",
+			"export function h() {",
+			"  const s = `line ${ { a: 1 }.a }",
+			"  more }`;",
+			"  return s;",
+			"}",
+			"",
+			"export function g() {",
+			"  return 2;",
+			"}",
+		].join("\n");
+		expect(spans("t.js", js)).toEqual({ f: [1, 3], h: [5, 9], g: [11, 13] });
+	});
+
+	it("Python signatures over several lines, and decorators", () => {
+		const py = [
+			'@app.route("/x")',
+			"@login_required",
+			"def view(",
+			"    request,",
+			"    *,",
+			'    sep="(",',
+			"):",
+			'    return "x"',
+			"",
+			"",
+			"class A:",
+			"    @property",
+			"    def size(",
+			"        self,",
+			"    ) -> int:",
+			"        return 1",
+			"",
+			"",
+			"def g():",
+			"    return 1",
+		].join("\n");
+		expect(spans("v.py", py)).toEqual({ view: [1, 8], A: [11, 16], "A.size": [12, 16], g: [19, 20] });
+	});
+
+	it("TypeScript decorators, Java annotations and Rust attributes", () => {
+		const ts = [
+			"@Component({",
+			'  selector: "app",',
+			"})",
+			"export class AppComponent {",
+			'  @Input() name = "";',
+			"",
+			'  @HostListener("click")',
+			"  onClick() {",
+			"    return 1;",
+			"  }",
+			"}",
+		].join("\n");
+		expect(spans("a.ts", ts)).toEqual({ AppComponent: [1, 11], "AppComponent.onClick": [7, 10] });
+		const java = ["public class Cart {", "    @Override", "    public String toString() {", '        return "cart";', "    }", "}"].join("\n");
+		expect(spans("Cart.java", java)).toEqual({ Cart: [1, 6], "Cart.toString": [2, 5] });
+		const rust = ["#[derive(Debug)]", "pub struct Cart {", "    items: Vec<u32>,", "}", "", "#[test]", "fn adds() {", "    assert_eq!(1, 1);", "}"].join("\n");
+		expect(spans("lib.rs", rust)).toEqual({ Cart: [1, 4], adds: [6, 9] });
+	});
+});
