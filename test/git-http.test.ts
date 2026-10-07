@@ -1,5 +1,4 @@
 import { execFileSync, spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
@@ -137,7 +136,7 @@ describe("landing notes", () => {
 describe("fetching a workspace", () => {
 	it("stops a download over its limit", async () => {
 		// Random bytes: they don't compress, so the pack is as big as the file.
-		const { url } = makeRepo("big", { "blob.bin": randomBytes(30_000).toString("hex") });
+		const { url } = makeRepo("big", { "blob.bin": Buffer.from(crypto.getRandomValues(new Uint8Array(30_000))).toString("hex") });
 		const repo = newRepo();
 		await iso.init({ fs: repo.fs, dir: repo.dir, defaultBranch: "main" });
 		await iso.addRemote({ fs: repo.fs, dir: repo.dir, remote: "fork", url });
