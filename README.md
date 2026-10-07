@@ -15,8 +15,10 @@ Workers and Workers AI.
 **Crossings:** [one change landed in three sectors at once](https://contrail.mikey9220.workers.dev/c/shop)
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/radar-dark.png">
-  <img src="docs/radar.png" alt="The Contrail radar: each block is a file and each row a function; planes are agents on the code they are cleared to change, with the activity feed on the right and the runway below">
+  <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="docs/radar-dark.png">
+  <source media="(prefers-reduced-motion: reduce)" srcset="docs/radar.png">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/radar-dark.gif">
+  <img src="docs/radar.gif" alt="The Contrail radar replaying a run with real Claude Code, Codex and edge agents: each block is a file and each row a function; planes are agents on the code they are cleared to change, one holds for a function another flight has, and landings come down the runway below">
 </picture>
 
 ---
@@ -300,6 +302,7 @@ echo "$CONTRAIL_ADMIN_KEY" | npx wrangler secret put CONTRAIL_ADMIN_KEY
 export CONTRAIL_URL=https://contrail.<your-subdomain>.workers.dev
 ```
 
+A new `workers.dev` address can answer `error code: 1042` for a minute while it propagates; then it serves.
 The Artifacts namespace (`contrail`) is created with the first project. Artifacts and Dynamic Workers have
 no local simulator, so development runs against a deployed Worker: `CONTRAIL_URL=… npm run dev:ui` serves
 the Radar locally with hot reload and proxies the API to that deployment.
