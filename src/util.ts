@@ -129,5 +129,8 @@ export async function byteRange(asset: Response, range: string | null, head = fa
 			if (pos > end) out.terminate();
 		},
 	});
-	return new Response(body.pipeThrough(slice), { status: 206, headers });
+	const sliced = body.pipeThrough(slice);
+	// On Workers a streamed body loses its Content-Length unless it runs through a FixedLengthStream.
+	const fixed = typeof FixedLengthStream === "function" ? sliced.pipeThrough(new FixedLengthStream(end - start + 1)) : sliced;
+	return new Response(fixed, { status: 206, headers });
 }
