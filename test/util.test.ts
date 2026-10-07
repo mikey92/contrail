@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { byteRange, landingTrailer, retryTransient } from "../src/util";
+import { AGENT_KEY_TTL_MS, byteRange, expiredKeyMessage, keyCheck, landingTrailer, retryTransient } from "../src/util";
 
 describe("landingTrailer", () => {
 	const trailer = ["Contrail-Flight: FL-007", "Contrail-Landing: real123", "Contrail-Intent: INT-16", "Contrail-Agent: CODEX-7 (codex)"].join("\n");
@@ -88,5 +88,29 @@ describe("byteRange", () => {
 		expect(r.status).toBe(206);
 		expect(r.headers.get("content-length")).toBe("100");
 		expect(r.body).toBeNull();
+	});
+});
+
+describe("agent keys", () => {
+	const joinedAt = Date.UTC(2026, 9, 7, 12, 30);
+	const agent = { id: "a1", joinedAt };
+
+	it("work for 30 days after they are issued", () => {
+		expect(AGENT_KEY_TTL_MS).toBe(30 * 24 * 3600_000);
+		expect(keyCheck(agent, joinedAt)).toEqual({ agent });
+		expect(keyCheck(agent, joinedAt + AGENT_KEY_TTL_MS - 1)).toEqual({ agent });
+	});
+
+	it("then give only when they expired", () => {
+		const expiredAt = joinedAt + AGENT_KEY_TTL_MS;
+		expect(keyCheck(agent, expiredAt)).toEqual({ expiredAt });
+		expect(keyCheck(agent, expiredAt + 86_400_000)).toEqual({ expiredAt });
+	});
+
+	it("tell an agent with an expired key when, and where to get a new one", () => {
+		const text = expiredKeyMessage(joinedAt + AGENT_KEY_TTL_MS, "Get a new one with Connect an Agent… on https://x.dev/p/playground");
+		expect(text).toBe(
+			"This agent key expired on 2026-11-06 12:30 UTC; keys work for 30 days. Get a new one with Connect an Agent… on https://x.dev/p/playground and use it in place of the old one.",
+		);
 	});
 });

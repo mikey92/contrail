@@ -32,7 +32,7 @@ import type { AgentKind, CenterAgent, CenterInfo, CenterIntent, CenterSnapshot, 
 import { conventionalTestCommand, CROSSING_PROTOCOL, workspaceInstructions } from "../tower/briefing";
 import { normalizeTarget } from "../tower/clearance";
 import type { HoldInfo, RadioMessage, Workspace } from "../tower/tower";
-import { callsignFor, cloneUrl, errorMessage, now, randomId, randomToken, repoSafe, sha256, sleep } from "../util";
+import { AGENT_KEY_TTL_MS, callsignFor, cloneUrl, errorMessage, keyCheck, now, randomId, randomToken, repoSafe, sha256, sleep } from "../util";
 import { checkPrefixes, composeTree, ownerOf, type PathChange, sectorChanges } from "./compose";
 import { sectorPart } from "./crossing";
 
@@ -308,7 +308,7 @@ export class Center extends DurableObject<Env> {
 
 	// ───────────────────────── crossings: agents and intents ─────────────────────────
 
-	async join(input: { callsign?: string; kind?: AgentKind; model?: string }): Promise<{ agent: CenterAgent; key: string }> {
+	async join(input: { callsign?: string; kind?: AgentKind; model?: string }): Promise<{ agent: CenterAgent; key: string; expiresAt: number }> {
 		await this.info();
 		const n = await this.next("seq:agent");
 		const kind: AgentKind = input.kind ?? "other";
@@ -316,13 +316,14 @@ export class Center extends DurableObject<Env> {
 		const key = randomToken("ct");
 		const agent: AgentRecord = { id: randomId(), callsign, kind, model: input.model?.slice(0, 60) ?? null, joinedAt: now(), lastSeenAt: now(), legs: {}, crossing: null };
 		await this.ctx.storage.put<unknown>({ [AGENT(agent.id)]: agent, [KEY(await sha256(key))]: agent.id });
-		return { agent: publicAgent(agent), key };
+		return { agent: publicAgent(agent), key, expiresAt: agent.joinedAt + AGENT_KEY_TTL_MS };
 	}
 
-	async authenticate(key: string): Promise<CenterAgent | null> {
+	/** The agent a key belongs to, or when the key expired. */
+	async authenticate(key: string): Promise<{ agent: CenterAgent } | { expiredAt: number } | null> {
 		const id = await this.ctx.storage.get<string>(KEY(await sha256(key)));
 		const agent = id ? await this.ctx.storage.get<AgentRecord>(AGENT(id)) : undefined;
-		return agent ? publicAgent(agent) : null;
+		return agent ? keyCheck(publicAgent(agent)) : null;
 	}
 
 	async addIntents(list: { title: string; body?: string }[], createdBy = "operator"): Promise<CenterIntent[]> {

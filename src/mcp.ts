@@ -18,6 +18,8 @@ export interface McpContext {
 	tools: ToolDef<any>[];
 	target: unknown;
 	agentId: string | null;
+	/** Set when the request's key has expired: what the agent is told instead of running a tool. */
+	expired?: string;
 	projectName: string;
 	instructions: string;
 }
@@ -40,7 +42,7 @@ async function callTool(ctx: McpContext, name: string, args: Record<string, unkn
 	if (!tool) return { content: [{ type: "text", text: `Unknown tool ${name}` }], isError: true };
 	if (!ctx.agentId)
 		return {
-			content: [{ type: "text", text: "Not authenticated. Configure this MCP server with your Contrail agent key: Authorization: Bearer ct_…" }],
+			content: [{ type: "text", text: ctx.expired ?? "Not authenticated. Configure this MCP server with your Contrail agent key: Authorization: Bearer ct_…" }],
 			isError: true,
 		};
 	try {

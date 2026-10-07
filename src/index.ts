@@ -7,7 +7,7 @@ import { checkPrefixes } from "./center/compose";
 import { handleMcp } from "./mcp";
 import { CROSSING_PROTOCOL, PROTOCOL } from "./tower/briefing";
 import type { ProjectSource } from "./tower/tower";
-import { byteRange, errorMessage, randomToken, safeEqual } from "./util";
+import { byteRange, errorMessage, expiredKeyMessage, randomToken, safeEqual } from "./util";
 
 export { Center } from "./center/center";
 export { EdgeAgent } from "./edge/agent";
@@ -35,6 +35,11 @@ function isAdmin(c: { req: { raw: Request }; env: Env }): boolean {
 	const key = bearer(c.req.raw) ?? c.req.raw.headers.get("X-Contrail-Admin");
 	return !!key && !!c.env.CONTRAIL_ADMIN_KEY && safeEqual(key, c.env.CONTRAIL_ADMIN_KEY);
 }
+
+// Where an agent with an expired key gets a new one.
+const renewProject = (c: { req: { url: string }; env: Env }, slug: string) =>
+	`Get a new one with Connect an Agent… on ${c.env.PUBLIC_ORIGIN ?? new URL(c.req.url).origin}/p/${slug} (or POST /api/p/${slug}/join with the join code)`;
+const renewCenter = (slug: string) => `Ask the operator for a new one (POST /api/c/${slug}/join with the admin key)`;
 
 app.onError((err, c) => c.json({ error: errorMessage(err) }, 400));
 
@@ -300,12 +305,13 @@ app.post("/api/p/:slug/join", async (c) => {
 	if (!entry) return c.json({ error: "not found" }, 404);
 	const body = await c.req.json<{ joinCode?: string; callsign?: string; kind?: any; model?: string }>().catch(() => ({}) as any);
 	if (!isAdmin(c) && !(body.joinCode && safeEqual(body.joinCode, entry.joinCode))) return c.json({ error: "join code required" }, 401);
-	const { agent, key } = await tower(c.env, slug).join({ callsign: body.callsign, kind: body.kind, model: body.model });
+	const { agent, key, expiresAt } = await tower(c.env, slug).join({ callsign: body.callsign, kind: body.kind, model: body.model });
 	const origin = c.env.PUBLIC_ORIGIN ?? new URL(c.req.url).origin;
 	const mcpUrl = `${origin}/mcp/${slug}`;
 	return c.json({
 		agent,
 		key,
+		expiresAt,
 		mcp: {
 			url: mcpUrl,
 			claudeCode: `claude mcp add --transport http contrail ${mcpUrl} --header "Authorization: Bearer ${key}"`,
@@ -321,9 +327,10 @@ app.use("/api/p/:slug/agent/*", async (c, next) => {
 	// Look the project up first: an unknown slug must not wake (and create) a Tower.
 	if (!(await registry(c.env).get(slug))) return c.json({ error: "not found" }, 404);
 	const key = bearer(c.req.raw);
-	const agent = key ? await tower(c.env, slug).authenticate(key) : null;
-	if (!agent) return c.json({ error: "agent key required (Authorization: Bearer ct_…)" }, 401);
-	c.set("agentId", agent.id);
+	const found = key ? await tower(c.env, slug).authenticate(key) : null;
+	if (found && "expiredAt" in found) return c.json({ error: expiredKeyMessage(found.expiredAt, renewProject(c, slug)) }, 401);
+	if (!found) return c.json({ error: "agent key required (Authorization: Bearer ct_…)" }, 401);
+	c.set("agentId", found.agent.id);
 	await next();
 });
 
@@ -344,8 +351,15 @@ app.all("/mcp/:slug", async (c) => {
 	if (!entry) return c.json({ error: "not found" }, 404);
 	const t = tower(c.env, slug);
 	const key = bearer(c.req.raw);
-	const agent = key ? await t.authenticate(key) : null;
-	return handleMcp(c.req.raw, { tools: TOOLS, target: t, agentId: agent?.id ?? null, projectName: entry.info.name, instructions: PROTOCOL });
+	const found = key ? await t.authenticate(key) : null;
+	return handleMcp(c.req.raw, {
+		tools: TOOLS,
+		target: t,
+		agentId: found && "agent" in found ? found.agent.id : null,
+		expired: found && "expiredAt" in found ? expiredKeyMessage(found.expiredAt, renewProject(c, slug)) : undefined,
+		projectName: entry.info.name,
+		instructions: PROTOCOL,
+	});
 });
 
 // ── centers: a monorepo split into sectors ─────────────────
@@ -452,12 +466,13 @@ app.post("/api/c/:slug/join", async (c) => {
 	const slug = c.req.param("slug");
 	if (!(await registry(c.env).getCenter(slug))) return c.json({ error: "not found" }, 404);
 	const body = await c.req.json<{ callsign?: string; kind?: any; model?: string }>().catch(() => ({}) as any);
-	const { agent, key } = await center(c.env, slug).join({ callsign: body.callsign, kind: body.kind, model: body.model });
+	const { agent, key, expiresAt } = await center(c.env, slug).join({ callsign: body.callsign, kind: body.kind, model: body.model });
 	const origin = c.env.PUBLIC_ORIGIN ?? new URL(c.req.url).origin;
 	const mcpUrl = `${origin}/mcp/c/${slug}`;
 	return c.json({
 		agent,
 		key,
+		expiresAt,
 		mcp: {
 			url: mcpUrl,
 			claudeCode: `claude mcp add --transport http contrail-${slug} ${mcpUrl} --header "Authorization: Bearer ${key}"`,
@@ -470,9 +485,10 @@ app.use("/api/c/:slug/agent/*", async (c, next) => {
 	const slug = c.req.param("slug");
 	if (!(await registry(c.env).getCenter(slug))) return c.json({ error: "not found" }, 404);
 	const key = bearer(c.req.raw);
-	const agent = key ? await center(c.env, slug).authenticate(key) : null;
-	if (!agent) return c.json({ error: "agent key required (Authorization: Bearer ct_…)" }, 401);
-	c.set("agentId", agent.id);
+	const found = key ? await center(c.env, slug).authenticate(key) : null;
+	if (found && "expiredAt" in found) return c.json({ error: expiredKeyMessage(found.expiredAt, renewCenter(slug)) }, 401);
+	if (!found) return c.json({ error: "agent key required (Authorization: Bearer ct_…)" }, 401);
+	c.set("agentId", found.agent.id);
 	await next();
 });
 
@@ -491,8 +507,15 @@ app.all("/mcp/c/:slug", async (c) => {
 	if (!info) return c.json({ error: "not found" }, 404);
 	const target = center(c.env, slug);
 	const key = bearer(c.req.raw);
-	const agent = key ? await target.authenticate(key) : null;
-	return handleMcp(c.req.raw, { tools: CENTER_TOOLS, target, agentId: agent?.id ?? null, projectName: info.name, instructions: CROSSING_PROTOCOL });
+	const found = key ? await target.authenticate(key) : null;
+	return handleMcp(c.req.raw, {
+		tools: CENTER_TOOLS,
+		target,
+		agentId: found && "agent" in found ? found.agent.id : null,
+		expired: found && "expiredAt" in found ? expiredKeyMessage(found.expiredAt, renewCenter(slug)) : undefined,
+		projectName: info.name,
+		instructions: CROSSING_PROTOCOL,
+	});
 });
 
 app.all("/api/*", (c) => c.json({ error: "not found" }, 404));

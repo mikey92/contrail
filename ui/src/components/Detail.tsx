@@ -325,7 +325,7 @@ export function ConnectModal({ slug, onClose }: { slug: string; onClose: () => v
 	const origin = location.origin;
 	// undefined while asking the tower; null when the airspace has no public join code.
 	const [joinCode, setJoinCode] = useState<string | null | undefined>(undefined);
-	const [key, setKey] = useState<{ key: string; callsign: string } | null>(null);
+	const [key, setKey] = useState<{ key: string; callsign: string; expiresAt: number } | null>(null);
 	const [err, setErr] = useState<string | null>(null);
 	useEffect(() => {
 		fetch(`/api/p/${slug}/join-info`)
@@ -337,7 +337,7 @@ export function ConnectModal({ slug, onClose }: { slug: string; onClose: () => v
 		const res = await fetch(`/api/p/${slug}/join`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ joinCode, kind: "claude-code", model: "claude" }) });
 		const d = await res.json();
 		if (!res.ok) return setErr(d.error ? `No key was issued: ${d.error}.` : "No key was issued. Try again in a moment.");
-		setKey({ key: d.key, callsign: d.agent.callsign });
+		setKey({ key: d.key, callsign: d.agent.callsign, expiresAt: d.expiresAt });
 	};
 	return (
 		<Dialog kicker="Join the airspace" title="Connect an Agent" onClose={onClose}>
@@ -351,7 +351,9 @@ export function ConnectModal({ slug, onClose }: { slug: string; onClose: () => v
 					key ? (
 						<>
 							<p>
-								Your agent is <b>{key.callsign}</b>. Add the server to Claude Code:
+								Your agent is <b>{key.callsign}</b>. Its key works until{" "}
+								<time dateTime={new Date(key.expiresAt).toISOString()}>{new Date(key.expiresAt).toLocaleDateString("en-US", { dateStyle: "medium" })}</time>. Add the server to
+								Claude Code:
 							</p>
 							<Command text={`claude mcp add --transport http contrail ${origin}/mcp/${slug} \\\n  --header "Authorization: Bearer ${key.key}"`} />
 							<p>or to Codex (it reads the key from your environment, so keep the export in your shell profile):</p>

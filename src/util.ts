@@ -29,6 +29,21 @@ export function safeEqual(a: string, b: string): boolean {
 	return diff === 0;
 }
 
+/** An agent key works for 30 days after it is issued; then the agent joins again for a new one. */
+export const AGENT_KEY_TTL_MS = 30 * 24 * 3600_000;
+
+/** A key's agent while the key works; after that, only when it expired. */
+export function keyCheck<A extends { joinedAt: number }>(agent: A, at = now()): { agent: A } | { expiredAt: number } {
+	const expiresAt = agent.joinedAt + AGENT_KEY_TTL_MS;
+	return at < expiresAt ? { agent } : { expiredAt: expiresAt };
+}
+
+/** What an agent with an expired key is told, with where to get a new one. */
+export function expiredKeyMessage(expiredAt: number, renew: string): string {
+	const on = new Date(expiredAt).toISOString().slice(0, 16).replace("T", " ");
+	return `This agent key expired on ${on} UTC; keys work for ${AGENT_KEY_TTL_MS / 86_400_000} days. ${renew} and use it in place of the old one.`;
+}
+
 export function json<T>(value: string | null | undefined, fallback: T): T {
 	if (!value) return fallback;
 	try {

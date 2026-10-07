@@ -28,7 +28,7 @@ import type {
 	SectorSummary,
 	TrunkState,
 } from "../shared/types";
-import { callsignFor, cloneUrl, colorFor, errorMessage, json, now, randomId, randomToken, repoSafe, sha256, sleep } from "../util";
+import { AGENT_KEY_TTL_MS, callsignFor, cloneUrl, colorFor, errorMessage, json, keyCheck, now, randomId, randomToken, repoSafe, sha256, sleep } from "../util";
 import { conventionalTestCommand, PROTOCOL, workspaceInstructions } from "./briefing";
 import { findCollisions, normalizeTarget, parseTarget, targetsOverlap } from "./clearance";
 import { type AirTarget, crowding, firstCollision, predictTargets, type SymbolIndex, symbolIndex } from "./planner";
@@ -489,7 +489,7 @@ export class Tower extends DurableObject<Env> {
 
 	// ───────────────────────── agents ─────────────────────────
 
-	async join(input: { callsign?: string; kind?: AgentKind; model?: string }): Promise<{ agent: Agent; key: string }> {
+	async join(input: { callsign?: string; kind?: AgentKind; model?: string }): Promise<{ agent: Agent; key: string; expiresAt: number }> {
 		const n = (this.row<{ n: number }>("SELECT COALESCE(MAX(n), 0) + 1 AS n FROM agents")?.n ?? 1) as number;
 		if (n > 2000) throw new Error("this airspace is full (2000 agents)");
 		const kind: AgentKind = input.kind ?? "other";
@@ -511,12 +511,13 @@ export class Tower extends DurableObject<Env> {
 		);
 		this.patch("agent", agent);
 		this.emit("agent.joined", `${agent.callsign} joined${agent.model ? ` (${agent.model})` : ""}`, { agentId: agent.id });
-		return { agent, key };
+		return { agent, key, expiresAt: agent.joinedAt + AGENT_KEY_TTL_MS };
 	}
 
-	async authenticate(key: string): Promise<Agent | null> {
+	/** The agent a key belongs to, or when the key expired. */
+	async authenticate(key: string): Promise<{ agent: Agent } | { expiredAt: number } | null> {
 		const r = this.row("SELECT * FROM agents WHERE key_hash = ?", await sha256(key));
-		return r ? this.toAgent(r) : null;
+		return r ? keyCheck(this.toAgent(r)) : null;
 	}
 
 	// ───────────────────────── intents ─────────────────────────
