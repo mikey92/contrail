@@ -47,6 +47,10 @@ const MAX_AGENTS = 2000;
 const STALE_FLIGHT_MS = 60 * 60_000;
 /** Radar viewers one airspace serves at once; more are asked to come back in a minute. */
 const MAX_VIEWERS = 500;
+/** Characters per stored part of a meta value: a SQLite row holds at most 2 MB, and a character takes up to 4 bytes. */
+const META_PART = 400_000;
+/** A live message over this many characters goes out as "resync": the radar fetches the snapshot over HTTP instead. */
+const MAX_LIVE_MESSAGE = 800_000;
 /** Bumped when the way readTestCommand finds a command changes, so existing projects look again. */
 const TEST_COMMAND_CHECK = 2;
 /** A flight's workspace fork is kept this long after the flight lands or aborts, for inspection. */
@@ -167,11 +171,24 @@ export class Tower extends DurableObject<Env> {
 
 	private meta<T>(k: string, fallback: T): T {
 		const r = this.row<{ v: string }>("SELECT v FROM meta WHERE k = ?", k);
-		return r ? json<T>(r.v, fallback) : fallback;
+		if (!r) return fallback;
+		const parts = /^\{"\$parts":(\d+)\}$/.exec(r.v);
+		if (!parts) return json<T>(r.v, fallback);
+		let text = "";
+		for (let i = 0; i < Number(parts[1]); i++) text += this.row<{ v: string }>("SELECT v FROM meta WHERE k = ?", `${k}#${i}`)?.v ?? "";
+		return json<T>(text, fallback);
 	}
 
+	/** Stores a meta value; a big one (a large repository's trunk) goes in parts, as a row holds at most 2 MB. */
 	private setMeta(k: string, v: unknown) {
-		this.sql.exec("INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", k, JSON.stringify(v));
+		const text = JSON.stringify(v);
+		const put = (key: string, value: string) => this.sql.exec("INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", key, value);
+		// Parts of an earlier, bigger value ("k#0", "k#1", …: every key from "k#" up to "k$").
+		this.sql.exec("DELETE FROM meta WHERE k >= ? AND k < ?", `${k}#`, `${k}$`);
+		if (text.length <= META_PART) return put(k, text);
+		const n = Math.ceil(text.length / META_PART);
+		for (let i = 0; i < n; i++) put(`${k}#${i}`, text.slice(i * META_PART, (i + 1) * META_PART));
+		put(k, JSON.stringify({ $parts: n }));
 	}
 
 	private bump(stat: string, by = 1) {
@@ -341,7 +358,8 @@ export class Tower extends DurableObject<Env> {
 	}
 
 	private broadcast(message: unknown) {
-		const payload = JSON.stringify(message);
+		let payload = JSON.stringify(message);
+		if (payload.length > MAX_LIVE_MESSAGE) payload = JSON.stringify({ kind: "resync" });
 		for (const ws of this.ctx.getWebSockets()) {
 			try {
 				ws.send(payload);
@@ -1228,6 +1246,7 @@ export class Tower extends DurableObject<Env> {
 			repo: flight.repo,
 			review: this.meta<{ review?: string[] }>("policy", {}).review ?? [],
 			approvedHead: l.review?.decision === "approved" ? (l.forkHead ?? undefined) : undefined,
+			flight: { code: flight.code, since: flight.createdAt },
 			heldByOthers: granted
 				.filter((c) => c.flightId !== flight.id)
 				.map((c) => {
@@ -1865,7 +1884,8 @@ export class Tower extends DurableObject<Env> {
 		if (this.ctx.getWebSockets().length >= MAX_VIEWERS) return new Response("this radar has as many viewers as it can serve; try again in a minute", { status: 503 });
 		const pair = new WebSocketPair();
 		this.ctx.acceptWebSocket(pair[1]);
-		pair[1].send(JSON.stringify({ kind: "snapshot", snapshot: await this.snapshot() }));
+		const first = JSON.stringify({ kind: "snapshot", snapshot: await this.snapshot() });
+		pair[1].send(first.length > MAX_LIVE_MESSAGE ? JSON.stringify({ kind: "resync" }) : first);
 		return new Response(null, { status: 101, webSocket: pair[0] });
 	}
 

@@ -107,8 +107,17 @@ export async function retryTransient<T>(fn: () => Promise<T>, attempts = 3): Pro
  * intent title above it cannot stand in for it.
  */
 export function landingTrailer(message: string): string | null {
+	return trailer(message, "Contrail-Landing");
+}
+
+/** The flight code in a trunk commit's trailer block (read like landingTrailer). */
+export function flightTrailer(message: string): string | null {
+	return trailer(message, "Contrail-Flight");
+}
+
+function trailer(message: string, key: string): string | null {
 	const block = message.trimEnd().split(/\n[ \t]*\n/).at(-1) ?? "";
-	return [...block.matchAll(/^Contrail-Landing: (\S+)$/gm)].at(-1)?.[1] ?? null;
+	return [...block.matchAll(new RegExp(`^${key}: (\\S+)$`, "gm"))].at(-1)?.[1] ?? null;
 }
 
 /** Text an agent supplied, as one line of at most `max` characters: control characters and line breaks become spaces. */

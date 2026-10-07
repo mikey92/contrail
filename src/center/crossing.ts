@@ -14,7 +14,12 @@ export async function sectorPart(
 	input: { base: string; sectorHead: string; prefix: string; changes: PathChange[]; message: string; author: Person; committer: Person },
 ): Promise<string | null> {
 	const current = await listTree(r, input.sectorHead);
-	if (input.changes.every((c) => (current.get(c.path)?.oid ?? null) === (c.item?.oid ?? null))) return null;
+	// The same content and the same mode: a change that only makes a file executable is still a change.
+	const same = (c: PathChange) => {
+		const have = current.get(c.path);
+		return (have?.oid ?? null) === (c.item?.oid ?? null) && (!have || !c.item || have.mode === c.item.mode);
+	};
+	if (input.changes.every(same)) return null;
 	const parent = await findSubtree(r, input.sectorHead, input.prefix, await subtreeOid(r, input.base, input.prefix));
 	if (!parent) throw new Error("no commit of the sector matches what the workspace started from");
 	const tree = await writeFlatTree(r, applyChanges(await listTree(r, parent), input.changes));

@@ -576,7 +576,16 @@ export function useRadar(slug: string, fixture: string | null) {
 			};
 			ws.onmessage = (m) => {
 				if (m.data === "pong") return;
-				const action = toAction(JSON.parse(m.data));
+				const message = JSON.parse(m.data);
+				// Too big for the live feed (a large repository): the snapshot comes over HTTP.
+				if (message?.kind === "resync") {
+					fetch(`/api/p/${slug}/snapshot`)
+						.then((r) => (r.ok ? r.json() : null))
+						.then((snapshot) => snapshot && !closed && dispatch({ type: "snapshot", snapshot }))
+						.catch(() => {});
+					return;
+				}
+				const action = toAction(message);
 				if (action) dispatch(action);
 			};
 			ws.onclose = async () => {

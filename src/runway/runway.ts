@@ -11,7 +11,7 @@ import type { Env } from "../env";
 import { extractSymbols } from "../git/symbols";
 import { airspaceViolations, type HeldByOther, policyTargetsTouched } from "../tower/clearance";
 import type { ConflictReport, FileChange, TestReport, TrunkFile } from "../shared/types";
-import { errorMessage, landingTrailer, retryTransient } from "../util";
+import { errorMessage, flightTrailer, landingTrailer, retryTransient } from "../util";
 import {
 	addNote,
 	cloneMain,
@@ -51,6 +51,8 @@ export interface LandingJob {
 	heldByOthers?: HeldByOther[];
 	/** The workspace commit a human approved. Commits pushed after it need their own review. */
 	approvedHead?: string;
+	/** The flight's code and when it took off: a change of its already on trunk under an earlier landing id is its landing. */
+	flight?: { code: string; since: number };
 }
 
 export interface LandingOutcome {
@@ -261,9 +263,13 @@ export class Runway extends DurableObject<Env> {
 		// Exactly-once: a train interrupted after its push (deploy, eviction) is replayed by the Tower.
 		// Landings already on trunk are recognised by their Contrail-Landing trailer, not merged again.
 		const onTrunk = new Map<string, { oid: string; parent: string }>();
+		// The latest landing of each flight, for a retry whose earlier landing was pushed but never reported.
+		const byFlight = new Map<string, { oid: string; parent: string; at: number }>();
 		for (const c of await log(r, start, 300)) {
 			const id = landingTrailer(c.commit.message);
 			if (id) onTrunk.set(id, { oid: c.oid, parent: c.commit.parent[0] });
+			const flight = flightTrailer(c.commit.message);
+			if (flight && !byFlight.has(flight)) byFlight.set(flight, { oid: c.oid, parent: c.commit.parent[0], at: c.commit.committer.timestamp * 1000 });
 		}
 
 		for (const job of jobs) {
@@ -334,11 +340,29 @@ export class Runway extends DurableObject<Env> {
 				}
 
 				const tree = await writeFlatTree(r, merged.files);
-				if (tree === (await commitTreeOid(r, tip))) throw new Error("nothing to land: trunk already contains these changes");
+				if (tree === (await commitTreeOid(r, tip))) {
+					// This flight landed it already, under a landing id the Tower never heard back about (a restart):
+					// that commit is the answer. (Codes start over in a playground's next round, hence the time check.)
+					const mine = job.flight ? byFlight.get(job.flight.code) : undefined;
+					if (!mine || mine.at < job.flight!.since - 60_000) throw new Error("nothing to land: trunk already contains these changes");
+					outcome.status = "landed";
+					outcome.trunkBefore = mine.parent;
+					outcome.trunkAfter = mine.oid;
+					outcome.changes = await describeChanges(r, await listTree(r, mine.parent), await listTree(r, mine.oid));
+					continue;
+				}
 
 				const required = job.approvedHead === head ? [] : reviewRequired(job.review ?? [], merged.changes);
 				if (required.length || opts.oneByOne) {
 					outcome.tests = await this.test(r, tree, merged.files, gate);
+					if (outcome.tests.failed > 0 && required.length && !opts.oneByOne && tip !== start) {
+						// Red on top of this train's other landings, which no test has passed yet: judge it on trunk as it was.
+						const alone = await mergeTrees(r, (await mergeBase(r, start, head)) ?? base, start, head);
+						if (alone.conflicts.length === 0) {
+							const retest = await this.test(r, await writeFlatTree(r, alone.files), alone.files, gate);
+							if (retest.failed === 0) outcome.tests = retest;
+						}
+					}
 					if (outcome.tests.failed > 0) {
 						failTests(outcome, outcome.tests);
 						continue;

@@ -55,6 +55,19 @@ describe("sectorPart", () => {
 		expect(await text(r, part!, "b/src/z.js")).toBeNull();
 	});
 
+	it("is not null for a change that only makes a file executable", async () => {
+		const { r, a1, m0 } = await setup();
+		const m0Tree = await listTree(r, m0);
+		const exec: FlatTree = new Map(m0Tree);
+		exec.set("a/src/x.js", { ...m0Tree.get("a/src/x.js")!, mode: "100755" });
+		const fork = await commit(r, { tree: await writeFlatTree(r, exec), parents: [m0], message: "chmod +x", author: who });
+		const changes = sectorChanges(m0Tree, await listTree(r, fork), [{ slug: "a", prefix: "a/" }]).bySector.get("a")!;
+		expect(changes.map((c) => c.path)).toEqual(["a/src/x.js"]);
+		const part = await sectorPart(r, { base: m0, sectorHead: a1, prefix: "a/", changes, message: "part", author: who, committer: who });
+		expect(part).not.toBeNull();
+		expect((await listTree(r, part!)).get("a/src/x.js")?.mode).toBe("100755");
+	});
+
 	it("is null when the sector's trunk has the part already", async () => {
 		const { r, a1, m0, fork } = await setup();
 		const changes = sectorChanges(await listTree(r, m0), await listTree(r, fork), [{ slug: "a", prefix: "a/" }]).bySector.get("a")!;

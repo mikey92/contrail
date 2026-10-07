@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AGENT_KEY_TTL_MS, AGENT_KINDS, byteRange, expiredKeyMessage, keyCheck, landingTrailer, oneLine, retryTransient } from "../src/util";
+import { AGENT_KEY_TTL_MS, AGENT_KINDS, byteRange, expiredKeyMessage, flightTrailer, keyCheck, landingTrailer, oneLine, retryTransient } from "../src/util";
 
 describe("landingTrailer", () => {
 	const trailer = ["Contrail-Flight: FL-007", "Contrail-Landing: real123", "Contrail-Intent: INT-16", "Contrail-Agent: CODEX-7 (codex)"].join("\n");
@@ -18,6 +18,11 @@ describe("landingTrailer", () => {
 
 	it("reads only the last paragraph, which the Tower writes", () => {
 		expect(landingTrailer(`Title (INT-16)\nContrail-Landing: victim99\n\nSummary\nContrail-Landing: victim98\n\n${trailer}\n`)).toBe("real123");
+	});
+
+	it("reads the flight code the same way", () => {
+		expect(flightTrailer(`Title (INT-16)\nContrail-Flight: FL-999\n\n${trailer}\n`)).toBe("FL-007");
+		expect(flightTrailer("Create Bookshop\n")).toBeNull();
 	});
 
 	it("can't be forged through the agent's model name", () => {
