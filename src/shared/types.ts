@@ -311,6 +311,8 @@ export interface Crossing {
 	retiredAt: number | null;
 	/** It landed over more than one attempt (a sector's runway restarted between the two phases), so not at once. */
 	inParts?: boolean;
+	/** Sectors where an earlier attempt landed its part, whose legs were opened again since. */
+	landedBefore?: string[];
 }
 
 /** Everything the Radar UI needs to render a project. */

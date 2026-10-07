@@ -72,16 +72,23 @@ function tap(sectorSlug) {
   const lines = streams.get(sectorSlug);
   const ws = new WebSocket(`${base.replace(/^http/, "ws")}/api/p/${sectorSlug}/live`);
   sockets.push(ws);
-  ws.onmessage = (m) => {
-    if (m.data === "pong") return;
-    const message = JSON.parse(m.data);
-    // A message too big for the socket comes as "resync": record the snapshot it stands for instead.
-    if (message.kind === "resync")
-      get(`/api/p/${sectorSlug}/snapshot`)
-        .then((snapshot) => lines.push({ t: Date.now() - t0, m: { kind: "snapshot", snapshot } }))
-        .catch((err) => console.log(`  ${sectorSlug}: no snapshot for a resync (${err.message})`));
-    else lines.push({ t: Date.now() - t0, m: message });
+  // While a resync's snapshot is on its way: the messages that come meanwhile, in order.
+  let waiting = null;
+  const take = (m, t) => {
+    if (waiting) return void waiting.push({ t, m });
+    if (m.kind !== "resync") return void lines.push({ t, m });
+    // A message too big for the socket: the snapshot it stands for goes in its place, then what came meanwhile.
+    waiting = [];
+    get(`/api/p/${sectorSlug}/snapshot`)
+      .then((snapshot) => lines.push({ t, m: { kind: "snapshot", snapshot } }))
+      .catch((err) => console.log(`  ${sectorSlug}: no snapshot for a resync (${err.message})`))
+      .finally(() => {
+        const queued = waiting;
+        waiting = null;
+        for (const q of queued) take(q.m, q.t);
+      });
   };
+  ws.onmessage = (m) => m.data !== "pong" && take(JSON.parse(m.data), Date.now() - t0);
   ws.onclose = () => recording && setTimeout(() => tap(sectorSlug), 500);
   return new Promise((resolve) => (ws.onopen = resolve));
 }

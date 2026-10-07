@@ -118,6 +118,11 @@ export class Center extends DurableObject<Env> {
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
 		ctx.blockConcurrencyWhile(async () => {
+			// Crossings in the air from before silent ones were aborted get looked at once too.
+			if (!(await ctx.storage.get<boolean>("crossingCheckArmed")) && (await ctx.storage.get<CenterInfo>("center"))) {
+				await ctx.storage.put({ crossingCheckArmed: true, crossingCheck: now() + CROSSING_CHECK_MS });
+				await this.scheduleAlarm();
+			}
 			// A restart interrupted a crossing's landing. Its sectors let their held parts go on their own.
 			const code = await ctx.storage.get<string>("landing");
 			if (!code) return;
@@ -218,17 +223,19 @@ export class Center extends DurableObject<Env> {
 			await this.ctx.storage.deleteAll();
 			return;
 		}
+		let failed = false;
 		try {
 			await this.compose();
 		} catch (err) {
 			await this.ctx.storage.put("lastError", errorMessage(err));
-			await this.ctx.storage.setAlarm(Date.now() + 5000);
-			return;
+			failed = true;
 		}
-		await this.retireForks();
-		if (((await this.ctx.storage.get<number>("crossingCheck")) ?? Infinity) <= now()) await this.expireCrossings();
+		// Old workspaces and silent crossings are looked after even while compositions fail.
+		await this.retireForks().catch(() => {});
+		if (((await this.ctx.storage.get<number>("crossingCheck")) ?? Infinity) <= now()) await this.expireCrossings().catch(() => {});
+		if (failed) await this.ctx.storage.setAlarm(Date.now() + 5000);
 		// Sectors that moved while we were composing get the next commit.
-		await this.scheduleAlarm();
+		else await this.scheduleAlarm();
 	}
 
 	/**
@@ -245,7 +252,11 @@ export class Center extends DurableObject<Env> {
 				flying++;
 				continue;
 			}
-			await this.abort(cx.agentId, "no word from its agent for an hour").catch(() => null);
+			// That crossing itself, one call of it at a time (its agent may have taken off on another since).
+			await this.serial(cx.code, async () => {
+				const current = await this.ctx.storage.get<Crossing>(CROSSING(cx.seq));
+				if (current && ACTIVE.includes(current.status) && current.landing?.status !== "landing") await this.abortCrossing(current, "no word from its agent for an hour");
+			}).catch(() => null);
 		}
 		if (flying) await this.ctx.storage.put("crossingCheck", now() + CROSSING_CHECK_MS);
 		else await this.ctx.storage.delete("crossingCheck");
@@ -361,7 +372,8 @@ export class Center extends DurableObject<Env> {
 		const n = await this.next("seq:agent");
 		const kind: AgentKind = AGENT_KINDS.includes(input.kind as AgentKind) ? (input.kind as AgentKind) : "other";
 		let callsign = String(input.callsign ?? "").trim().toUpperCase().replace(/[^A-Z0-9-]/g, "").slice(0, 20) || callsignFor(kind, n);
-		if (await this.ctx.storage.get(CALLSIGN(callsign))) callsign = `${callsign}-${n}`;
+		// Taken: the agent's number goes on it, and the next one after that if an agent chose that callsign too.
+		for (let k = n, base = callsign; await this.ctx.storage.get(CALLSIGN(callsign)); k++) callsign = `${base}-${k}`;
 		const key = randomToken("ct");
 		const agent: AgentRecord = { id: randomId(), callsign, kind, model: oneLine(input.model, 60) || null, joinedAt: now(), lastSeenAt: now(), legs: {}, crossing: null };
 		await this.ctx.storage.put<unknown>({ [AGENT(agent.id)]: agent, [KEY(await sha256(key))]: agent.id, [CALLSIGN(callsign)]: agent.id });
@@ -373,9 +385,14 @@ export class Center extends DurableObject<Env> {
 		const id = await this.ctx.storage.get<string>(KEY(await sha256(key)));
 		const agent = id ? await this.ctx.storage.get<AgentRecord>(AGENT(id)) : undefined;
 		if (!agent) return null;
-		const revokedAt = await this.ctx.storage.get<number>(REVOKED(agent.id));
+		const revokedAt = await this.revokedAt(agent);
 		if (revokedAt) return { revokedAt };
 		return keyCheck(publicAgent(agent));
+	}
+
+	/** When the agent's key was revoked: kept under a key of its own, or (revoked before that) in its record. */
+	private async revokedAt(agent: AgentRecord): Promise<number | undefined> {
+		return (await this.ctx.storage.get<number>(REVOKED(agent.id))) ?? agent.revokedAt;
 	}
 
 	/** An operator revokes a crossing agent's key (by id or callsign): it stops working at once, and its crossing in the air is aborted. */
@@ -385,7 +402,7 @@ export class Center extends DurableObject<Env> {
 		// Agents that joined before callsigns were indexed.
 		if (!agent) agent = [...(await this.ctx.storage.list<AgentRecord>({ prefix: "agent:" })).values()].find((a) => a.callsign === ref.toUpperCase());
 		if (!agent) throw new Error(`no agent ${ref}`);
-		if (!(await this.ctx.storage.get<number>(REVOKED(agent.id)))) await this.ctx.storage.put(REVOKED(agent.id), now());
+		if (!(await this.ctx.storage.get<number>(REVOKED(agent.id)))) await this.ctx.storage.put(REVOKED(agent.id), agent.revokedAt ?? now());
 		await this.abort(agent.id, "its agent's key was revoked").catch(() => null);
 		return { revoked: agent.callsign };
 	}
@@ -453,7 +470,7 @@ export class Center extends DurableObject<Env> {
 	async takeOff(agentId: string, opts: { intent?: string | number | null } = {}) {
 		const info = await this.info();
 		const agent = await this.agentRecord(agentId);
-		if (await this.ctx.storage.get<number>(REVOKED(agent.id))) throw new Error("this agent's key was revoked by the operator");
+		if (await this.revokedAt(agent)) throw new Error("this agent's key was revoked by the operator");
 		const flying = agent.crossing ? await this.crossingByCode(agent.crossing) : null;
 		if (flying && ACTIVE.includes(flying.status)) throw new Error(`you are already flying ${flying.code} (${flying.status}); land it or call abort before taking off again`);
 		let intent: CenterIntent | undefined;
@@ -503,6 +520,10 @@ export class Center extends DurableObject<Env> {
 			const [workspace, upstream, testCommand] = await Promise.all([this.mintWorkspace(cx.repo, "write"), this.mintWorkspace(info.trunkRepo, "read"), this.testCommand(info.trunkRepo)]);
 			const fork = await this.env.ARTIFACTS.get(cx.repo);
 			cx.base = (await fork.log({ ref: "main", limit: 1 }).finally(() => fork[Symbol.dispose]?.()))[0]?.hash ?? "";
+			// The operator may have revoked the agent (which aborts its crossing) while the fork was being made.
+			const latest = await this.ctx.storage.get<Crossing>(CROSSING(seq));
+			if (latest?.status !== "airborne") throw new Error(`${code} was aborted while it was taking off`);
+			Object.assign(cx, { ...latest, repo: cx.repo, base: cx.base });
 			await this.saveCrossing(cx);
 			return {
 				crossing: cx,
@@ -515,12 +536,14 @@ export class Center extends DurableObject<Env> {
 				radio: [] as RadioMessage[],
 			};
 		} catch (err) {
-			cx.status = "aborted";
-			if (cx.repo) await this.retireLater(cx);
-			await this.saveCrossing(cx);
-			intent.status = "open";
-			intent.crossing = null;
-			await this.ctx.storage.put(INTENT(intent.seq), intent);
+			// The record as it is now (an abort meantime keeps its note), with the fork to retire.
+			const latest = (await this.ctx.storage.get<Crossing>(CROSSING(seq))) ?? cx;
+			latest.repo ||= cx.repo;
+			latest.status = "aborted";
+			await this.retireLater(latest);
+			await this.saveCrossing(latest);
+			const current = await this.ctx.storage.get<CenterIntent>(INTENT(intent.seq));
+			if (current?.crossing === code && current.status === "assigned") await this.ctx.storage.put(INTENT(intent.seq), { ...current, status: "open", crossing: null });
 			throw err;
 		}
 	}
@@ -590,8 +613,12 @@ export class Center extends DurableObject<Env> {
 	private async leg(info: CenterInfo, agent: AgentRecord, cx: Crossing, sector: SectorInfo): Promise<CrossingLeg> {
 		const known = cx.legs.find((l) => l.sector === sector.slug);
 		if (known && !known.closed) return known;
-		// That leg's flight is over (after a partial landing, say): the sector gets a new one.
-		if (known) cx.legs = cx.legs.filter((l) => l !== known);
+		// That leg's flight is over (after a partial landing, say): the sector gets a new one, and the crossing
+		// remembers that its part landed there before.
+		if (known) {
+			if (known.landing?.status === "landed") cx.landedBefore = [...new Set([...(cx.landedBefore ?? []), known.name])];
+			cx.legs = cx.legs.filter((l) => l !== known);
+		}
 		const tower = this.tower(sector.slug);
 		const { agentId, flight } = await tower.openLeg({
 			crossing: cx.code,
@@ -743,17 +770,20 @@ export class Center extends DurableObject<Env> {
 
 	async abort(agentId: string, reason?: string) {
 		reason = reason === undefined ? undefined : String(reason).slice(0, 500);
-		return this.withCrossing(agentId, async (_agent, cx) => {
-			const why = `crossing ${cx.code} aborted${reason ? `: ${reason}` : ""}`;
-			await Promise.all(cx.legs.map((l) => this.tower(l.sector).closeLeg(l.agentId, why).catch(() => {})));
-			cx.status = "aborted";
-			if (reason) cx.contrail = [...cx.contrail, { kind: "note" as ContrailKind, text: `Aborted: ${reason}`, at: now() }].slice(-50);
-			await this.saveCrossing(cx);
-			const intent = await this.ctx.storage.get<CenterIntent>(INTENT(cx.intent.seq));
-			if (intent?.status === "assigned") await this.ctx.storage.put(INTENT(intent.seq), { ...intent, status: "open", crossing: null });
-			await this.retireLater(cx);
-			return { ok: true as const, radio: [] as RadioMessage[] };
-		});
+		return this.withCrossing(agentId, (_agent, cx) => this.abortCrossing(cx, reason));
+	}
+
+	/** Ends a crossing: its legs close, its intent opens again (if it still has it) and its workspace is retired later. */
+	private async abortCrossing(cx: Crossing, reason?: string) {
+		const why = `crossing ${cx.code} aborted${reason ? `: ${reason}` : ""}`;
+		await Promise.all(cx.legs.map((l) => this.tower(l.sector).closeLeg(l.agentId, why).catch(() => {})));
+		cx.status = "aborted";
+		if (reason) cx.contrail = [...cx.contrail, { kind: "note" as ContrailKind, text: `Aborted: ${reason}`, at: now() }].slice(-50);
+		await this.saveCrossing(cx);
+		const intent = await this.ctx.storage.get<CenterIntent>(INTENT(cx.intent.seq));
+		if (intent?.status === "assigned" && intent.crossing === cx.code) await this.ctx.storage.put(INTENT(intent.seq), { ...intent, status: "open", crossing: null });
+		await this.retireLater(cx);
+		return { ok: true as const, radio: [] as RadioMessage[] };
 	}
 
 	async landingStatus(agentId: string) {
@@ -799,15 +829,16 @@ export class Center extends DurableObject<Env> {
 		let parts: Part[] = [];
 		try {
 			// A sector whose part is on its trunk already (an earlier attempt landed there) gets no new leg.
-			parts = await this.exclusive(async () => {
-				const all = await this.split(info, cx, touched, summary);
-				const changed = all.filter((p) => p.commit);
+			await this.exclusive(async () => {
+				// Assigned at once, so the sectors split() holds are let go below even if a leg or a push fails.
+				parts = await this.split(info, cx, touched, summary);
+				const changed = parts.filter((p) => p.commit);
 				await Promise.all(changed.map((p) => this.leg(info, agent, cx, p.sector)));
 				await this.pushParts(cx, changed);
-				return all;
 			});
 			const legs = parts.filter((p) => p.commit).map((p) => cx.legs.find((l) => l.sector === p.sector.slug && !l.closed)!);
-			const earlier = cx.legs.filter((l) => l.closed && l.landing?.status === "landed");
+			// Sectors where an earlier attempt landed its part.
+			const earlier = [...new Set([...cx.legs.filter((l) => l.closed && l.landing?.status === "landed").map((l) => l.name), ...(cx.landedBefore ?? [])])];
 
 			// Phase one: every sector merges, checks and tests its part, then holds it.
 			const prepared = await Promise.all(
@@ -825,7 +856,7 @@ export class Center extends DurableObject<Env> {
 				const held = legs.filter((_, i) => prepared[i].ready).map((l) => l.name);
 				await Promise.all(legs.map((leg) => this.tower(leg.sector).abortLeg(leg.agentId, `held back: crossing ${cx.code} did not land in ${reasons.map((r) => r.split(":")[0]).join(", ")}`).catch(() => null)));
 				for (const leg of legs) if (leg.landing?.status === "verifying" || leg.landing?.status === "merging") leg.landing = { ...leg.landing, status: "failed", error: "held back" };
-				const already = earlier.length ? `Landed in ${earlier.map((l) => l.name).join(", ")} before; not in the rest. ` : "Not landed anywhere. ";
+				const already = earlier.length ? `Landed in ${earlier.join(", ")} before; not in the rest. ` : "Not landed anywhere. ";
 				await this.finish(cx, { landed: false, error: `${already}${reasons.join("; ")}.${held.length ? ` ${held.join(" and ")} ${held.length > 1 ? "were" : "was"} ready and held back.` : ""}` });
 				return;
 			}
@@ -847,7 +878,7 @@ export class Center extends DurableObject<Env> {
 				await this.finish(cx, {
 					landed: false,
 					commit,
-					error: `Landed in ${[...earlier, ...down.map((d) => d.leg)].map((l) => l.name).join(", ") || "no sector"} but not in ${missed.map((l) => `${l.name} (${l.landing?.error ?? l.landing?.status})`).join(", ")}. Request landing again to land the rest.`,
+					error: `Landed in ${[...new Set([...earlier, ...down.map((d) => d.leg.name)])].join(", ") || "no sector"} but not in ${missed.map((l) => `${l.name} (${l.landing?.error ?? l.landing?.status})`).join(", ")}. Request landing again to land the rest.`,
 				});
 			else {
 				if (earlier.length) cx.inParts = true;
@@ -966,12 +997,10 @@ export class Center extends DurableObject<Env> {
 			if (intent) await this.ctx.storage.put(INTENT(intent.seq), { ...intent, status: "landed", landedCommit: outcome.commit ?? null });
 			await this.retireLater(cx);
 		}
-		await this.saveCrossing(cx);
-		// Right after the save, with only storage in between: a first count running now sees this crossing or adds it here.
-		if (outcome.landed && was !== "landed") {
-			const counted = await this.ctx.storage.get<number>("crossingsLanded");
-			if (counted !== undefined) await this.ctx.storage.put("crossingsLanded", counted + 1);
-		}
+		cx.updatedAt = now();
+		// The crossing and the landed count in one write: a first count running meanwhile sees both or neither.
+		const counted = outcome.landed && was !== "landed" ? await this.ctx.storage.get<number>("crossingsLanded") : undefined;
+		await this.ctx.storage.put<unknown>(counted === undefined ? { [CROSSING(cx.seq)]: cx } : { [CROSSING(cx.seq)]: cx, crossingsLanded: counted + 1 });
 	}
 
 	/** How many crossings have landed in all (the Center page lists only the latest): counted once from the stored crossings, then kept as they land. */
@@ -979,7 +1008,15 @@ export class Center extends DurableObject<Env> {
 		const counted = await this.ctx.storage.get<number>("crossingsLanded");
 		if (counted !== undefined) return counted;
 		let n = 0;
-		for (const cx of (await this.ctx.storage.list<Crossing>({ prefix: "crossing:" })).values()) if (cx.status === "landed") n++;
+		let after: string | undefined;
+		for (;;) {
+			const page = await this.ctx.storage.list<Crossing>({ prefix: "crossing:", limit: 100, ...(after ? { startAfter: after } : {}) });
+			for (const [key, cx] of page) {
+				if (cx.status === "landed") n++;
+				after = key;
+			}
+			if (page.size < 100) break;
+		}
 		await this.ctx.storage.put("crossingsLanded", n);
 		return n;
 	}
@@ -990,7 +1027,7 @@ export class Center extends DurableObject<Env> {
 		if (!l) return "Not landing yet: commit, git push origin HEAD:main, then request_landing.";
 		if (l.status === "landing") return "Landing: each sector is merging and testing its part. Call landing_status in a little while.";
 		if (l.status === "landed") {
-			const names = cx.legs.filter((x) => x.landing?.status === "landed").map((x) => x.name);
+			const names = [...new Set([...(cx.landedBefore ?? []), ...cx.legs.filter((x) => x.landing?.status === "landed").map((x) => x.name)])];
 			const list = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : (names[0] ?? "its sectors");
 			return `Landed in ${list}${cx.inParts ? "" : " at once"}${l.commit ? `; the monorepo trunk has it as ${l.commit.slice(0, 8)}` : ""}. Your crossing is complete — call take_off for the next one.`;
 		}
@@ -1003,6 +1040,7 @@ export class Center extends DurableObject<Env> {
 	// ───────────────────────── crossings: workspaces ─────────────────────────
 
 	private async retireLater(cx: Crossing) {
+		if (!cx.repo) return;
 		const retiring = (await this.ctx.storage.get<{ repo: string; seq: number; due: number }[]>("retiring")) ?? [];
 		if (!retiring.some((r) => r.repo === cx.repo)) retiring.push({ repo: cx.repo, seq: cx.seq, due: now() + FORK_RETENTION_MS });
 		await this.ctx.storage.put("retiring", retiring);

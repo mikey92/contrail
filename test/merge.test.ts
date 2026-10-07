@@ -139,3 +139,46 @@ describe("mergeText inserts that share an import", () => {
 		expect(r.text).toContain("def test_b():");
 	});
 });
+
+describe("mergeText inserts across languages", () => {
+	const insert = (path: string, base: string, a: string, b: string) => mergeText(path, base, `${base}${a}`, `${base}${b}`);
+	it("keeps one copy of an import both add, with a comment, attributes or import-equals", () => {
+		for (const line of ['import { z } from "zod"; // validation', 'import data from "./data.json" with { type: "json" };', 'import fs = require("fs");']) {
+			const r = insert("src/x.ts", "export const k = 1;\n", `${line}\nexport const a = 1;\n`, `${line}\nexport const b = 2;\n`);
+			expect(r.clean).toBe(true);
+			expect(r.text.split(line)).toHaveLength(2);
+		}
+	});
+	it("keeps one copy of a multi-line import whose lines carry comments", () => {
+		const js = 'import {\n  a, // the a\n} from "./a.js"; // ours\n';
+		const r = insert("src/m.js", "export const k = 1;\n", `${js}export function fa() {\n  return a;\n}\n`, `${js}export function fb() {\n  return a;\n}\n`);
+		expect(r.clean).toBe(true);
+		expect(r.text.match(/from "\.\/a\.js"/g)).toHaveLength(1);
+		const py = "from helpers import (\n    alpha,  # see (docs)\n    beta,\n)\n";
+		const p = insert("tests/test_x.py", "x = 1\n", `${py}def test_a():\n    assert alpha()\n`, `${py}def test_b():\n    assert beta()\n`);
+		expect(p.clean).toBe(true);
+		expect(p.text.match(/from helpers import/g)).toHaveLength(1);
+	});
+	it("reports a name declared twice in Go, Rust, Swift, Kotlin, PHP and Vue", () => {
+		const cases: [string, string, string][] = [
+			["errors.go", 'var ErrGone = errors.New("gone")\n', 'var ErrGone = errors.New("gone away")\n'],
+			["src/lib.rs", "const MAX: usize = 10;\n", "const MAX: usize = 20;\n"],
+			["Sources/Clamp.swift", "func clamp(_ x: Int) -> Int { x }\n", "func clamp(_ x: Int) -> Int { 0 }\n"],
+			["src/Money.kt", "class Money(val cents: Long)\n", "class Money(val amount: Double)\n"],
+			["src/slug.php", "function slugify($s) { return $s; }\n", "function slugify($s) { return strtolower($s); }\n"],
+			["src/App.vue", "const count = ref(0)\n", "const count = ref(1)\n"],
+		];
+		for (const [path, a, b] of cases) expect(insert(path, "// top\n", a, b).clean, path).toBe(false);
+	});
+	it("does not take a type or a merged interface for a name declared twice", () => {
+		expect(insert("src/x.c", "int main(void);\n", "const int MAX_A = 1;\n", "const int MAX_B = 2;\n").clean).toBe(true);
+		expect(insert("src/x.kt", "package x\n", "const val A = 1\n", "const val B = 2\n").clean).toBe(true);
+		expect(insert("src/global.d.ts", "export {};\n", "interface Window {\n  a: string;\n}\n", "interface Window {\n  b: number;\n}\n").clean).toBe(true);
+	});
+	it("stays fast on hostile inserts", () => {
+		const t0 = Date.now();
+		insert("src/x.js", "export const k = 1;\n", `import ${"{".repeat(40_000)}\n`, `import ${"{".repeat(40_001)}\n`);
+		insert("src/y.js", "export const k = 1;\n", "import {\n".repeat(20_000), "import { x }\n".repeat(20_000));
+		expect(Date.now() - t0).toBeLessThan(1000);
+	});
+});

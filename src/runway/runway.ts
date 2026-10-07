@@ -454,7 +454,8 @@ export class Runway extends DurableObject<Env> {
 		}
 		// A replayed train whose landings were all on trunk already still reports trunk: the Tower may not have heard.
 		const moved = tip !== start || opts.retry > 0 || outcomes.some((o) => o.status === "landed");
-		return { outcomes, head: tip, trunk: moved ? await this.summarize(tip) : null };
+		// From this clone `r`: a clone dropped above is still whole for reading what it pushed.
+		return { outcomes, head: tip, trunk: moved ? await this.summarize(tip, r) : null };
 	}
 
 	/** Runs the test suite of `tree` in a Dynamic Worker. */
@@ -530,8 +531,7 @@ export class Runway extends DurableObject<Env> {
 		});
 	}
 
-	private async summarize(commitOid: string): Promise<TrunkFile[]> {
-		const r = this.repo!;
+	private async summarize(commitOid: string, r: Repo = this.repo!): Promise<TrunkFile[]> {
 		const files: TrunkFile[] = [];
 		for (const [path, item] of await listTree(r, commitOid)) {
 			let lines = this.lineCache.get(item.oid);

@@ -344,13 +344,14 @@ const sectors = (n: number) => `${n} ${n === 1 ? "sector" : "sectors"}`;
 
 /** A crossing's state in a few words, with the status chip's tone. */
 function crossingState(cx: Crossing): { label: string; tone: string } {
-	const landed = cx.legs.filter((l) => l.landing?.status === "landed").length;
+	// Sectors where its part landed, in this attempt or an earlier one.
+	const landed = new Set([...(cx.landedBefore ?? []), ...cx.legs.filter((l) => l.landing?.status === "landed").map((l) => l.name)]).size;
 	if (cx.status === "landed") return { label: `Landed in ${sectors(landed)}${cx.inParts ? "" : " at once"}`, tone: "landed" };
 	if (cx.status === "aborted") return { label: "Aborted", tone: "aborted" };
 	if (cx.landing?.status === "landing") return { label: "Landing", tone: "approach" };
 	if (cx.status === "diverted") {
 		// Out of the legs that tried to land: a leg that only asked for clearance had nothing to land.
-		const tried = cx.legs.filter((l) => l.landing).length;
+		const tried = new Set([...(cx.landedBefore ?? []), ...cx.legs.filter((l) => l.landing).map((l) => l.name)]).size;
 		return { label: landed ? `Landed in ${landed} of ${sectors(tried)}` : "Landed nowhere", tone: "diverted" };
 	}
 	return { label: "In the air", tone: "airborne" };

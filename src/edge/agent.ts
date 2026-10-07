@@ -265,8 +265,11 @@ export class EdgeAgent extends DurableObject<Env> {
 
 	private async workspace(state: State, config: Config): Promise<Workspace> {
 		if (this.ws) return this.ws;
-		// The isolate was evicted mid-flight: re-open the workspace from what was last pushed.
-		this.ws = await Workspace.open(state.flight!.cloneUrl, state.flight!.upstreamUrl, {
+		// The isolate was evicted mid-flight: re-open the workspace from what was last pushed, with fresh tokens.
+		// A flight the tower ended meanwhile (its fork may be gone) answers "no active flight": the agent boards again.
+		const fresh = await this.tower(config.slug).refreshWorkspace(config.agentId);
+		state.flight = { ...state.flight!, cloneUrl: fresh.workspace.cloneUrl, upstreamUrl: fresh.upstream.cloneUrl };
+		this.ws = await Workspace.open(state.flight.cloneUrl, state.flight.upstreamUrl, {
 			name: config.callsign,
 			email: `${config.callsign.toLowerCase()}@agents.contrail.dev`,
 		});

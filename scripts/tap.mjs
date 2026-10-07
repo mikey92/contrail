@@ -13,23 +13,36 @@ let stopping = false;
 let ws;
 let retry = 500;
 
-function write(message) {
-  file.write(`${JSON.stringify({ t: Date.now() - t0, m: message })}\n`);
+function write(message, t) {
+  if (stopping) return;
+  file.write(`${JSON.stringify({ t, m: message })}\n`);
   if (++count % 100 === 0) console.log(`${count} messages, ${Math.round((Date.now() - t0) / 1000)}s`);
+}
+
+// While a resync's snapshot is on its way: the messages that come meanwhile, in order.
+let waiting = null;
+function take(message, t) {
+  if (waiting) return void waiting.push([message, t]);
+  if (message.kind !== "resync") return write(message, t);
+  // A message too big for the socket: the snapshot it stands for goes in its place, then what came meanwhile
+  // (a replay applies those again on top of it, as the radar does live).
+  waiting = [];
+  fetch(`${base}/api/p/${slug}/snapshot`)
+    .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
+    .then((snapshot) => write({ kind: "snapshot", snapshot }, t))
+    .catch((err) => console.log(`no snapshot for a resync (${err.message})`))
+    .finally(() => {
+      const queued = waiting;
+      waiting = null;
+      for (const [m, at] of queued) take(m, at);
+    });
 }
 
 function connect() {
   ws = new WebSocket(`${base.replace(/^http/, "ws")}/api/p/${slug}/live`);
   ws.onmessage = (m) => {
     retry = 500;
-    if (m.data === "pong") return;
-    const message = JSON.parse(m.data);
-    if (message.kind !== "resync") return write(message);
-    // A message too big for the socket: record the snapshot it stands for instead.
-    fetch(`${base}/api/p/${slug}/snapshot`)
-      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
-      .then((snapshot) => !stopping && write({ kind: "snapshot", snapshot }))
-      .catch((err) => console.log(`no snapshot for a resync (${err.message})`));
+    if (m.data !== "pong") take(JSON.parse(m.data), Date.now() - t0);
   };
   ws.onclose = (e) => {
     if (stopping) return;

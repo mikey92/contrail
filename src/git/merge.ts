@@ -30,60 +30,83 @@ export interface TextMergeResult {
 
 const sameLines = (a: string[], b: string[]) => a.length === b.length && a.every((l, i) => l === b[i]);
 
-/** A whole import statement on one unindented line (JavaScript, TypeScript or Python). */
-const WHOLE_IMPORT = [
-	/^import\s.*\bfrom\s*["'][^"']+["'];?\s*$/,
-	/^import\s*["'][^"']+["'];?\s*$/,
-	/^import\s+[\w.]+(?:\s+as\s+\w+)?(?:\s*,\s*[\w.]+(?:\s+as\s+\w+)?)*\s*$/,
-	/^from\s+\S+\s+import\s+[^(\\]+$/,
-];
-/** The first line of an import over several lines, and the line that ends it. */
+/** The first line of an import statement: JavaScript, TypeScript, Python, Go, Java, Kotlin, Swift and the like. */
+const IMPORT_LINE = /^(?:import\b|from\s+\S+\s+import\b)/;
+/** The first line of an import over several lines, and the line that ends it (both without a trailing comment). */
 const IMPORT_OPENS: [RegExp, RegExp][] = [
-	[/^import\b[^"']*\{[^}]*$/, /^\s*\}.*\bfrom\s*["'][^"']+["'];?\s*$/],
-	[/^from\s+\S+\s+import\s*\([^)]*$/, /\)\s*(?:#.*)?$/],
+	// JavaScript: import { … } from "x";
+	[/^import\b[^"'{;]*\{[^}]*$/, /^\s*\}\s*from\s*["']/],
+	// Python: from x import ( … )
+	[/^from\s+\S+\s+import\s*\([^)]*$/, /\)$/],
+	// Go: import ( … )
+	[/^import\s*\($/, /^\)$/],
 ];
+/** How far an import over several lines is looked for its last line. */
+const MAX_IMPORT_LINES = 1000;
+
+/** A line without its trailing comment (`//`, `#` or a block comment after the line's last quote). */
+function bare(line: string): string {
+	const quote = Math.max(line.lastIndexOf('"'), line.lastIndexOf("'"), line.lastIndexOf("`"));
+	let cut = line.length;
+	for (const mark of ["//", "#", "/*"]) {
+		const at = line.indexOf(mark, quote + 1);
+		if (at !== -1 && at < cut) cut = at;
+	}
+	return line.slice(0, cut).trimEnd();
+}
 
 /**
- * The import statements in `lines`, each whole (one line or several) with its line span. Both sides adding
- * the same statement keep it once; a line of a multi-line import is only ever compared as part of the whole.
+ * The import statements in `lines`, each whole (one line or several) with its line span and a key to compare
+ * it by (its lines without comments or indentation). An import over several lines whose last line isn't
+ * there (before the next unindented line) is no statement this can compare: its lines are left alone.
  */
-function importStatements(lines: string[]): { from: number; to: number; text: string }[] {
-	const out: { from: number; to: number; text: string }[] = [];
+function importStatements(lines: string[]): { from: number; to: number; key: string }[] {
+	const out: { from: number; to: number; key: string }[] = [];
 	for (let i = 0; i < lines.length; i++) {
-		if (WHOLE_IMPORT.some((re) => re.test(lines[i]))) {
-			out.push({ from: i, to: i, text: lines[i] });
+		const line = bare(lines[i]);
+		if (!IMPORT_LINE.test(line)) continue;
+		const ends = IMPORT_OPENS.find(([opens]) => opens.test(line))?.[1];
+		if (!ends) {
+			out.push({ from: i, to: i, key: line });
 			continue;
 		}
-		const ends = IMPORT_OPENS.find(([opens]) => opens.test(lines[i]))?.[1];
-		if (!ends) continue;
-		const j = lines.findIndex((l, k) => k > i && ends.test(l));
-		if (j === -1) continue;
-		out.push({ from: i, to: j, text: lines.slice(i, j + 1).join("\n") });
-		i = j;
+		let j = i + 1;
+		while (j < lines.length && j - i < MAX_IMPORT_LINES && !ends.test(bare(lines[j])) && !/^\S/.test(lines[j])) j++;
+		if (j < lines.length && ends.test(bare(lines[j]))) {
+			out.push({ from: i, to: j, key: lines.slice(i, j + 1).map((l) => bare(l).trim()).join("\n") });
+			i = j;
+		}
 	}
 	return out;
 }
 
 /** `b` without the import statements `a` has too. */
 function withoutSharedImports(a: string[], b: string[]): string[] {
-	const ours = new Set(importStatements(a).map((s) => s.text));
+	const ours = new Set(importStatements(a).map((s) => s.key));
 	const drop = new Set<number>();
-	for (const s of importStatements(b)) if (ours.has(s.text)) for (let k = s.from; k <= s.to; k++) drop.add(k);
+	for (const s of importStatements(b)) if (ours.has(s.key)) for (let k = s.from; k <= s.to; k++) drop.add(k);
 	return b.filter((_, k) => !drop.has(k));
 }
 
-/** Top-level declarations by language: the name each declares (a type keyword like `enum` is not a name). */
+/** Words between `const`, `let`, `var` or `val` and the name (C, C++, Kotlin): types and modifiers, not names. */
+const TYPE_WORDS = "enum|val|mut|int|unsigned|signed|long|short|char|float|double|bool|auto|static|struct|volatile|size_t|u?int\\d*_t";
+/** Top-level declarations in code without a rule of its own (C, C++, Java, Kotlin, Swift, C#, PHP, Vue and others). */
+const ANY_DECLARATION = new RegExp(`^(?:export\\s+)?(?:default\\s+)?(?:async\\s+)?(?:function\\*?|class|def|fn|func|fun|(?:const|let|var|val)(?:\\s+(?:${TYPE_WORDS}))*)\\s+([\\w$]+)`);
+/** Top-level declarations by language: the name each declares. */
 const DECLARATIONS: Record<string, RegExp> = {
-	js: /^(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:async\s+)?(?:function\*?|class|const\s+enum|enum|const|let|var|interface|type)\s+([\w$]+)/,
+	// Not `interface`: TypeScript merges two interfaces of the same name.
+	js: /^(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:async\s+)?(?:function\*?|class|const\s+enum|enum|const|let|var|type)\s+([\w$]+)/,
 	py: /^(?:async\s+)?(?:def|class)\s+(\w+)/,
-	go: /^(?:func|type)\s+(\w+)/,
-	rust: /^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:unsafe\s+)?(?:fn|struct|enum|trait)\s+(\w+)/,
-	ruby: /^(?:def|class|module)\s+([\w:]+)/,
+	go: /^(?:func|type|var|const)\s+(\w+)/,
+	rust: /^(?:pub(?:\([^)]*\))?\s+)?(?:const\s+|async\s+|unsafe\s+)*(?:fn|struct|enum|trait|union|type|mod|const|static(?:\s+mut)?)\s+(\w+)/,
+	ruby: /^(?:def|class|module)\s+([\w:.]+)/,
 };
+/** Prose and data: a line there that starts with "let" or "class" declares nothing. */
+const PROSE = /\.(?:md|markdown|txt|rst|adoc|org|json|ya?ml|toml|csv|tsv|lock|ini|cfg|conf|xml|svg|html?|css|scss|less)$/i;
 
 /** Names both inserts declare at the top level: kept side by side, the file would declare them twice. */
 function declaredTwice(path: string, a: string[], b: string[]): string[] {
-	const re = DECLARATIONS[languageOf(path)];
+	const re = DECLARATIONS[languageOf(path)] ?? (PROSE.test(path) ? null : ANY_DECLARATION);
 	if (!re) return [];
 	const names = (lines: string[]) => new Set(lines.flatMap((l) => re.exec(l)?.[1] ?? []));
 	const ours = names(a);

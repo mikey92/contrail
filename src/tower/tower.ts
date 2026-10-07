@@ -823,6 +823,8 @@ export class Tower extends DurableObject<Env> {
 					trunkRepo[Symbol.dispose]?.();
 				}
 			}
+			// Counted once it exists: retiring it later takes it off the count, whatever happens next.
+			this.bump("repos");
 			let workspace: Workspace | null = null;
 			for (let i = 0; i < 60 && !workspace; i++) {
 				try {
@@ -835,7 +837,6 @@ export class Tower extends DurableObject<Env> {
 			}
 			if (!workspace) throw new Error("workspace fork did not become ready");
 			const upstream = await this.mintWorkspace(project.trunkRepo, "read");
-			this.bump("repos");
 			// Aborted while its workspace was being made: it stays aborted. (Holding for code it asked for meanwhile is fine.)
 			const status = this.flightById(flightId).status;
 			if (status === "aborted") throw new Error("the flight was aborted while its workspace was being made");
@@ -2143,11 +2144,13 @@ export class Tower extends DurableObject<Env> {
 
 	async alarm() {
 		this.abortStale();
-		// A flight waiting on its landing (the runway, a reviewer) keeps what it is cleared for meanwhile.
+		// A flight waiting on its landing (the runway, a reviewer) keeps what it is cleared for meanwhile: renewed
+		// while it still holds, never brought back once it lapsed (another flight may have been cleared since).
 		this.sql.exec(
-			"UPDATE clearances SET expires_at = ? WHERE expires_at <= ? AND flight_id IN (SELECT flight_id FROM landings WHERE status IN ('queued', 'merging', 'verifying', 'review'))",
+			"UPDATE clearances SET expires_at = ? WHERE expires_at > ? AND expires_at <= ? AND flight_id IN (SELECT flight_id FROM landings WHERE status IN ('queued', 'merging', 'verifying', 'review'))",
 			now() + CLEARANCE_TTL_MS,
 			now(),
+			now() + 10 * 60_000,
 		);
 		this.sql.exec("DELETE FROM clearances WHERE expires_at <= ?", now());
 		// Radio messages an agent has read are kept a day, not forever.
