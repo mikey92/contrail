@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { airspaceViolations, findCollisions, normalizeTarget, parseTarget, policyTargetsTouched, targetsOverlap } from "../src/tower/clearance";
+import { airspaceViolations, findCollisions, holdQueue, normalizeTarget, parseTarget, policyTargetsTouched, targetsOverlap } from "../src/tower/clearance";
 
 describe("targetsOverlap", () => {
 	it.each([
@@ -72,5 +72,41 @@ describe("policyTargetsTouched", () => {
 		expect(policyTargetsTouched(policy, [{ path: "src/money.js", symbols: ["(top)"] }])).toEqual(["src/money.js#formatMoney"]);
 		expect(policyTargetsTouched(policy, [{ path: "src/money.js", symbols: ["parseMoney", "(top)"] }])).toEqual(["src/money.js#formatMoney"]);
 		expect(policyTargetsTouched(policy, [{ path: "src/money.js", symbols: [] }])).toEqual(["src/money.js#formatMoney"]);
+	});
+});
+
+describe("holdQueue", () => {
+	const g = (id: string, flightId: string, target: string, createdAt = 0) => ({ id, flightId, target, status: "granted" as const, createdAt });
+	const h = (id: string, flightId: string, target: string, createdAt: number) => ({ id, flightId, target, status: "holding" as const, createdAt });
+
+	it("waits for the flight cleared for overlapping code", () => {
+		expect(holdQueue([g("c1", "F1", "src/a.js#x"), h("h2", "F2", "src/a.js#x", 1)]).get("h2")).toEqual(["F1"]);
+	});
+
+	it("lets a hold on a whole file go first: a later claim on a function in it queues behind", () => {
+		const claims = [g("c1", "F1", "src/a.js#x"), h("h2", "F2", "src/a.js", 1), h("h3", "F3", "src/a.js#y", 2)];
+		const q = holdQueue(claims);
+		expect(q.get("h2")).toEqual(["F1"]);
+		expect(q.get("h3")).toEqual(["F2"]);
+	});
+
+	it("never queues a flight behind one that waits for it", () => {
+		// F2 waits for F1's src/a.js#x; F1 asking for another function of a.js would wait for F2: neither could move.
+		const claims = [g("c1", "F1", "src/a.js#x"), h("h2", "F2", "src/a.js", 1), h("h3", "F1", "src/a.js#y", 2)];
+		expect(holdQueue(claims).get("h3")).toEqual([]);
+	});
+
+	it("follows waits through other flights", () => {
+		// F3 waits for F1 (a grant), F2 queues behind F3, so F1 must not queue behind F2.
+		const claims = [g("c1", "F1", "src/c.js#k"), h("h3", "F3", "src/c.js", 1), h("h2", "F2", "src/c.js#m", 2), h("h4", "F1", "src/c.js#m", 3)];
+		const q = holdQueue(claims);
+		expect(q.get("h3")).toEqual(["F1"]);
+		expect(q.get("h2")).toEqual(["F3"]);
+		expect(q.get("h4")).toEqual([]);
+	});
+
+	it("leaves unrelated holds alone", () => {
+		const claims = [g("c1", "F1", "src/a.js#x"), h("h2", "F2", "src/a.js#x", 1), h("h3", "F3", "src/b.js#y", 2)];
+		expect(holdQueue(claims).get("h3")).toEqual([]);
 	});
 });

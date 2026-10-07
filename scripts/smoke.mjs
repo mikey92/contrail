@@ -291,6 +291,25 @@ const trains = (await (await fetch(`${base}/api/p/${slug}/events?type=runway.tra
 const xTrain = trains.find((e) => e.data?.landings?.includes(lx.landing.id));
 console.log(`    (the culprit rode a train of ${xTrain?.data?.landings?.length ?? "?"})`);
 
+// ── 5b. holds go first come, first served, and never wait in a circle ─────
+const [Q, Pw, R] = await Promise.all(["SMOKE-Q", "SMOKE-W", "SMOKE-R"].map((callsign) => agent(callsign)));
+for (const [a, intent] of [[Q, "10"], [Pw, "12"], [R, "15"]]) await a.tool("take_off", { intent });
+const cq = await Q.tool("request_clearance", { targets: ["src/catalog.js#search"], reason: "fairness check" });
+const cw = await Pw.tool("request_clearance", { targets: ["src/catalog.js"], reason: "the whole file" });
+const cr = await R.tool("request_clearance", { targets: ["src/catalog.js#findByIsbn"], reason: "another function" });
+check(cq.granted.length === 1 && cw.holding[0]?.heldBy.callsign === "SMOKE-Q", "a hold on the whole file waits for the flight cleared for a function in it");
+check(cr.holding[0]?.queued === true && cr.holding[0]?.heldBy.callsign === "SMOKE-W", `a later claim on another function queues behind the whole-file hold (${cr.holding.length ? "holding" : "granted"})`);
+const cq2 = await Q.tool("request_clearance", { targets: ["src/catalog.js#createCatalog"], reason: "more" });
+check(cq2.granted.includes("src/catalog.js#createCatalog"), "the flight the hold waits for is not queued behind it (no circle)");
+await Q.tool("release_clearance", {});
+const cw2 = await Pw.tool("request_clearance", { targets: ["src/catalog.js"] });
+const cr2 = await R.tool("request_clearance", { targets: ["src/catalog.js#findByIsbn"] });
+check(cw2.granted.includes("src/catalog.js") && cr2.holding.length === 1, "released: the whole-file hold is cleared first, the later claim still waits");
+await Pw.tool("release_clearance", {});
+const cr3 = await R.tool("request_clearance", { targets: ["src/catalog.js#findByIsbn"] });
+check(cr3.granted.includes("src/catalog.js#findByIsbn"), "then the later claim is cleared");
+for (const a of [Q, Pw, R]) await a.tool("abort", { reason: "smoke test done" });
+
 // ── 6. a playground starts over once all of its work has landed ─────
 const pg = `${slug}-pg`;
 await createProject(pg, { playground: true, intents: 1 });

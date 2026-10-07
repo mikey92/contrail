@@ -59,7 +59,7 @@ export const TOOLS: ToolDef[] = [
 		run: (t, a, args) => t.requestClearance(a, { targets: args.targets ?? [], reason: args.reason }),
 		summarize: (r) =>
 			r.holding.length
-				? `Cleared: ${r.granted.join(", ") || "nothing"}. HOLDING for ${r.holding.map((h: any) => `${h.target} (held by ${h.heldBy.callsign} ${h.heldBy.flight}: ${h.heldBy.intent})`).join("; ")}. Work on something else, radio them, or wait for a clearance message.`
+				? `Cleared: ${r.granted.join(", ") || "nothing"}. HOLDING for ${r.holding.map((h: any) => `${h.target} (${h.queued ? "after" : "held by"} ${h.heldBy.callsign} ${h.heldBy.flight}: ${h.heldBy.intent})`).join("; ")}. Work on something else, radio them, or wait for a clearance message.`
 				: `Cleared for ${r.granted.join(", ")}.`,
 	},
 	{
@@ -190,7 +190,7 @@ export const CENTER_TOOLS: ToolDef<CenterStub>[] = [
 		run: (c, a, args) => c.requestClearance(a, { targets: args.targets ?? [], reason: args.reason }),
 		summarize: (r) =>
 			r.holding.length
-				? `Cleared: ${r.granted.join(", ") || "nothing"}. HOLDING for ${r.holding.map((h: any) => `${h.target} in ${h.sector} (held by ${h.heldBy.callsign} ${h.heldBy.flight}: ${h.heldBy.intent})`).join("; ")}.`
+				? `Cleared: ${r.granted.join(", ") || "nothing"}. HOLDING for ${r.holding.map((h: any) => `${h.target} in ${h.sector} (${h.queued ? "after" : "held by"} ${h.heldBy.callsign} ${h.heldBy.flight}: ${h.heldBy.intent})`).join("; ")}.`
 				: `Cleared for ${r.granted.join(", ")}.`,
 	},
 	{

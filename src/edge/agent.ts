@@ -396,7 +396,7 @@ export class EdgeAgent extends DurableObject<Env> {
 			}
 			case "request_clearance": {
 				const r = await tower.requestClearance(config.agentId, { targets: args.targets ?? [], reason: args.reason });
-				return `Granted: ${r.granted.join(", ") || "none"}${r.holding.length ? `\nHOLDING (do not edit): ${r.holding.map((h) => `${h.target} held by ${h.heldBy.callsign} ${h.heldBy.flight} (${h.heldBy.intent})`).join("; ")}` : ""}${radio(r)}`;
+				return `Granted: ${r.granted.join(", ") || "none"}${r.holding.length ? `\nHOLDING (do not edit): ${r.holding.map((h) => `${h.target} ${h.queued ? "after" : "held by"} ${h.heldBy.callsign} ${h.heldBy.flight} (${h.heldBy.intent})`).join("; ")}` : ""}${radio(r)}`;
 			}
 			case "log": {
 				const r = await tower.log(config.agentId, { kind: args.kind ?? "note", text: String(args.text ?? "") });

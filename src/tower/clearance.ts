@@ -91,3 +91,58 @@ export function policyTargetsTouched(policy: string[], changes: { path: string; 
 	const touched = changes.flatMap((c) => (c.symbols.length && !c.symbols.includes("(top)") ? c.symbols.map((sym) => `${c.path}#${sym}`) : [c.path]));
 	return policy.filter((p) => touched.some((t) => targetsOverlap(p, t)));
 }
+
+/** A clearance as the Tower keeps it: granted (the flight may change the code) or holding (it waits for it). */
+export interface Claim {
+	id: string;
+	flightId: string;
+	target: string;
+	status: "granted" | "holding";
+	createdAt: number;
+}
+
+/**
+ * The flights each hold waits for. Flights cleared for overlapping code come first; then, first come first
+ * served, flights that asked earlier for overlapping code and still hold for it, so a hold on a whole file
+ * is not passed by every later claim on a function in it. A flight never queues behind one that already
+ * waits for it, directly or through others: the two would wait for each other forever.
+ */
+export function holdQueue(claims: Claim[]): Map<string, string[]> {
+	const granted = claims.filter((c) => c.status === "granted");
+	const holds = claims.filter((c) => c.status === "holding").sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+	const edges = new Map<string, Set<string>>();
+	const addEdge = (from: string, to: string) => {
+		if (!edges.has(from)) edges.set(from, new Set());
+		edges.get(from)!.add(to);
+	};
+	const reaches = (from: string, to: string) => {
+		const seen = new Set([from]);
+		const stack = [from];
+		while (stack.length) {
+			const f = stack.pop()!;
+			if (f === to) return true;
+			for (const n of edges.get(f) ?? []) {
+				if (seen.has(n)) continue;
+				seen.add(n);
+				stack.push(n);
+			}
+		}
+		return false;
+	};
+	const waits = new Map<string, Set<string>>();
+	for (const h of holds) {
+		const on = new Set(granted.filter((g) => g.flightId !== h.flightId && targetsOverlap(g.target, h.target)).map((g) => g.flightId));
+		for (const f of on) addEdge(h.flightId, f);
+		waits.set(h.id, on);
+	}
+	holds.forEach((h, k) => {
+		const on = waits.get(h.id)!;
+		for (const earlier of holds.slice(0, k)) {
+			if (earlier.flightId === h.flightId || on.has(earlier.flightId) || !targetsOverlap(earlier.target, h.target)) continue;
+			if (reaches(earlier.flightId, h.flightId)) continue;
+			addEdge(h.flightId, earlier.flightId);
+			on.add(earlier.flightId);
+		}
+	});
+	return new Map([...waits].map(([id, on]) => [id, [...on]]));
+}

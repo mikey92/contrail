@@ -30,7 +30,7 @@ import type {
 } from "../shared/types";
 import { AGENT_KEY_TTL_MS, AGENT_KINDS, callsignFor, cloneUrl, colorFor, errorMessage, json, keyCheck, now, oneLine, randomId, randomToken, repoSafe, sha256, sleep } from "../util";
 import { conventionalTestCommand, PROTOCOL, workspaceInstructions } from "./briefing";
-import { findCollisions, normalizeTarget, parseTarget, targetsOverlap } from "./clearance";
+import { type Claim, holdQueue, normalizeTarget, parseTarget, targetsOverlap } from "./clearance";
 import { type AirTarget, crowding, firstCollision, predictTargets, type SymbolIndex, symbolIndex } from "./planner";
 import { SCHEMA } from "./schema";
 
@@ -54,6 +54,8 @@ const RETIRE_BATCH = 20;
 /** A crossing's leg that is ready this long without word from its Center is let go (the Center restarted). */
 const LEG_TIMEOUT_MS = 2 * 60_000;
 const ACTIVE: FlightStatus[] = ["taxiing", "airborne", "holding", "approach", "diverted"];
+
+const claimOf = (c: Clearance): Claim => ({ id: c.id, flightId: c.flightId, target: c.target, status: c.status, createdAt: c.createdAt });
 
 export interface ProjectSource {
 	kind: "files" | "github";
@@ -104,6 +106,8 @@ interface Dispatch {
 export interface HoldInfo {
 	target: string;
 	heldBy: { flight: string; callsign: string; intent: string; plan: string | null; reason: string | null; since: number };
+	/** heldBy is not cleared for it yet: it asked first and waits for it too, so this flight comes after it. */
+	queued?: boolean;
 }
 
 export interface ClearanceResult {
@@ -858,8 +862,10 @@ export class Tower extends DurableObject<Env> {
 		if (pathless.length) throw new Error(`a target needs its file: ${pathless.join(", ")} → e.g. src/cart.js${pathless[0]}`);
 		const all = this.activeClearances();
 		const mine = all.filter((c) => c.flightId === flight.id);
-		const granted = all.filter((c) => c.status === "granted");
 		const result: ClearanceResult = { granted: [], holding: [], radio: [] };
+		// Whom each target would wait for: flights cleared for it, then flights that asked for it earlier (first come, first served).
+		const fresh = targets.filter((t) => !mine.some((c) => c.target === t));
+		const queue = holdQueue([...all.map(claimOf), ...fresh.map((t, i): Claim => ({ id: `new:${t}`, flightId: flight.id, target: t, status: "holding", createdAt: now() + i }))]);
 		const expires = now() + CLEARANCE_TTL_MS;
 		// Re-requests (renewals, agents polling while they hold) stay silent: only changes are reported.
 		const newlyGranted: string[] = [];
@@ -872,8 +878,8 @@ export class Tower extends DurableObject<Env> {
 				result.granted.push(target);
 				continue;
 			}
-			const collisions = findCollisions([target], granted.map((c) => ({ target: c.target, flightId: c.flightId })), flight.id);
-			if (collisions.length === 0) {
+			const waitsFor = queue.get(already?.id ?? `new:${target}`) ?? [];
+			if (waitsFor.length === 0) {
 				if (already) this.sql.exec("UPDATE clearances SET status = 'granted', expires_at = ? WHERE id = ?", expires, already.id);
 				else
 					this.sql.exec(
@@ -889,10 +895,13 @@ export class Tower extends DurableObject<Env> {
 				newlyGranted.push(target);
 				continue;
 			}
-			const holder = this.flightById(collisions[0].with.flightId);
+			const holder = this.flightById(waitsFor[0]);
 			const holderAgent = this.agentById(holder.agentId);
 			const holderIntent = this.intentById(holder.intentId);
-			const heldClearance = granted.find((c) => c.flightId === holder.id && c.target === collisions[0].with.target);
+			// Cleared for it, or (first come, first served) asked for it earlier and waiting too.
+			const theirs = all.filter((c) => c.flightId === holder.id && targetsOverlap(c.target, target));
+			const heldClearance = theirs.find((c) => c.status === "granted") ?? theirs[0];
+			const queued = heldClearance?.status === "holding";
 			if (!already) {
 				this.bump("conflictsPrevented");
 				this.sql.exec(
@@ -915,15 +924,17 @@ export class Tower extends DurableObject<Env> {
 					reason: heldClearance?.reason ?? null,
 					since: heldClearance?.createdAt ?? holder.createdAt,
 				},
+				...(queued ? { queued: true } : {}),
 			};
 			result.holding.push(hold);
 			if (!already) {
 				newHolds.push(hold);
-				this.sendRadio(
-					holder.id,
-					"traffic",
-					`${agent.callsign} (${flight.code}) is holding for ${target}, which you hold. Land or release it when you are done with it.`,
-				);
+				if (!queued)
+					this.sendRadio(
+						holder.id,
+						"traffic",
+						`${agent.callsign} (${flight.code}) is holding for ${target}, which you hold. Land or release it when you are done with it.`,
+					);
 			}
 		}
 
@@ -939,16 +950,23 @@ export class Tower extends DurableObject<Env> {
 				flight.id,
 				agentId,
 				"clearance",
-				`Holding for ${newHolds.map((h) => `${h.target} (held by ${h.heldBy.callsign} ${h.heldBy.flight})`).join(", ")}`,
+				`Holding for ${newHolds.map((h) => `${h.target} (${h.queued ? "after" : "held by"} ${h.heldBy.callsign} ${h.heldBy.flight})`).join(", ")}`,
 				newHolds.map((h) => h.target),
 			);
-			this.emit("clearance.holding", `${flight.code} holding — ${newHolds.map((h) => `${h.target} held by ${h.heldBy.flight}`).join(", ")}`, {
+			this.emit("clearance.holding", `${flight.code} holding — ${newHolds.map((h) => `${h.target} ${h.queued ? "after" : "held by"} ${h.heldBy.flight}`).join(", ")}`, {
 				flightId: flight.id,
 				agentId,
 				data: { holding: newHolds },
 			});
 		} else if (!result.holding.length && flight.status === "holding" && !this.row("SELECT id FROM clearances WHERE flight_id = ? AND status = 'holding'", flight.id)) {
 			this.setFlightStatus(flight.id, "airborne");
+		}
+		if (newHolds.length) {
+			// A new hold can close a cycle of waits that an earlier hold was queued in: that one goes ahead now.
+			this.promoteHolds();
+			const cleared = new Set(this.activeClearances().filter((c) => c.flightId === flight.id && c.status === "granted").map((c) => c.target));
+			result.granted.push(...result.holding.filter((h) => cleared.has(h.target)).map((h) => h.target));
+			result.holding = result.holding.filter((h) => !cleared.has(h.target));
 		}
 		const after = this.flightById(flight.id);
 		if (newlyGranted.length || newHolds.length) this.patch("clearances", this.activeClearances());
@@ -992,9 +1010,11 @@ export class Tower extends DurableObject<Env> {
 	private promoteHolds() {
 		const all = this.activeClearances();
 		const granted = all.filter((c) => c.status === "granted");
+		const queue = holdQueue(all.map(claimOf));
 		for (const hold of all.filter((c) => c.status === "holding")) {
-			const blocked = granted.some((g) => g.flightId !== hold.flightId && targetsOverlap(g.target, hold.target));
-			if (blocked) continue;
+			// Holds go first come, first served; two promoted now must not overlap either.
+			if ((queue.get(hold.id) ?? []).length) continue;
+			if (granted.some((g) => g.flightId !== hold.flightId && targetsOverlap(g.target, hold.target))) continue;
 			this.sql.exec("UPDATE clearances SET status = 'granted', expires_at = ? WHERE id = ?", now() + CLEARANCE_TTL_MS, hold.id);
 			granted.push({ ...hold, status: "granted" });
 			this.bump("holdMs", now() - hold.createdAt);
