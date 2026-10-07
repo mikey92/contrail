@@ -31,6 +31,8 @@ export class Workspace {
 	private upstream!: { url: string; headers: Record<string, string> };
 	/** Second parent recorded by sync() while conflicts are being resolved. */
 	private pendingMerge: string | null = null;
+	/** The commit the workspace fork's main has, as far as this checkout knows. */
+	private pushed: string | null = null;
 
 	static async open(cloneUrl: string, upstreamUrl: string, author: { name: string; email: string }): Promise<Workspace> {
 		const ws = new Workspace();
@@ -40,6 +42,7 @@ export class Workspace {
 		await git.clone({ fs, http, dir, url: ws.origin.url, ref: "main", singleBranch: true, headers: ws.origin.headers, cache });
 		await git.setConfig({ fs, dir, path: "user.name", value: author.name });
 		await git.setConfig({ fs, dir, path: "user.email", value: author.email });
+		ws.pushed = await git.resolveRef({ fs, dir, ref: "HEAD" });
 		return ws;
 	}
 
@@ -83,7 +86,8 @@ export class Workspace {
 		const count = current.split(oldText).length - 1;
 		if (count === 0) throw new Error(`old_text not found in ${p}`);
 		if (count > 1) throw new Error(`old_text appears ${count} times in ${p}; include more surrounding lines`);
-		await this.write(p, current.replace(oldText, newText));
+		// A function replacer: in a replacement string, "$$", "$&" and "$'" would be patterns, not text.
+		await this.write(p, current.replace(oldText, () => newText));
 	}
 
 	async remove(p: string) {
@@ -113,13 +117,17 @@ export class Workspace {
 		return hits;
 	}
 
-	/** Stages everything, commits (as a merge if a sync is pending) and pushes to the workspace fork. */
+	/**
+	 * Stages everything, commits (as a merge if a sync is pending) and pushes to the workspace fork. A commit
+	 * sync() made of earlier edits is pushed too, even when nothing has changed since.
+	 */
 	async commitAndPush(message: string): Promise<string | null> {
 		const { fs, dir, cache } = this.repo;
-		const oid = await this.commitLocal(message);
-		if (!oid) return null;
+		const oid = (await this.commitLocal(message)) ?? (await git.resolveRef({ fs, dir, ref: "HEAD" }));
+		if (oid === this.pushed) return null;
 		const res = await git.push({ fs, http, dir, remote: "origin", ref: "main", headers: this.origin.headers, cache });
 		if (!res.ok) throw new Error(`push failed: ${JSON.stringify(res.refs)}`);
+		this.pushed = oid;
 		return oid;
 	}
 
@@ -201,5 +209,6 @@ export class Workspace {
 		this.pendingMerge = null;
 		const res = await git.push({ fs, http, dir, remote: "origin", ref: "main", headers: this.origin.headers, cache });
 		if (!res.ok) throw new Error(`push failed: ${JSON.stringify(res.refs)}`);
+		this.pushed = oid;
 	}
 }

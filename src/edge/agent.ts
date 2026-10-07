@@ -13,6 +13,10 @@ import { Workspace } from "./workspace";
 
 export const DEFAULT_EDGE_MODEL = "@cf/zai-org/glm-5.3-flash";
 const MAX_TURNS_PER_FLIGHT = 40;
+/** Scripted steps are cheap, but a landing turned away every time must not loop forever. */
+const MAX_SCRIPTED_STEPS = 200;
+/** Errors in a row (say, the project was deleted) after which an agent stops trying. */
+const MAX_ERRORS = 30;
 const MAX_TOOL_OUTPUT = 16_000;
 
 interface Config {
@@ -61,6 +65,7 @@ interface State {
 	flight: { code: string; intent: string; cloneUrl: string; upstreamUrl: string } | null;
 	messages: ChatMessage[];
 	lastError: string | null;
+	errors?: number;
 	tokens: number;
 }
 
@@ -159,9 +164,18 @@ export class EdgeAgent extends DurableObject<Env> {
 			else if (config.mode === "scripted") delay = await this.flyScript(config, state);
 			else delay = await this.fly(config, state);
 			state.lastError = null;
+			state.errors = 0;
 		} catch (err) {
 			state.lastError = errorMessage(err);
+			state.errors = (state.errors ?? 0) + 1;
+			if (state.errors >= MAX_ERRORS) state.phase = "done";
 			delay = 5000;
+		}
+		// stop() may have run while this turn waited on the model or the tower: the stop wins, and a
+		// flight this turn took off on goes back to the tower.
+		if ((await this.state()).phase === "stopped") {
+			if (state.flight) await this.tower(config.slug).abort(config.agentId, undefined, "edge agent stopped").catch(() => {});
+			return;
 		}
 		await this.save(state);
 		const phase = state.phase as Phase; // board()/fly() may have moved it
@@ -189,6 +203,8 @@ export class EdgeAgent extends DurableObject<Env> {
 			return 0;
 		}
 		const t = res as TakeOffResult;
+		// Counted before the workspace opens: a fork that fails to open still used up a flight.
+		state.flights++;
 		try {
 			this.ws = await Workspace.open(t.workspace.cloneUrl, t.upstream.cloneUrl, {
 				name: config.callsign,
@@ -201,7 +217,6 @@ export class EdgeAgent extends DurableObject<Env> {
 		}
 		const files = await this.ws.listFiles();
 		state.flight = { code: t.flight.code, intent: `INT-${t.intent.seq} ${t.intent.title}`, cloneUrl: t.workspace.cloneUrl, upstreamUrl: t.upstream.cloneUrl };
-		state.flights++;
 		state.turn = 0;
 		state.phase = "flying";
 		if (config.mode === "scripted") {
@@ -247,7 +262,7 @@ export class EdgeAgent extends DurableObject<Env> {
 
 	private async fly(config: Config, state: State): Promise<number> {
 		if (state.turn >= MAX_TURNS_PER_FLIGHT) {
-			await this.tower(config.slug).abort(config.agentId, undefined, `turn budget of ${MAX_TURNS_PER_FLIGHT} exhausted`);
+			await this.giveUp(config, `turn budget of ${MAX_TURNS_PER_FLIGHT} exhausted`);
 			this.ws = null;
 			state.flight = null;
 			state.phase = "boarding";
@@ -298,6 +313,13 @@ export class EdgeAgent extends DurableObject<Env> {
 		const tower = this.tower(config.slug);
 		const script = state.script!;
 		const target = `${script.path}#${script.symbol}`;
+		if (state.turn >= MAX_SCRIPTED_STEPS) {
+			await this.giveUp(config, `${MAX_SCRIPTED_STEPS} scripted steps without landing`);
+			this.ws = null;
+			state.flight = null;
+			state.phase = "boarding";
+			return 1000;
+		}
 		state.turn++;
 		if (state.step === "claim") {
 			const r = await tower.requestClearance(config.agentId, { targets: [target], reason: `${script.op} ${script.symbol}` });
@@ -340,6 +362,15 @@ export class EdgeAgent extends DurableObject<Env> {
 			return 500;
 		}
 		return 2000; // still on approach
+	}
+
+	/** Aborts the current flight. One the tower has already ended (an operator, a stop) needs nothing more. */
+	private async giveUp(config: Config, reason: string) {
+		await this.tower(config.slug)
+			.abort(config.agentId, undefined, reason)
+			.catch((err) => {
+				if (!/no active flight/.test(errorMessage(err))) throw err;
+			});
 	}
 
 	private async runTool(config: Config, state: State, ws: Workspace, name: string, args: any): Promise<string> {
