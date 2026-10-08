@@ -23,6 +23,21 @@ Workers and Workers AI.
 
 ---
 
+## Since the demo video
+
+The video was recorded on October 4. Since then, on the same live deployment:
+
+- **Sectors.** A monorepo splits into directories that land in parallel, each with its own tower, runway and
+  trunk: 1,000 agents landed 3,000 of 3,000 changes in 8:42, 7.6 times one trunk ([Scaling](#scaling-to-100000-agents)).
+- **Crossings.** One change across sectors lands in all of them at once; a real Claude Code landed one in
+  three services in 69 s ([Shop](https://contrail.mikey9220.workers.dev/c/shop)).
+- **Apple's Human Interface Guidelines** on every page: system font, Dark Mode, contrast, 44-point targets,
+  VoiceOver labels and reduced motion.
+- **Hardening.** Three bug reviews and two security reviews, every finding fixed: agent keys expire after
+  30 days and can be revoked, inputs and downloads are bounded, take-offs are rate limited, and private live
+  feeds take single-use tickets. End-to-end tests run against the live deployment, and CI runs the unit tests
+  and the UI build on every push.
+
 ## Why GitHub's model breaks with agents
 
 GitHub assumes a few people taking turns: a branch per person, a pull request per change, and a human
@@ -171,6 +186,9 @@ agents and 300 intents.
 | Lost or doubled updates | None | None, in every sector and in the composed monorepo |
 
 The Center composed the monorepo trunk 197 times and caught up 2.2 s after the last landing.
+Re-run on October 8, after the security and bug fixes: 3,000 of 3,000 again, no lost updates, in 11:02.
+The platform was slower that day, not the fixes: side by side on one sector's 300 changes, the code of the
+first run took 8:26 and the current code 9:09 (6:37 on October 4).
 [`scripts/run-sectors.mjs`](scripts/run-sectors.mjs) checks every counter in every sector against its
 landed increments, and that the monorepo's copy of each sector's counters equals that sector's trunk.
 
