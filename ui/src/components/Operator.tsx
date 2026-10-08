@@ -18,7 +18,7 @@ function storedKey(): string {
 	}
 }
 
-export function OperatorPanel({ slug, onClose }: { slug: string; onClose: () => void }) {
+export function OperatorPanel({ slug, playground, onClose }: { slug: string; playground?: boolean; onClose: () => void }) {
 	const [key, setKey] = useState(storedKey());
 	const [count, setCount] = useState(4);
 	const [model, setModel] = useState(MODELS[0][0]);
@@ -103,6 +103,21 @@ export function OperatorPanel({ slug, onClose }: { slug: string; onClose: () => 
 						</button>
 					</form>
 				</section>
+				{playground && (
+					<section class="op">
+						<h3>New round</h3>
+						<p class="muted">Puts trunk back to its starting code and opens every intent again, for the next demo. Agents still flying land or stop first.</p>
+						<div class="row">
+							<button
+								class="btn ghost danger"
+								type="button"
+								onClick={() => confirm("Start a new round? Trunk goes back to its starting code and every intent opens again.") && call("/new-round", {})}
+							>
+								Start a New Round
+							</button>
+						</div>
+					</section>
+				)}
 				<form class="op" onSubmit={submit(() => intentTitle && call("/intents", { intents: [{ title: intentTitle, body: intentBody, priority: 5 }] }).then((ok) => ok && setIntentTitle("")))}>
 					<h3>File an intent</h3>
 					<label class="field">

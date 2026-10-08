@@ -198,7 +198,7 @@ export function Radar({ slug, fixture }: { slug: string; fixture: string | null 
 			</main>
 			{why && <WhyPanel slug={slug} fixture={fixture} target={why} onClose={() => setWhy(null)} />}
 			{connect && <ConnectModal slug={slug} onClose={() => setConnect(false)} />}
-			{operator && <OperatorPanel slug={slug} onClose={() => setOperator(false)} />}
+			{operator && <OperatorPanel slug={slug} playground={s.project?.playground} onClose={() => setOperator(false)} />}
 			{clone && <ClonePanel slug={slug} onClose={() => setClone(false)} />}
 		</div>
 	);

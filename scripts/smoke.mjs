@@ -2,7 +2,7 @@
 // End-to-end smoke test against a deployed Contrail: scripted agents use real git against
 // Artifacts workspaces and exercise clearances (enforced at landing too), parallel landings,
 // insert/insert unions, a real conflict, its resolution, the why() lookup, review by exception,
-// a landing train with a culprit, and a playground that starts over once its work has landed.
+// a landing train with a culprit, and a playground that starts over once its work has landed or when its operator asks.
 //   CONTRAIL_URL=… CONTRAIL_ADMIN_KEY=… node scripts/smoke.mjs [--keep]
 // It creates two private projects from demo/bookshop and deletes them afterwards (--keep keeps them).
 import { execSync } from "node:child_process";
@@ -355,7 +355,17 @@ const after = (await (await fetch(`${base}/api/p/${pg}/snapshot`, { headers: { a
 const readme = (t) => t.files.find((f) => f.path === "README.md")?.lines;
 check(again.flight?.code === "FL-001" && after.events.some((e) => e.type === "project.reset"), `the exhausted playground started over: the next take-off is ${again.flight?.code ?? again.message}`);
 check(readme(after.trunk) === readme(before) && after.trunk.head !== before.head, "trunk is back to its starting code, as a new commit on top of its history");
+// An operator's new round waits for the flights in the air, then starts over with work still open.
+const newRound = () => fetch(`${base}/api/p/${pg}/new-round`, { method: "POST", headers: { authorization: `Bearer ${admin}` } });
+const busyRound = await newRound();
 if (again.flight) await P.tool("abort", { reason: "smoke test done" });
+const round = await newRound();
+const roundBody = await round.json().catch(() => ({}));
+const reset = await (await fetch(`${base}/api/p/${pg}/snapshot`, { headers: { authorization: `Bearer ${admin}` } })).json();
+check(
+  busyRound.status === 409 && round.status === 200 && roundBody.open === 1 && reset.flights.length === 0 && reset.events.some((e) => e.type === "project.reset" && /operator/.test(e.text)),
+  `an operator's new round waits for a flight in the air (${busyRound.status}), then starts over (${round.status}, ${roundBody.open} open)`,
+);
 
 if (!keep) await Promise.all([deleteProject(slug), deleteProject(pg)]);
 console.log(failures ? `\n${failures} check(s) failed` : "\nall checks passed");

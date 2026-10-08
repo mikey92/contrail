@@ -1856,21 +1856,38 @@ export class Tower extends DurableObject<Env> {
 	private restarting: Promise<boolean> | null = null;
 
 	/**
-	 * A playground starts over once all of its work has landed, so the next visitor finds intents to fly.
-	 * Trunk gets its first tree back as a new commit (history is kept), the operator's intents reopen,
-	 * and flights, landings and the event log are cleared. Returns whether it restarted.
+	 * An operator starts the playground over now, with work still open (before a demo, say). Not while a flight
+	 * is in the air or a landing is on the runway: those belong to agents that are still working.
 	 */
-	private async restartPlayground(): Promise<boolean> {
+	async newRound(): Promise<{ open: number } | { error: string }> {
+		if (!this.project().playground) return { error: "only a playground starts over" };
+		const flying = this.row<{ c: number }>(`SELECT COUNT(*) AS c FROM flights WHERE status IN (${ACTIVE.map(() => "?").join(",")})`, ...ACTIVE)?.c ?? 0;
+		if (flying) return { error: `${flying} ${flying === 1 ? "flight is" : "flights are"} still in the air: stop the edge agents or let them land, then try again` };
+		if (this.row("SELECT id FROM landings WHERE status IN ('queued', 'merging', 'verifying', 'review') LIMIT 1")) return { error: "a landing is on the runway; try again in a moment" };
+		// Edge agents waiting to board would take off into the new round unseen: they stop with the old one.
+		await this.stopEdge();
+		if (!(await this.restartPlayground(true))) return { error: "the playground could not start over right now; try again in a moment" };
+		return { open: this.row<{ c: number }>("SELECT COUNT(*) AS c FROM intents WHERE status = 'open'")?.c ?? 0 };
+	}
+
+	/**
+	 * A playground starts over once all of its work has landed, so the next visitor finds intents to fly (or when
+	 * an operator asks, `byOperator`). Trunk gets its first tree back as a new commit (history is kept), the
+	 * operator's intents reopen, and flights, landings and the event log are cleared. Returns whether it restarted.
+	 */
+	private async restartPlayground(byOperator = false): Promise<boolean> {
 		const project = this.project();
 		if (!project.playground) return false;
 		if (this.restarting) return this.restarting;
-		if (this.row("SELECT id FROM intents WHERE status = 'open' LIMIT 1")) return false;
+		if (!byOperator && this.row("SELECT id FROM intents WHERE status = 'open' LIMIT 1")) return false;
 		if (this.row(`SELECT id FROM flights WHERE status IN (${ACTIVE.map(() => "?").join(",")}) LIMIT 1`, ...ACTIVE)) return false;
 		if (this.row("SELECT id FROM landings WHERE status IN ('queued', 'merging', 'verifying', 'review') LIMIT 1")) return false;
 		this.restarting = (async () => {
 			await this.runway().restoreFirstTree(
 				project.trunkRepo,
-				"Playground: back to the starting code\n\nEvery intent had landed, so the playground starts over for the next visitor.",
+				byOperator
+					? "Playground: back to the starting code\n\nThe operator started a new round."
+					: "Playground: back to the starting code\n\nEvery intent had landed, so the playground starts over for the next visitor.",
 				{ name: "Contrail Tower", email: "tower@contrail.dev" },
 				this.meta<string | null>("startCommit", null),
 			);
@@ -1887,7 +1904,10 @@ export class Tower extends DurableObject<Env> {
 			for (const table of ["flights", "clearances", "landings", "contrail", "inbox", "symbol_history", "events"]) this.sql.exec(`DELETE FROM ${table}`);
 			this.setMeta("edgeFleet", []);
 			const open = this.row<{ c: number }>("SELECT COUNT(*) AS c FROM intents")?.c ?? 0;
-			this.emit("project.reset", `Every intent had landed, so the playground started over: trunk is back to its starting code and ${open} intents are open again`);
+			this.emit(
+				"project.reset",
+				`${byOperator ? "The operator started a new round" : "Every intent had landed, so the playground started over"}: trunk is back to its starting code and ${open} intents are open again`,
+			);
 			this.broadcast({ kind: "snapshot", snapshot: await this.snapshot() });
 			return true;
 		})().finally(() => {

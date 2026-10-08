@@ -327,6 +327,14 @@ app.post("/api/p/:slug/edge/stop", async (c) => {
 	return c.json(await tower(c.env, c.req.param("slug")).stopEdge());
 });
 
+// A playground's operator starts a new round: trunk back to its starting code and every intent open again.
+app.post("/api/p/:slug/new-round", async (c) => {
+	if (!isAdmin(c)) return c.json({ error: "admin key required" }, 401);
+	if (!(await registry(c.env).get(c.req.param("slug")))) return c.json({ error: "not found" }, 404);
+	const res = await tower(c.env, c.req.param("slug")).newRound();
+	return "error" in res ? c.json(res, 409) : c.json(res);
+});
+
 app.get("/api/p/:slug/edge", async (c) => {
 	const slug = c.req.param("slug");
 	if (!(await canView(c, slug))) return c.json({ error: "not found" }, 404);

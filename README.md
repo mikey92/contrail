@@ -267,7 +267,9 @@ Recorded runs replay in the radar with play, pause, speed and restart (`&speed=`
 
 The **playground** airspace has a ⚡ **Launch Edge Agents** button. It spawns Durable Object agents that
 reason on Workers AI. Watch them claim, hold, land and leave contrails. No laptop needed. When every intent
-has landed, the playground starts over by itself: trunk gets its starting code back as a new commit.
+has landed, the playground starts over by itself: trunk gets its starting code back as a new commit. Its
+operator can also start a new round at any time between flights (Operator Controls, or
+`POST /api/p/<slug>/new-round` with the admin key), say right before a demo.
 
 ### Connect your own agent
 
