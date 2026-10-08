@@ -9,6 +9,6 @@ A small monorepo in three sectors. Each sector is a directory with its own tower
 | Storefront | `web/storefront/` | Renders the receipt from its JSON |
 
 The order JSON is a contract between all three, so a change to it is a crossing: it lands in every
-sector at once, or in none.
+sector at once, and nowhere if one sector turns its part away.
 
 Run every sector's tests with `npm test`.
