@@ -32,8 +32,8 @@ const sameLines = (a: string[], b: string[]) => a.length === b.length && a.every
 
 /**
  * A line diff takes time growing with the square of the lines, or worse (a lockfile's near-identical lines):
- * texts up to this many lines in all are diffed whole, as they always were; longer ones only between the lines
- * they share at both ends, and a stretch longer than this between those counts as one change.
+ * texts up to this many lines in all are diffed as they always were; longer ones with Myers' algorithm, quick
+ * when little changed.
  */
 export const MAX_DIFF_LINES = 2000;
 
@@ -44,17 +44,7 @@ interface LineDiff {
 	buffer2Content: string[];
 }
 
-/** How many lines `a` and `b` share at their start, and then at their end. */
-function sharedEnds(a: string[], b: string[]): [number, number] {
-	const min = Math.min(a.length, b.length);
-	let head = 0;
-	while (head < min && a[head] === b[head]) head++;
-	let tail = 0;
-	while (tail < min - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
-	return [head, tail];
-}
-
-/** Most lines a long text's diff may change before the rest of the stretch counts as one change. */
+/** Most lines a long text's diff may change before it gives up and counts them all as one change. */
 const MAX_EDITS = 1000;
 
 /**
@@ -124,31 +114,52 @@ function myers(a: string[], b: string[], maxEdits: number): LineDiff[] | null {
 }
 
 /**
- * diffIndices, bounded: texts too long for it are diffed over what they don't share at their ends with Myers'
- * algorithm, which is quick when little changed, and a stretch with too many changes is one hunk.
+ * diffIndices, bounded: texts too long for it are diffed with Myers' algorithm, which is quick when little
+ * changed, and past MAX_EDITS the stretch between the lines both share at their ends is one hunk.
  */
 export function diffLines(a: string[], b: string[]): LineDiff[] {
+	return lineDiff(a, b, a.length + b.length > MAX_DIFF_LINES, true);
+}
+
+/**
+ * diffLines with the algorithm chosen: diffIndices, or for `long` texts Myers'. A merge diffs both its sides with
+ * the same one and never trims the lines they share at the end (`trimEnd`): one change made on both sides has to
+ * line up the same in both diffs (in a run of `}` or blank lines, say), or the merge keeps it twice or drops a
+ * line, and matching lines from the end lines it up differently than from the start.
+ */
+function lineDiff(a: string[], b: string[], long: boolean, trimEnd: boolean): LineDiff[] {
 	// Short texts as they always were (another algorithm can line up a run of blank lines or `}` differently).
-	if (a.length + b.length <= MAX_DIFF_LINES)
+	if (!long)
 		return diffIndices<string>(a, b).map((d) => ({ buffer1: d.buffer1, buffer1Content: d.buffer1Content, buffer2: d.buffer2, buffer2Content: d.buffer2Content }));
-	const [head, tail] = sharedEnds(a, b);
+	let head = 0;
+	while (head < a.length && head < b.length && a[head] === b[head]) head++;
+	if (head === a.length && head === b.length) return [];
+	const hunks = myers(a.slice(head), b.slice(head), MAX_EDITS);
+	if (hunks) return hunks.map((d) => ({ ...d, buffer1: [d.buffer1[0] + head, d.buffer1[1]], buffer2: [d.buffer2[0] + head, d.buffer2[1]] }));
+	// Too many changes: one hunk from the first changed line to the last (in a merge, to the end).
+	let tail = 0;
+	if (trimEnd) while (tail < Math.min(a.length, b.length) - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
 	const am = a.slice(head, a.length - tail);
 	const bm = b.slice(head, b.length - tail);
-	if (!am.length && !bm.length) return [];
-	const hunks = myers(am, bm, MAX_EDITS) ?? [{ buffer1: [0, am.length] as [number, number], buffer1Content: am, buffer2: [0, bm.length] as [number, number], buffer2Content: bm }];
-	return hunks.map((d) => ({ ...d, buffer1: [d.buffer1[0] + head, d.buffer1[1]], buffer2: [d.buffer2[0] + head, d.buffer2[1]] }));
+	return [{ buffer1: [head, am.length], buffer1Content: am, buffer2: [head, bm.length], buffer2Content: bm }];
+}
+
+/** Appends `lines` one by one: spread into one call, a long file's lines overflow the stack. */
+function append(out: string[], lines: string[]): void {
+	for (const line of lines) out.push(line);
 }
 
 type Merged = { ok: string[]; conflict?: undefined } | { conflict: { a: string[]; o: string[]; b: string[]; oIndex: number; aIndex: number; bIndex: number }; ok?: undefined };
 
 /**
- * A diff3 merge (node-diff3's, MIT) over diffLines: alternating runs of merged lines and conflicts between what
+ * A diff3 merge (node-diff3's, MIT) over lineDiff: alternating runs of merged lines and conflicts between what
  * `a` and `b` each made of `o`. Both sides making the same change is no conflict.
  */
 function diff3(a: string[], o: string[], b: string[]): Merged[] {
+	const long = o.length + Math.max(a.length, b.length) > MAX_DIFF_LINES;
 	const hunks = [
-		...diffLines(o, a).map((h) => ({ side: "a" as const, oStart: h.buffer1[0], oLength: h.buffer1[1], start: h.buffer2[0], length: h.buffer2[1] })),
-		...diffLines(o, b).map((h) => ({ side: "b" as const, oStart: h.buffer1[0], oLength: h.buffer1[1], start: h.buffer2[0], length: h.buffer2[1] })),
+		...lineDiff(o, a, long, false).map((h) => ({ side: "a" as const, oStart: h.buffer1[0], oLength: h.buffer1[1], start: h.buffer2[0], length: h.buffer2[1] })),
+		...lineDiff(o, b, long, false).map((h) => ({ side: "b" as const, oStart: h.buffer1[0], oLength: h.buffer1[1], start: h.buffer2[0], length: h.buffer2[1] })),
 	].sort((x, y) => x.oStart - y.oStart);
 	const out: Merged[] = [];
 	let ok: string[] = [];
@@ -167,10 +178,10 @@ function diff3(a: string[], o: string[], b: string[]): Merged[] {
 			regionEnd = Math.max(regionEnd, hunks[i].oStart + hunks[i].oLength);
 			region.push(hunks[i++]);
 		}
-		ok.push(...o.slice(at, regionStart));
+		append(ok, o.slice(at, regionStart));
 		if (region.length === 1) {
 			// One side changed this stretch and the other left it alone.
-			ok.push(...(first.side === "a" ? a : b).slice(first.start, first.start + first.length));
+			append(ok, (first.side === "a" ? a : b).slice(first.start, first.start + first.length));
 		} else {
 			// Each side's span over the region, corrected for the stretch of `o` its hunks cover. (A side with no
 			// hunk here left the region as `o` has it, shifted by what it changed before.)
@@ -181,12 +192,12 @@ function diff3(a: string[], o: string[], b: string[]): Merged[] {
 					return { start: regionStart + shift, content: o.slice(regionStart, regionEnd) };
 				}
 				const start = mine[0].start + (regionStart - mine[0].oStart);
-				const end = Math.max(...mine.map((h) => h.start + h.length)) + (regionEnd - Math.max(...mine.map((h) => h.oStart + h.oLength)));
+				const end = mine.reduce((n, h) => Math.max(n, h.start + h.length), 0) + (regionEnd - mine.reduce((n, h) => Math.max(n, h.oStart + h.oLength), 0));
 				return { start, content: text.slice(start, end) };
 			};
 			const as = span("a", a);
 			const bs = span("b", b);
-			if (sameLines(as.content, bs.content)) ok.push(...as.content);
+			if (sameLines(as.content, bs.content)) append(ok, as.content);
 			else {
 				flush();
 				out.push({ conflict: { a: as.content, aIndex: as.start, o: o.slice(regionStart, regionEnd), oIndex: regionStart, b: bs.content, bIndex: bs.start } });
@@ -194,7 +205,7 @@ function diff3(a: string[], o: string[], b: string[]): Merged[] {
 		}
 		at = regionEnd;
 	}
-	ok.push(...o.slice(at));
+	append(ok, o.slice(at));
 	flush();
 	return out;
 }
@@ -282,6 +293,36 @@ function declaredTwice(path: string, a: string[], b: string[]): string[] {
 	return [...names(b)].filter((n) => ours.has(n));
 }
 
+/**
+ * Languages where two members of one name can't stand side by side: the later replaces the earlier (JavaScript,
+ * Python, Ruby) or the code won't build (Go). The Java and C families overload a name by its parameters, and Rust
+ * implements one for several traits.
+ */
+const ONE_MEMBER_PER_NAME = new Set(["js", "py", "ruby", "go"]);
+
+/**
+ * A member (method) declared at `s`, keyed by what tells it from others of its name: in JavaScript whether it is
+ * static, and a getter and a setter of one name are a pair; in Ruby whether it is the class's own (`def self.x`).
+ * Null for a Python property's setter or deleter, an overload or a registered implementation, which share a name
+ * by design.
+ */
+function memberKey(lang: string, lines: string[], s: SymbolSpan): { name: string; key: string; accessor: string | null } | null {
+	const short = s.name.slice(s.name.lastIndexOf(".") + 1).replace(/\$/g, "\\$");
+	// Decorators come first: the declaration is the first line that names the member.
+	const span = lines.slice(s.start - 1, s.end);
+	if (lang === "js") {
+		const declaration = new RegExp(`^\\s*((?:\\w+\\s+)*)\\*?\\s*${short}\\s*[<(]`);
+		const words = declaration.exec(span.find((l) => declaration.test(l)) ?? "")?.[1].split(/\s+/) ?? [];
+		return { name: s.name, key: `${words.includes("static") ? "static " : ""}${s.name}`, accessor: words.includes("get") ? "get" : words.includes("set") ? "set" : null };
+	}
+	if (lang === "py") {
+		const decorators = span.slice(0, Math.max(0, span.findIndex((l) => /^\s*(?:async\s+)?def\s/.test(l))));
+		if (decorators.some((d) => new RegExp(`^\\s*@(?:(?:typing\\.)?overload\\b|${short}\\.\\w+|[\\w.]+\\.register\\b)`).test(d))) return null;
+	}
+	if (lang === "ruby" && /^\s*def\s+self\./.test(span.find((l) => /^\s*def\s/.test(l)) ?? "")) return { name: s.name, key: `self.${s.name}`, accessor: null };
+	return { name: s.name, key: s.name, accessor: null };
+}
+
 export function mergeText(path: string, base: string, ours: string, theirs: string): TextMergeResult {
 	if (ours === theirs) return { clean: true, text: ours, conflicts: [], unioned: 0 };
 	if (base === ours) return { clean: true, text: theirs, conflicts: [], unioned: 0 };
@@ -295,32 +336,37 @@ export function mergeText(path: string, base: string, ours: string, theirs: stri
 	// Members (methods) each side declares that base doesn't, read when two inserts meet. Top-level names are
 	// declaredTwice's (which knows TypeScript merges two interfaces of one name).
 	const baseNames = new Set(baseSymbols.map((s) => s.name));
+	const lang = languageOf(path);
 	let sides: [SymbolSpan[], SymbolSpan[]] | null = null;
-	const declaredIn = (symbols: SymbolSpan[], from: number, count: number) =>
-		symbols.filter((s) => s.kind === "method" && s.start - 1 >= from && s.start - 1 < from + count && !baseNames.has(s.name)).map((s) => s.name);
+	const declaredIn = (symbols: SymbolSpan[], lines: string[], from: number, count: number) =>
+		symbols.flatMap((s) => {
+			if (s.kind !== "method" || s.start - 1 < from || s.start - 1 >= from + count || baseNames.has(s.name)) return [];
+			return memberKey(lang, lines, s) ?? [];
+		});
 
 	const out: string[] = [];
 	const conflicts: ConflictHunk[] = [];
 	let unioned = 0;
 	for (const region of regions) {
 		if ("ok" in region && region.ok) {
-			out.push(...region.ok);
+			append(out, region.ok);
 			continue;
 		}
 		const c = region.conflict;
 		let twice = c.o.length === 0 ? declaredTwice(path, c.a, c.b) : [];
-		if (c.o.length === 0 && !sameLines(c.a, c.b)) {
+		if (c.o.length === 0 && !sameLines(c.a, c.b) && ONE_MEMBER_PER_NAME.has(lang)) {
 			// Both add a member of the same name at the same point (a method to one class, say): side by side, one
 			// would quietly replace the other, or not compile.
 			sides ??= [extractSymbols(path, ours), extractSymbols(path, theirs)];
-			const mine = new Set(declaredIn(sides[0], c.aIndex, c.a.length));
-			twice = [...new Set([...twice, ...declaredIn(sides[1], c.bIndex, c.b.length).filter((n) => mine.has(n))])];
+			const mine = declaredIn(sides[0], a, c.aIndex, c.a.length);
+			const clash = declaredIn(sides[1], b, c.bIndex, c.b.length).filter((t) => mine.some((m) => m.key === t.key && !(m.accessor && t.accessor && m.accessor !== t.accessor)));
+			twice = [...new Set([...twice, ...clash.map((t) => t.name)])];
 		}
 		if (c.o.length === 0 && twice.length === 0) {
 			// Both sides inserted at the same point without touching existing lines: keep both, and an
 			// import both added only once.
-			out.push(...c.a);
-			if (!sameLines(c.a, c.b)) out.push(...withoutSharedImports(c.a, c.b));
+			append(out, c.a);
+			if (!sameLines(c.a, c.b)) append(out, withoutSharedImports(c.a, c.b));
 			unioned++;
 			continue;
 		}
@@ -328,7 +374,13 @@ export function mergeText(path: string, base: string, ours: string, theirs: stri
 		// Two inserts that declare the same name are a real conflict: one definition has to win.
 		const symbols = twice.length ? twice : symbolsInRange(baseSymbols, start, start + Math.max(0, c.o.length - 1));
 		conflicts.push({ baseStart: start, baseLines: c.o, ours: c.a, theirs: c.b, symbols });
-		out.push("<<<<<<< trunk", ...c.a, "||||||| base", ...c.o, "=======", ...c.b, ">>>>>>> flight");
+		out.push("<<<<<<< trunk");
+		append(out, c.a);
+		out.push("||||||| base");
+		append(out, c.o);
+		out.push("=======");
+		append(out, c.b);
+		out.push(">>>>>>> flight");
 	}
 	return { clean: conflicts.length === 0, text: out.join("\n"), conflicts, unioned };
 }

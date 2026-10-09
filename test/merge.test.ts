@@ -247,7 +247,102 @@ describe("big files", () => {
 		expect(both.clean).toBe(false);
 		expect(both.conflicts[0].baseStart).toBe(2);
 		expect(both.text.startsWith("a\n<<<<<<< trunk\n")).toBe(true);
-		expect(both.text.endsWith("\n>>>>>>> flight\nz")).toBe(true);
+		// Given up on, a merge's diff runs to the end of the file (see "one change both sides made" below).
+		expect(both.text.endsWith("\nz\n>>>>>>> flight")).toBe(true);
+	});
+
+	it("names only the functions a change to a long file touches", () => {
+		const fns = Array.from({ length: 700 }, (_, i) => [`function f${i}() {`, `  return ${i};`, "}"]).flat();
+		const before = ["// header", ...fns, ""].join("\n");
+		const after = ["// header, edited", ...fns, "", "function g() {", "  return -1;", "}", ""].join("\n");
+		expect(touchedSymbols("src/fns.js", before, after)).toEqual(["(top)", "g"]);
+	});
+
+	it("merges a file too long to spread into one call", () => {
+		const base = Array.from({ length: 140_000 }, (_, i) => `line ${i}`).join("\n");
+		const merged = mergeText("data.txt", base, base.replace("line 10\n", "line ten\n"), base.replace("line 139990\n", "line 139,990\n"));
+		expect(merged.clean).toBe(true);
+		expect(merged.text).toBe(base.replace("line 10\n", "line ten\n").replace("line 139990\n", "line 139,990\n"));
+		const both = mergeText("data.txt", base, base.replaceAll("line", "Line"), base.replaceAll("line", "LINE"));
+		expect(both.conflicts).toHaveLength(1);
+		expect(both.conflicts[0].ours).toHaveLength(140_000);
+	});
+});
+
+describe("one change both sides made, in a long file", () => {
+	// A package-lock.json with 600 packages (2,405 lines): every package ends on the same lines as the one before it.
+	const names = Array.from({ length: 600 }, (_, i) => `p${String(i).padStart(4, "0")}`);
+	const lock = (after: string[]) =>
+		[
+			"{",
+			'  "lockfileVersion": 3,',
+			'  "packages": {',
+			...names
+				.flatMap((n) => (after.includes(n) ? [n, `${n}a`] : [n]))
+				.flatMap((n, i, all) => [`    "node_modules/${n}": {`, '      "version": "1.0.0",', '      "license": "MIT"', i === all.length - 1 ? "    }" : "    },"]),
+			"  }",
+			"}",
+		].join("\n");
+
+	it("keeps a package both sides added once, when one side also added another before it", () => {
+		const merged = mergeText("package-lock.json", lock([]), lock(["p0010", "p0500"]), lock(["p0500"]));
+		expect(merged.clean).toBe(true);
+		expect(merged.text).toBe(lock(["p0010", "p0500"]));
+	});
+
+	it("drops a line both sides deleted once, when one side also changed the first line", () => {
+		const cases = Array.from({ length: 700 }, (_, i) => [`test("case ${i}", () => {`, `  expect(run(${i})).toBe(${i});`, "});"]).flat();
+		const base = [...cases, 'test("waits", async () => {', "  await tick();", "  await tick();", "  await tick();", "});", ""].join("\n");
+		const theirs = base.replace("  await tick();\n", "");
+		const ours = theirs.replace('test("case 0"', 'test("case zero"');
+		const merged = mergeText("test/wait.test.js", base, ours, theirs);
+		expect(merged.clean).toBe(true);
+		expect(merged.text).toBe(ours);
+	});
+
+	it("lines the change up the same on both sides when only one side's diff is long", () => {
+		// base + ours fits the short diff, base + theirs doesn't: both sides still go through one algorithm. Both
+		// drop one of three `}` in a row; theirs also adds lines at the top.
+		const base = Array.from({ length: 990 }, (_, i) => (i >= 800 && i < 803 ? "}" : `line ${i}`));
+		const ours = base.filter((_, i) => i !== 801);
+		const theirs = [...Array.from({ length: 30 }, (_, i) => `new ${i}`), ...ours];
+		const merged = mergeText("x.txt", base.join("\n"), ours.join("\n"), theirs.join("\n"));
+		expect(merged.clean).toBe(true);
+		expect(merged.text).toBe(theirs.join("\n"));
+	});
+
+	it("applies both sides' changes whatever else one side changed far from them", () => {
+		// Long files of lines that repeat (`}`, blank lines, a lockfile's lines), one change made on both sides and
+		// one more on one side, before or after it: the merge is that one change plus the other, clean.
+		let seed = 7;
+		const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+		const pick = <T>(xs: T[]) => xs[Math.floor(rnd() * xs.length)];
+		const vocab = ["}", "", "  }", "  await tick();", "},", '      "license": "MIT"', "    return x;", "  });"];
+		const block = (n: number) => Array.from({ length: n }, () => (rnd() < 0.55 ? pick(vocab) : `line ${Math.floor(rnd() * 400)}`));
+		const change = (lines: string[], at: number) => {
+			const out = lines.slice();
+			const kind = pick(["insert", "delete", "replace", "copy"]);
+			if (kind === "insert") out.splice(at, 0, ...block(1 + Math.floor(rnd() * 5)));
+			else if (kind === "delete") out.splice(at, 1 + Math.floor(rnd() * 3));
+			else if (kind === "replace") out.splice(at, 1 + Math.floor(rnd() * 3), ...block(1 + Math.floor(rnd() * 3)));
+			else out.splice(at, 0, ...lines.slice(at - 4, at));
+			return out;
+		};
+		const wrong: number[] = [];
+		for (let t = 0; t < 150; t++) {
+			const base = block(1050 + Math.floor(rnd() * 600));
+			const at = 100 + Math.floor(rnd() * (base.length - 200));
+			const theirs = change(base, at);
+			let ours: string[];
+			if (rnd() < 0.5) ours = [...change(base.slice(0, at), Math.floor(rnd() * (at - 40))), ...theirs.slice(at)];
+			else {
+				const after = at + 10 + theirs.length - base.length;
+				ours = change(theirs, Math.min(theirs.length - 1, after + 30 + Math.floor(rnd() * Math.max(1, theirs.length - after - 40))));
+			}
+			const merged = mergeText("x.txt", base.join("\n"), ours.join("\n"), theirs.join("\n"));
+			if (!merged.clean || merged.text !== ours.join("\n")) wrong.push(t);
+		}
+		expect(wrong).toEqual([]);
 	});
 });
 
@@ -265,6 +360,41 @@ describe("two flights add a method of the same name", () => {
 			expect(merged.clean, path).toBe(false);
 			expect(merged.conflicts[0].symbols.join(), path).toMatch(/[Vv]alidate/);
 		}
+	});
+
+	it("keeps members that share a name by design", () => {
+		const cases: [string, string, string, string][] = [
+			// A getter and a setter, a static and an instance method.
+			["src/cart.js", "export class Cart {\n  add(x) {\n    this.items.push(x);\n  }\n}\n", "  get total() {\n    return this.sum;\n  }\n", "  set total(v) {\n    this.sum = v;\n  }\n"],
+			["src/cart.ts", "export class Cart {\n  add(x) {\n    this.items.push(x);\n  }\n}\n", "  static create() {\n    return new Cart();\n  }\n", "  create() {\n    return this;\n  }\n"],
+			// Overloads.
+			["src/Log.java", "public class Log {\n  void info(String m) {\n    out(m);\n  }\n}\n", "  void warn(String m) {\n    out(m);\n  }\n", "  void warn(String m, Throwable t) {\n    out(m + t);\n  }\n"],
+			["src/shape.cpp", "class Shape {\n  void move(int x) {\n    this->x = x;\n  }\n};\n", "  void scale(int f) {\n    w *= f;\n  }\n", "  void scale(double f) {\n    w = w * f;\n  }\n"],
+			// A property's getter and setter; a class method and an instance method.
+			["cart.py", "class Cart:\n    def add(self, x):\n        self.items.append(x)\n", "\n    @property\n    def total(self):\n        return self._total\n", "\n    @total.setter\n    def total(self, v):\n        self._total = v\n"],
+			["cart.rb", "class Cart\n  def add(x)\n    @items << x\n  end\nend\n", "  def self.build\n    new\n  end\n", "  def build\n    self\n  end\n"],
+		];
+		for (const [path, base, a, b] of cases) {
+			// Each side inserts at the same point: the end of the class.
+			const at = path.endsWith(".py") ? base.length : base.lastIndexOf(path.endsWith(".rb") ? "end\n" : "}");
+			const merged = mergeText(path, base, base.slice(0, at) + a + base.slice(at), base.slice(0, at) + b + base.slice(at));
+			expect(merged.clean, path).toBe(true);
+			expect(merged.text, path).toContain(a.trim().split("\n")[0].trim());
+			expect(merged.text, path).toContain(b.trim().split("\n")[0].trim());
+		}
+		// The same trait method for two traits.
+		const rs = "pub struct Money(i64);\n";
+		const display = "\nimpl fmt::Display for Money {\n    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {\n        write!(f, \"{}\", self.0)\n    }\n}\n";
+		const debug = "\nimpl fmt::Debug for Money {\n    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {\n        write!(f, \"Money({})\", self.0)\n    }\n}\n";
+		expect(mergeText("src/money.rs", rs, rs + display, rs + debug).clean).toBe(true);
+	});
+
+	it("still calls a getter against a method of its name a conflict", () => {
+		const base = "export class Cart {\n  add(x) {\n    this.items.push(x);\n  }\n}\n";
+		const at = base.lastIndexOf("}");
+		const merged = mergeText("src/cart.js", base, `${base.slice(0, at)}  get total() {\n    return 1;\n  }\n${base.slice(at)}`, `${base.slice(0, at)}  total() {\n    return 2;\n  }\n${base.slice(at)}`);
+		expect(merged.clean).toBe(false);
+		expect(merged.conflicts[0].symbols).toEqual(["Cart.total"]);
 	});
 
 	it("still keeps two different methods added at the same point", () => {
