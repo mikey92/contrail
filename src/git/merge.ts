@@ -44,9 +44,9 @@ interface LineDiff {
 	buffer2Content: string[];
 }
 
-/** Most lines Myers' diff of a stretch may change before the stretch is split at anchors (or is one change). */
+/** Most lines Myers' diff may change: past this, a long text is split at anchors instead (see anchoredDiff). */
 const MAX_EDITS = 1000;
-/** How many times a stretch is split at anchors, and its parts at their own anchors, at most. */
+/** How many times a text is split at anchors, and its parts at their own anchors, at most. */
 const MAX_SPLITS = 8;
 
 /**
@@ -117,51 +117,81 @@ function myers(a: string[], b: string[], maxEdits: number): LineDiff[] | null {
 
 /**
  * diffIndices, bounded: texts too long for it are diffed with Myers' algorithm, which is quick when little
- * changed, and split where much did (see stretchDiff).
+ * changed, and split at anchors where much did (see anchoredDiff).
  */
 export function diffLines(a: string[], b: string[]): LineDiff[] {
-	return lineDiff(a, b, a.length + b.length > MAX_DIFF_LINES);
+	return lineDiff(a, b, a.length + b.length > MAX_DIFF_LINES, false, sharedHead(a, b));
+}
+
+/** How many lines `a` and `b` share at their start. */
+function sharedHead(a: string[], b: string[]): number {
+	let head = 0;
+	while (head < a.length && head < b.length && a[head] === b[head]) head++;
+	return head;
 }
 
 /**
- * diffLines with the algorithm chosen: diffIndices, or for `long` texts Myers' (from their first different line).
- * A merge diffs both its sides with the same one: one change made on both sides has to line up the same in both
- * diffs (in a run of `}` or blank lines, say), or the merge keeps it twice or drops a line.
+ * diffLines with the algorithm chosen: diffIndices, or for `long` texts Myers' from line `head` (one both texts
+ * have up to there). A merge diffs both its sides with the same one, from the same line: one change made on both
+ * sides has to line up the same in both diffs (in a run of `}` or blank lines, say), or the merge keeps it twice
+ * or drops a line.
  */
-function lineDiff(a: string[], b: string[], long: boolean): LineDiff[] {
+function lineDiff(a: string[], b: string[], long: boolean, merge: boolean, head: number): LineDiff[] {
 	// Short texts as they always were (another algorithm can line up a run of blank lines or `}` differently).
 	if (!long)
 		return diffIndices<string>(a, b).map((d) => ({ buffer1: d.buffer1, buffer1Content: d.buffer1Content, buffer2: d.buffer2, buffer2Content: d.buffer2Content }));
-	let head = 0;
-	while (head < a.length && head < b.length && a[head] === b[head]) head++;
+	const am = a.slice(head);
+	const bm = b.slice(head);
+	// Myers' diff changes at least the lines one text has more of than the other: past MAX_EDITS, not tried.
+	const hunks = fewestEdits(am, bm) <= MAX_EDITS ? myers(am, bm, MAX_EDITS) : null;
+	if (hunks) return hunks.map((d) => ({ ...d, buffer1: [d.buffer1[0] + head, d.buffer1[1]], buffer2: [d.buffer2[0] + head, d.buffer2[1]] }));
 	const out: LineDiff[] = [];
-	stretchDiff(a.slice(head), b.slice(head), head, head, out, 0);
+	anchoredDiff(am, bm, head, head, out, 0, merge);
 	return out;
 }
 
-/**
- * Myers' diff of a stretch (at `aAt` and `bAt` in the whole texts), into `out`. Past MAX_EDITS, patience diff's
- * anchors split it: the lines each side has exactly once, in an order both keep. The parts between them are
- * diffed the same way, and a part with too many changes and no anchor is one hunk. A change both sides of a merge
- * made still lines up as Myers' lines it up: no anchor lies among the lines it could slide over (with the change
- * in, such a line would be there twice).
- */
-function stretchDiff(a: string[], b: string[], aAt: number, bAt: number, out: LineDiff[], splits: number): void {
-	if (!a.length && !b.length) return;
-	const hunks = myers(a, b, MAX_EDITS);
-	if (hunks) {
-		for (const h of hunks) out.push({ ...h, buffer1: [h.buffer1[0] + aAt, h.buffer1[1]], buffer2: [h.buffer2[0] + bAt, h.buffer2[1]] });
-		return;
+/** The fewest lines a diff from `a` to `b` can change: those one has more of than the other. */
+function fewestEdits(a: string[], b: string[]): number {
+	const count = new Map<string, number>();
+	for (const line of a) count.set(line, (count.get(line) ?? 0) + 1);
+	let shared = 0;
+	for (const line of b) {
+		const n = count.get(line);
+		if (n) {
+			shared++;
+			count.set(line, n - 1);
+		}
 	}
+	return a.length + b.length - 2 * shared;
+}
+
+/**
+ * Too many changes for Myers' diff: patience diff's anchors (the lines each side has exactly once, in an order
+ * both keep) split the texts (at `aAt` and `bAt` in the whole), the parts between them are split the same way, and
+ * a part that still differs is one hunk, into `out`: for display without the lines its ends share, for a merge
+ * whole. (Diffed line by line, a part next to a big rewrite can line up differently on the two sides of a merge,
+ * and the merge keep a change twice.) No anchor lies among the lines a change could slide over (with the change
+ * in, such a line would be there twice), so changes an anchor parts stay apart.
+ */
+function anchoredDiff(a: string[], b: string[], aAt: number, bAt: number, out: LineDiff[], splits: number, merge: boolean): void {
+	if (sameLines(a, b)) return;
 	const anchors = splits < MAX_SPLITS ? increasing(uniquePairs(a, b)) : [];
 	if (!anchors.length) {
-		out.push({ buffer1: [aAt, a.length], buffer1Content: a, buffer2: [bAt, b.length], buffer2Content: b });
+		let head = 0;
+		let tail = 0;
+		if (!merge) {
+			head = sharedHead(a, b);
+			while (tail < Math.min(a.length, b.length) - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
+		}
+		const am = a.slice(head, a.length - tail);
+		const bm = b.slice(head, b.length - tail);
+		out.push({ buffer1: [aAt + head, am.length], buffer1Content: am, buffer2: [bAt + head, bm.length], buffer2Content: bm });
 		return;
 	}
 	let i = 0;
 	let j = 0;
 	for (const [ai, bj] of [...anchors, [a.length, b.length]]) {
-		stretchDiff(a.slice(i, ai), b.slice(j, bj), aAt + i, bAt + j, out, splits + 1);
+		anchoredDiff(a.slice(i, ai), b.slice(j, bj), aAt + i, bAt + j, out, splits + 1, merge);
 		i = ai + 1;
 		j = bj + 1;
 	}
@@ -205,6 +235,18 @@ function append(out: string[], lines: string[]): void {
 	for (const line of lines) out.push(line);
 }
 
+/** How far apart two hunks of a merge's sides may be and still be read as one change (see diff3). */
+const ECHO_LINES = 3;
+
+/** Whether one of two runs of lines (one with code in it, at most 200 lines) is in the other, in a row. */
+function repeats(x: string[], y: string[]): boolean {
+	const [small, big] = x.length <= y.length ? [x, y] : [y, x];
+	if (!small.length || small.length > 200 || !small.some((l) => /[A-Za-z0-9]/.test(l))) return false;
+	for (let k = big.indexOf(small[0]); k !== -1 && k + small.length <= big.length; k = big.indexOf(small[0], k + 1))
+		if (small.every((l, n) => big[k + n] === l)) return true;
+	return false;
+}
+
 type Merged = { ok: string[]; conflict?: undefined } | { conflict: { a: string[]; o: string[]; b: string[]; oIndex: number; aIndex: number; bIndex: number }; ok?: undefined };
 
 /**
@@ -213,9 +255,10 @@ type Merged = { ok: string[]; conflict?: undefined } | { conflict: { a: string[]
  */
 function diff3(a: string[], o: string[], b: string[]): Merged[] {
 	const long = o.length + Math.max(a.length, b.length) > MAX_DIFF_LINES;
+	const head = long ? Math.min(sharedHead(o, a), sharedHead(o, b)) : 0;
 	const hunks = [
-		...lineDiff(o, a, long).map((h) => ({ side: "a" as const, oStart: h.buffer1[0], oLength: h.buffer1[1], start: h.buffer2[0], length: h.buffer2[1] })),
-		...lineDiff(o, b, long).map((h) => ({ side: "b" as const, oStart: h.buffer1[0], oLength: h.buffer1[1], start: h.buffer2[0], length: h.buffer2[1] })),
+		...lineDiff(o, a, long, true, head).map((h) => ({ side: "a" as const, oStart: h.buffer1[0], oLength: h.buffer1[1], start: h.buffer2[0], length: h.buffer2[1] })),
+		...lineDiff(o, b, long, true, head).map((h) => ({ side: "b" as const, oStart: h.buffer1[0], oLength: h.buffer1[1], start: h.buffer2[0], length: h.buffer2[1] })),
 	].sort((x, y) => x.oStart - y.oStart);
 	const out: Merged[] = [];
 	let ok: string[] = [];
@@ -223,14 +266,21 @@ function diff3(a: string[], o: string[], b: string[]): Merged[] {
 		if (ok.length) out.push({ ok });
 		ok = [];
 	};
+	// Two hunks of different sides a few lines apart that add (or remove) the same lines of code: one change both
+	// sides made, which their diffs placed apart (in a run of lines that repeat, next to a rewrite). Applied apart,
+	// it would come out twice (or take two lines): they make one region, a conflict unless both read the same.
+	type Hunk = (typeof hunks)[number];
+	const added = (h: Hunk) => (h.side === "a" ? a : b).slice(h.start, h.start + h.length);
+	const removed = (h: Hunk) => o.slice(h.oStart, h.oStart + h.oLength);
+	const echoes = (x: Hunk, y: Hunk) => x.side !== y.side && (repeats(added(x), added(y)) || repeats(removed(x), removed(y)));
 	let at = 0;
 	for (let i = 0; i < hunks.length; ) {
 		const first = hunks[i];
 		const regionStart = first.oStart;
 		let regionEnd = first.oStart + first.oLength;
 		const region = [hunks[i++]];
-		// Hunks of either side that overlap (or touch) this region join it.
-		while (i < hunks.length && hunks[i].oStart <= regionEnd) {
+		// Hunks of either side that overlap (or touch) this region join it, and ones that echo a hunk of it.
+		while (i < hunks.length && (hunks[i].oStart <= regionEnd || (hunks[i].oStart - regionEnd <= ECHO_LINES && region.some((h) => echoes(h, hunks[i]))))) {
 			regionEnd = Math.max(regionEnd, hunks[i].oStart + hunks[i].oLength);
 			region.push(hunks[i++]);
 		}
@@ -316,6 +366,20 @@ function importStatements(lines: string[]): { from: number; to: number; key: str
 	return out;
 }
 
+/**
+ * Whether two inserts at one point start or end with the same three lines of code or more (imports aside) and
+ * differ in between: two versions of one change, whose shared lines side by side would come out twice.
+ */
+function shareCode(a: string[], b: string[]): boolean {
+	let head = 0;
+	while (head < a.length && head < b.length && a[head] === b[head]) head++;
+	let tail = 0;
+	while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
+	const imports = new Set(importStatements(a).flatMap((st) => Array.from({ length: st.to - st.from + 1 }, (_, k) => st.from + k)));
+	const code = (from: number, to: number) => a.slice(from, to).filter((l, k) => /[A-Za-z0-9]/.test(l) && !imports.has(from + k)).length;
+	return code(0, head) >= 3 || code(a.length - tail, a.length) >= 3;
+}
+
 /** `b` without the import statements `a` has too. */
 function withoutSharedImports(a: string[], b: string[]): string[] {
 	const ours = new Set(importStatements(a).map((s) => s.key));
@@ -347,9 +411,9 @@ function declaredTwice(path: string, a: string[], b: string[]): string[] {
 	if (!re) return [];
 	const names = (lines: string[]) => new Set(lines.flatMap((l) => re.exec(l)?.[1] ?? []));
 	const ours = names(a);
-	// `_` names nothing (Go's `var _ Shape = (*Box)(nil)`, Python's `def _` registered for one type), and a Go
-	// file may have any number of `init` functions.
-	return [...names(b)].filter((n) => ours.has(n) && n !== "_" && !(lang === "go" && n === "init"));
+	// In Go, Python and Rust `_` names nothing (`var _ Shape = (*Box)(nil)`, a `def _` registered for one type,
+	// `const _: () = …`), and a Go file may have any number of `init` functions.
+	return [...names(b)].filter((n) => ours.has(n) && !(n === "_" && ["go", "py", "rust"].includes(lang)) && !(lang === "go" && n === "init"));
 }
 
 /**
@@ -421,7 +485,7 @@ export function mergeText(path: string, base: string, ours: string, theirs: stri
 			const clash = declaredIn(sides[1], b, c.bIndex, c.b.length).filter((t) => mine.some((m) => m.key === t.key && !(m.accessor && t.accessor && m.accessor !== t.accessor)));
 			twice = [...new Set([...twice, ...clash.map((t) => t.name)])];
 		}
-		if (c.o.length === 0 && twice.length === 0) {
+		if (c.o.length === 0 && twice.length === 0 && !shareCode(c.a, c.b)) {
 			// Both sides inserted at the same point without touching existing lines: keep both, and an
 			// import both added only once.
 			append(out, c.a);

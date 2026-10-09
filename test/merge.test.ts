@@ -174,6 +174,8 @@ describe("mergeText inserts across languages", () => {
 		expect(insert("main.go", "package main\n", 'func init() {\n\tregister("a")\n}\n', 'func init() {\n\tregister("b")\n}\n').clean).toBe(true);
 		expect(insert("shapes.go", "package shapes\n", "var _ Shape = (*Box)(nil)\n", "var _ Shape = (*Circle)(nil)\n").clean).toBe(true);
 		expect(insert("fmt.py", "import functools\n", "@show.register\ndef _(x: int):\n    return str(x)\n", "@show.register\ndef _(x: list):\n    return ', '.join(x)\n").clean).toBe(true);
+		// In JavaScript `_` is a name like any other (lodash): declared twice, the file doesn't parse.
+		expect(insert("src/util.js", 'const fs = require("fs");\n', 'const _ = require("lodash");\nconst sum = (xs) => _.sum(xs);\n', 'const _ = require("lodash");\nconst uniq = (xs) => _.uniq(xs);\n').clean).toBe(false);
 	});
 	it("does not take a type or a merged interface for a name declared twice", () => {
 		expect(insert("src/x.c", "int main(void);\n", "const int MAX_A = 1;\n", "const int MAX_B = 2;\n").clean).toBe(true);
@@ -359,6 +361,50 @@ describe("one change both sides made, in a long file", () => {
 			if (!merged.clean || merged.text !== expected.join("\n")) wrong.push(`${t}: ${merged.clean ? "wrong text" : "conflict"}`);
 		}
 		expect(wrong).toEqual([]);
+	});
+
+	it("calls a change both sides made right below a big rewrite a conflict, never merges it twice", () => {
+		// Only lines that repeat (`- done`, blank lines) between the rewrite and the change: the two sides' diffs can
+		// place the change differently. A conflict, at any size, not a clean merge with lines twice.
+		for (const size of [40, 200, 1_100]) {
+			const header = Array.from({ length: 20 }, (_, i) => `intro line ${i}`);
+			const oldBlock = Array.from({ length: size }, (_, i) => (i === size - 10 ? "kept line" : `old line ${i}`));
+			const newBlock = Array.from({ length: Math.ceil(size / 4) }, (_, i) => [`## Section ${i}`, `- item ${i}`, "- done", ""]).flat();
+			newBlock.splice(Math.floor(newBlock.length / 2), 0, "kept line");
+			const tail = Array.from({ length: 900 }, (_, i) => `tail line ${i}`);
+			const base = [...header, ...oldBlock, "- done", "", "## End", ...tail].join("\n");
+			// Both made the rewrite, trunk also deleted the blank line below it.
+			const sameRewrite = mergeText("NOTES.md", base, [...header, ...newBlock, "- done", "## End", ...tail].join("\n"), [...header, ...newBlock, "- done", "", "## End", ...tail].join("\n"));
+			expect(sameRewrite.clean, `${size}: same rewrite`).toBe(false);
+			// Trunk made the rewrite, both added the same note below it.
+			const note = mergeText("NOTES.md", base, [...header, ...newBlock, "- done", "- note", "", "## End", ...tail].join("\n"), [...header, ...oldBlock, "- done", "- note", "", "## End", ...tail].join("\n"));
+			expect(note.clean, `${size}: note`).toBe(false);
+		}
+	});
+
+	it("shows a long rewrite's change without the lines its ends share", () => {
+		const before = [...Array.from({ length: 1_500 }, (_, i) => `const v${i} = ${i};`), ...Array.from({ length: 600 }, () => "}")];
+		const after = [...Array.from({ length: 1_500 }, (_, i) => `let v${i} = ${i};`), ...Array.from({ length: 600 }, () => "}")];
+		const hunks = contextChanges("src/values.js", before.join("\n"), after.join("\n"));
+		expect(hunks.map((h) => [h.start, h.removed.length, h.added.length])).toEqual([[1, 1_500, 1_500]]);
+	});
+
+	it("stays fast when a long file splits into many parts", () => {
+		// Every part between section markers rewritten on both sides, and a run of lines that repeat at each marker.
+		const base: string[] = [];
+		const ours: string[] = [];
+		const theirs: string[] = [];
+		for (let c = 0; base.length < 100_000; c++) {
+			const head = Array.from({ length: 8 }, (_, k) => [`z${k + 1}`, `z${k}`]).flat();
+			const fill = (tag: string) => Array.from({ length: 505 }, (_, i) => `${tag} ${c} ${i}`);
+			base.push(`block ${c}`, ...head, ...fill("o"));
+			ours.push(`block ${c}`, ...head, ...fill("a"));
+			theirs.push(`block ${c}`, ...head, ...fill("b"));
+		}
+		const t0 = Date.now();
+		const merged = mergeText("x.txt", base.join("\n"), ours.join("\n"), theirs.join("\n"));
+		expect(Date.now() - t0).toBeLessThan(5000);
+		expect(merged.clean).toBe(false);
 	});
 
 	it("applies both sides' changes whatever else one side changed far from them", () => {
