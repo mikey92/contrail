@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mergeText, touchedSymbols } from "../src/git/merge";
+import { contextChanges, mergeText, touchedSymbols } from "../src/git/merge";
 
 const BASE = `export function add(a, b) {
   return a + b;
@@ -180,5 +180,28 @@ describe("mergeText inserts across languages", () => {
 		insert("src/x.js", "export const k = 1;\n", `import ${"{".repeat(40_000)}\n`, `import ${"{".repeat(40_001)}\n`);
 		insert("src/y.js", "export const k = 1;\n", "import {\n".repeat(20_000), "import { x }\n".repeat(20_000));
 		expect(Date.now() - t0).toBeLessThan(1000);
+	});
+});
+
+describe("contextChanges", () => {
+	const before = 'export function coupon(amount, code) {\n  if (code === "A") {\n    return amount - 5;\n  }\n  return amount;\n}\n\nexport function tax(amount) {\n  return amount * 0.07;\n}\n';
+	const after = before.replace('  if (code === "A") {', '  if (code === "HALF") {\n    return amount / 2;\n  }\n  if (code === "A") {').replace("amount * 0.07", "amount * RATE");
+
+	it("names the symbol each hunk changes and shows the lines around it", () => {
+		const [half, rate] = contextChanges("src/pricing.js", before, after, 2);
+		expect(half).toMatchObject({ start: 2, removed: [], added: ['  if (code === "HALF") {', "    return amount / 2;", "  }"], symbols: ["coupon"] });
+		expect(half.before).toEqual(["export function coupon(amount, code) {"]);
+		expect(half.after).toEqual(['  if (code === "A") {', "    return amount - 5;"]);
+		expect(rate).toMatchObject({ removed: ["  return amount * 0.07;"], added: ["  return amount * RATE;"], symbols: ["tax"] });
+		expect(rate.before).toEqual(["", "export function tax(amount) {"]);
+	});
+
+	it("never shows a line another hunk changes as context", () => {
+		const a = "one\ntwo\nthree\nfour\n";
+		const hunks = contextChanges("notes.txt", a, a.replace("one", "ONE").replace("three", "THREE"), 3);
+		expect(hunks).toHaveLength(2);
+		expect(hunks[0].after).toEqual(["two"]);
+		expect(hunks[1].before).toEqual(["two"]);
+		expect(hunks[0].symbols).toEqual(["(top)"]);
 	});
 });

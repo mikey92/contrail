@@ -1,5 +1,5 @@
 // Three-way merge of whole trees: trunk ("ours") × a flight's workspace ("theirs") over their merge base.
-import { lineChanges, mergeText, touchedSymbols } from "../git/merge";
+import { contextChanges, lineChanges, mergeText, touchedSymbols } from "../git/merge";
 import type { ConflictReport, FileChange } from "../shared/types";
 import { type FlatTree, listTree, readItemText, type Repo, type TreeItem, writeText } from "./gitops";
 
@@ -23,14 +23,15 @@ function truncateHunks(hunks: NonNullable<FileChange["hunks"]>): FileChange["hun
 		budget -= removed.length;
 		const added = h.added.slice(0, Math.max(0, budget));
 		budget -= added.length;
-		out.push({ start: h.start, removed, added });
+		out.push({ ...h, removed, added });
 	}
 	return out;
 }
 
 const same = (a?: TreeItem, b?: TreeItem) => (!a && !b) || (!!a && !!b && a.oid === b.oid && a.mode === b.mode);
 
-export async function describeChanges(repo: Repo, base: FlatTree, next: FlatTree): Promise<FileChange[]> {
+/** What `next` changed against `base`, file by file. With `context`, hunks also carry their symbols and that many lines around them. */
+export async function describeChanges(repo: Repo, base: FlatTree, next: FlatTree, context = 0): Promise<FileChange[]> {
 	const changes: FileChange[] = [];
 	const paths = new Set([...base.keys(), ...next.keys()]);
 	for (const path of [...paths].sort()) {
@@ -44,7 +45,7 @@ export async function describeChanges(repo: Repo, base: FlatTree, next: FlatTree
 		let deletions = 0;
 		let hunks: FileChange["hunks"] = [];
 		if (before !== null && after !== null) {
-			hunks = lineChanges(before, after);
+			hunks = context ? contextChanges(path, before, after, context) : lineChanges(before, after);
 			for (const h of hunks) {
 				additions += h.added.length;
 				deletions += h.removed.length;

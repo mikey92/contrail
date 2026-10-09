@@ -51,6 +51,20 @@ describe("the prompt", () => {
 		expect(text).toContain("... 8 more changed lines not shown");
 	});
 
+	it("names each hunk's symbols and marks the lines around it as unchanged", () => {
+		const text = diffText([
+			{
+				...change("src/pricing.js", ["  if (code === \"HALF\") {", "    return amount / 2;", "  }"], [], ["applyCoupon"]),
+				hunks: [
+					{ start: 17, removed: [], added: ["  if (code === \"HALF\") {"], symbols: ["applyCoupon"], before: ["export function applyCoupon(amount, code) {"], after: ["  if (code === \"A\") {"] },
+					{ start: 1, removed: [], added: ["import { x } from \"./x.js\";"], symbols: ["(top)"] },
+				],
+			},
+		]);
+		expect(text).toContain('@@ line 17, in applyCoupon\n export function applyCoupon(amount, code) {\n+  if (code === "HALF") {\n   if (code === "A") {');
+		expect(text).toContain("@@ line 1, in top-level code\n+import");
+	});
+
 	it("stays bounded however big the change", () => {
 		const big = Array.from({ length: 400 }, (_, i) => change(`src/f${i}.js`, Array.from({ length: 60 }, () => "x".repeat(80))));
 		const text = diffText(big);
@@ -80,6 +94,14 @@ describe("parseVerdict", () => {
 
 	it("salvages a verdict from broken JSON and refuses an answer without one", () => {
 		expect(parseVerdict('{"verdict": "flag", "reason": "cut off')?.verdict).toBe("flag");
+		// Answers Qwen3 gave, with a list closed by the wrong bracket.
+		expect(
+			parseVerdict('\n\n{"changed": [{"symbol": "applyCoupon", "asked": false}], "verdict": "flag", "reason": "Added unrelated coupon logic to applyCoupon()", "concerns": ["Modified applyCoupon() to add a \\"FRIEND50\\" coupon", "Also new tests"}}'),
+		).toEqual({ verdict: "flag", reason: "Added unrelated coupon logic to applyCoupon()", concerns: ['Modified applyCoupon() to add a "FRIEND50" coupon', "Also new tests"] });
+		expect(parseVerdict('{"verdict": "flag", "reason": "Changes priceCents in createCatalog", "concerns": ["Unrelated price change"]}}')).toMatchObject({
+			reason: "Changes priceCents in createCatalog",
+			concerns: ["Unrelated price change"],
+		});
 		expect(parseVerdict("Looks good to me")).toBeNull();
 		expect(parseVerdict('{"verdict":"maybe"}')).toBeNull();
 	});
@@ -125,6 +147,49 @@ describe("reviewChange", () => {
 		const r = await reviewChange(ai, DEEPSEEK, input([]));
 		expect(r.verdict).toBe("approve");
 		expect(efforts).toEqual([EFFORT, "none"]);
+	});
+
+	it("lets a flag stand only when a second look agrees, with a third to break a tie", async () => {
+		const looks = (...verdicts: string[]) => {
+			let i = 0;
+			const ai = {
+				calls: 0,
+				run: async () => {
+					ai.calls++;
+					const v = verdicts[i++];
+					if (v === "error") throw new Error("3040: capacity");
+					return { response: JSON.stringify({ verdict: v, reason: `${v} #${i}` }) };
+				},
+			};
+			return ai;
+		};
+		const agree = looks("flag", "flag");
+		expect(await reviewChange(agree, "@cf/m", input([]))).toMatchObject({ verdict: "flag", reason: "flag #1" });
+		expect(agree.calls).toBe(2);
+		const overruled = looks("flag", "approve", "approve");
+		expect(await reviewChange(overruled, "@cf/m", input([]))).toMatchObject({ verdict: "approve", reason: "approve #2" });
+		const tie = looks("flag", "approve", "flag");
+		expect((await reviewChange(tie, "@cf/m", input([]))).verdict).toBe("flag");
+		expect(tie.calls).toBe(3);
+		expect((await reviewChange(looks("flag", "error"), "@cf/m", input([]))).verdict).toBe("flag");
+		const approved = looks("approve");
+		expect((await reviewChange(approved, "@cf/m", input([]))).verdict).toBe("approve");
+		expect(approved.calls).toBe(1);
+	});
+
+	it("tells a reviewer without an effort setting not to think when it asks again", async () => {
+		const sent: string[] = [];
+		const ai = {
+			run: async (_m: string, i: any) => {
+				sent.push(i.messages.at(-1).content);
+				return sent.length === 1
+					? { choices: [{ finish_reason: "length", message: { content: "<think>Let me look at every line" } }] }
+					: { choices: [{ finish_reason: "stop", message: { content: '{"verdict":"approve"}' } }] };
+			},
+		};
+		expect((await reviewChange(ai, REVIEWERS[0], input([]))).verdict).toBe("approve");
+		expect(sent[0]).not.toContain("/no_think");
+		expect(sent[1]).toMatch(/\/no_think$/);
 	});
 
 	it("passes a reasoning effort only to reviewers that take one", async () => {

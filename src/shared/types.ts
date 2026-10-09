@@ -139,8 +139,8 @@ export interface FileChange {
 	symbols: string[];
 	additions: number;
 	deletions: number;
-	/** Compact diff for reviewers (truncated). */
-	hunks?: { start: number; removed: string[]; added: string[] }[];
+	/** Compact diff for reviewers (truncated). The AI reviewer's copy also has each hunk's symbols and the unchanged lines around it. */
+	hunks?: { start: number; removed: string[]; added: string[]; symbols?: string[]; before?: string[]; after?: string[] }[];
 }
 
 export interface Landing {

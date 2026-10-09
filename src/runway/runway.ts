@@ -492,7 +492,7 @@ export class Runway extends DurableObject<Env> {
 			if (job.approvedHead === head || opts.reviews.has(key)) return;
 			const base = await mergeBase(r, start, head);
 			if (!base || base === head) return;
-			const changes = await describeChanges(r, await listTree(r, base), await listTree(r, head));
+			const changes = await describeChanges(r, await listTree(r, base), await listTree(r, head), 2);
 			if (changes.length === 0) return;
 			const note = job.note as { intent?: ReviewInput["intent"]; summary?: string; plan?: string | null; decisions?: string[] };
 			const input: ReviewInput = {

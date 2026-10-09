@@ -183,3 +183,32 @@ export function lineChanges(before: string, after: string) {
 		added: d.buffer2Content,
 	}));
 }
+
+/**
+ * lineChanges for a reader who has nothing else: each hunk also names the symbols it changes and carries up to
+ * `context` unchanged lines on each side (never lines another hunk changes).
+ */
+export function contextChanges(path: string, before: string, after: string, context = 2) {
+	const beforeLines = before.split("\n");
+	const afterLines = after.split("\n");
+	const beforeSyms = extractSymbols(path, before);
+	const afterSyms = extractSymbols(path, after);
+	const diffs = diffIndices(beforeLines, afterLines);
+	return diffs.map((d, i) => {
+		const [bStart, bLen] = d.buffer1;
+		const [aStart, aLen] = d.buffer2;
+		const symbols = new Set<string>();
+		for (let l = bStart; l < bStart + bLen; l++) if (beforeLines[l]?.trim()) symbols.add(symbolAt(beforeSyms, l + 1));
+		for (let l = aStart; l < aStart + aLen; l++) if (afterLines[l]?.trim()) symbols.add(symbolAt(afterSyms, l + 1));
+		const prevEnd = i > 0 ? diffs[i - 1].buffer2[0] + diffs[i - 1].buffer2[1] : 0;
+		const nextStart = i + 1 < diffs.length ? diffs[i + 1].buffer2[0] : afterLines.length;
+		return {
+			start: bStart + 1,
+			removed: d.buffer1Content,
+			added: d.buffer2Content,
+			symbols: [...symbols],
+			before: afterLines.slice(Math.max(prevEnd, aStart - context), aStart),
+			after: afterLines.slice(aStart + aLen, Math.min(nextStart, aStart + aLen + context)),
+		};
+	});
+}
