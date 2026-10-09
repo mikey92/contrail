@@ -309,12 +309,14 @@ app.post("/api/p/:slug/resync", async (c) => {
 // ── edge agents (run on Workers AI inside Durable Objects) ──
 
 app.post("/api/p/:slug/edge/launch", async (c) => {
-	// An unknown slug must not wake (and create) a Tower.
-	if (!(await registry(c.env).get(c.req.param("slug")))) return c.json({ error: "not found" }, 404);
+	// An unknown slug must not wake (and create) a Tower, and a private one looks unknown to visitors.
+	const entry = await registry(c.env).get(c.req.param("slug"));
+	if (!entry || (!entry.info.public && !isAdmin(c))) return c.json({ error: "not found" }, 404);
 	if (!isAdmin(c)) {
 		const body = await readJson<{ count?: number }>(c.req.raw, PUBLIC_BODY_MAX, {});
 		const res = await tower(c.env, c.req.param("slug")).launchEdgePublic({ count: Number(body.count ?? 3) });
-		return "error" in res ? c.json(res, 429) : c.json(res);
+		if (!("error" in res)) return c.json(res);
+		return c.json(res, /admin key/.test(res.error) ? 403 : 429);
 	}
 	const body = await c.req.json<{ count?: number; model?: string; maxFlights?: number; mode?: "llm" | "scripted" }>().catch(() => ({}) as any);
 	return c.json(
@@ -348,7 +350,9 @@ app.post("/api/p/:slug/join", async (c) => {
 	if (!entry) return c.json({ error: "not found" }, 404);
 	const body = await readJson<{ joinCode?: string; callsign?: string; kind?: any; model?: string }>(c.req.raw, PUBLIC_BODY_MAX, {});
 	const admin = isAdmin(c);
-	if (!admin && !(typeof body.joinCode === "string" && safeEqual(body.joinCode, entry.joinCode))) return c.json({ error: "join code required" }, 401);
+	// Without its code, a private airspace looks unknown.
+	if (!admin && !(typeof body.joinCode === "string" && safeEqual(body.joinCode, entry.joinCode)))
+		return entry.info.public ? c.json({ error: "join code required" }, 401) : c.json({ error: "not found" }, 404);
 	const input = { callsign: body.callsign, kind: body.kind, model: body.model };
 	const joined = admin ? await tower(c.env, slug).join(input) : await tower(c.env, slug).joinWithCode(input);
 	if ("error" in joined) return c.json(joined, 429);
@@ -373,11 +377,13 @@ app.use("/api/p/:slug/agent/*", async (c, next) => {
 	if (tooLarge(c.req.raw)) return c.json({ error: "request too large" }, 413);
 	const slug = c.req.param("slug");
 	// Look the project up first: an unknown slug must not wake (and create) a Tower.
-	if (!(await registry(c.env).get(slug))) return c.json({ error: "not found" }, 404);
+	const entry = await registry(c.env).get(slug);
+	if (!entry) return c.json({ error: "not found" }, 404);
 	const key = bearer(c.req.raw);
 	const found = key ? await tower(c.env, slug).authenticate(key) : null;
 	if (found && !("agent" in found)) return c.json({ error: keyRefused(found, renewProject(c, slug)) }, 401);
-	if (!found) return c.json({ error: "agent key required (Authorization: Bearer ct_…)" }, 401);
+	// Without a key of its own, a private airspace looks unknown.
+	if (!found) return entry.info.public ? c.json({ error: "agent key required (Authorization: Bearer ct_…)" }, 401) : c.json({ error: "not found" }, 404);
 	c.set("agentId", found.agent.id);
 	await next();
 });

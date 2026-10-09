@@ -32,6 +32,12 @@ export function boundArgs(value: unknown, depth = 0): any {
 	return value;
 }
 
+/** A list argument an agent passed as a single value (a common slip) or with non-strings in it: a list of strings. */
+function list(value: unknown): string[] | undefined {
+	if (value === undefined || value === null) return undefined;
+	return (Array.isArray(value) ? value : [value]).map((v) => String(v));
+}
+
 export const TOOLS: ToolDef[] = [
 	{
 		name: "take_off",
@@ -66,7 +72,7 @@ export const TOOLS: ToolDef[] = [
 		name: "release_clearance",
 		description: "Give back clearances you no longer need (all of them if no targets are given) so waiting flights can proceed.",
 		inputSchema: { type: "object", properties: { targets: { type: "array", items: { type: "string" } } } },
-		run: (t, a, args) => t.releaseClearance(a, { targets: args.targets }),
+		run: (t, a, args) => t.releaseClearance(a, { targets: list(args.targets) }),
 		summarize: (r) => `Released ${r.released.join(", ") || "nothing"}.`,
 	},
 	{
@@ -82,7 +88,7 @@ export const TOOLS: ToolDef[] = [
 			},
 			required: ["kind", "text"],
 		},
-		run: (t, a, args) => t.log(a, { kind: args.kind, text: String(args.text ?? ""), refs: args.refs }),
+		run: (t, a, args) => t.log(a, { kind: args.kind, text: String(args.text ?? ""), refs: list(args.refs) }),
 		summarize: () => "Logged to your contrail.",
 	},
 	{
@@ -197,7 +203,7 @@ export const CENTER_TOOLS: ToolDef<CenterStub>[] = [
 		name: "release_clearance",
 		description: "Give back clearances you no longer need (all of them, in every sector, if no targets are given).",
 		inputSchema: { type: "object", properties: { targets: { type: "array", items: { type: "string" } } } },
-		run: (c, a, args) => c.releaseClearance(a, { targets: args.targets }),
+		run: (c, a, args) => c.releaseClearance(a, { targets: list(args.targets) }),
 		summarize: (r) => `Released ${r.released.join(", ") || "nothing"}.`,
 	},
 	{
@@ -208,7 +214,7 @@ export const CENTER_TOOLS: ToolDef<CenterStub>[] = [
 			properties: { kind: { type: "string", enum: ["plan", "decision", "note", "handoff"] }, text: str("Plain language, specific."), refs: { type: "array", items: { type: "string" } } },
 			required: ["kind", "text"],
 		},
-		run: (c, a, args) => c.log(a, { kind: args.kind, text: String(args.text ?? ""), refs: args.refs }),
+		run: (c, a, args) => c.log(a, { kind: args.kind, text: String(args.text ?? ""), refs: list(args.refs) }),
 		summarize: (r) => `Logged${r.sectors.length ? ` in ${r.sectors.join(", ")}` : ""}.`,
 	},
 	{

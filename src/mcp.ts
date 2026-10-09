@@ -5,6 +5,7 @@ import { boundArgs, type ToolDef } from "./agent-api";
 import { errorMessage, readJson, TooLarge } from "./util";
 
 const SUPPORTED = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
+const MAX_BATCH = 10;
 
 interface RpcMessage {
 	jsonrpc: "2.0";
@@ -96,9 +97,16 @@ export async function handleMcp(request: Request, ctx: McpContext): Promise<Resp
 		throw err;
 	}
 	if (!body || typeof body !== "object") return Response.json(rpcError(null, -32700, "Parse error"), { status: 400 });
+	// Batches (older protocol versions) stay short: each answer can be thousands of times the size of its request.
+	if (Array.isArray(body) && (body.length === 0 || body.length > MAX_BATCH))
+		return Response.json(rpcError(null, -32600, body.length ? `A batch holds at most ${MAX_BATCH} messages` : "Empty batch"), { status: 400 });
 	const messages = Array.isArray(body) ? body : [body];
 	const responses = [];
 	for (const msg of messages) {
+		if (!msg || typeof msg !== "object" || Array.isArray(msg)) {
+			responses.push(rpcError(null, -32600, "Invalid Request"));
+			continue;
+		}
 		if (msg.id === undefined || msg.id === null) continue; // notification
 		responses.push(await handle(ctx, msg));
 	}

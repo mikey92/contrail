@@ -477,12 +477,13 @@ export class Tower extends DurableObject<Env> {
 		const existing = this.meta<ProjectInfo | null>("project", null);
 		if (existing && this.meta<boolean>("ready", false)) return existing;
 		const trunkRepo = repoSafe(`${input.slug}--trunk`);
-		const info: ProjectInfo = existing ?? {
+		// Not ready: an attempt that failed half-way. This request's settings (public or not, say) win over its.
+		const info: ProjectInfo = {
 			slug: input.slug,
 			name: input.name,
 			description: input.description,
 			trunkRepo,
-			createdAt: now(),
+			createdAt: existing?.createdAt ?? now(),
 			public: input.public,
 			playground: input.playground ?? false,
 			...(input.center ? { center: input.center, prefix: input.prefix } : {}),
@@ -570,6 +571,9 @@ export class Tower extends DurableObject<Env> {
 	// ───────────────────────── agents ─────────────────────────
 
 	async join(input: { callsign?: string; kind?: AgentKind; model?: string }): Promise<{ agent: Agent; key: string; expiresAt: number }> {
+		// Hashed first: from here on nothing awaits, so two joins at once can't pick the same number and callsign.
+		const key = randomToken("ct");
+		const keyHash = await sha256(key);
 		const count = () => this.row<{ c: number }>("SELECT COUNT(*) AS c FROM agents")?.c ?? 0;
 		// Agents that never took off and have not been heard from in an hour make room for new ones.
 		if (count() >= MAX_AGENTS)
@@ -580,9 +584,10 @@ export class Tower extends DurableObject<Env> {
 		if (count() >= MAX_AGENTS) throw new Error(`this airspace is full (${MAX_AGENTS} agents)`);
 		const n = (this.row<{ n: number }>("SELECT COALESCE(MAX(n), 0) + 1 AS n FROM agents")?.n ?? 1) as number;
 		const kind: AgentKind = AGENT_KINDS.includes(input.kind as AgentKind) ? (input.kind as AgentKind) : "other";
-		let callsign = String(input.callsign ?? "").trim().toUpperCase().replace(/[^A-Z0-9-]/g, "").slice(0, 20) || callsignFor(kind, n);
-		if (this.row("SELECT id FROM agents WHERE callsign = ?", callsign)) callsign = `${callsign}-${n}`;
-		const key = randomToken("ct");
+		const asked = String(input.callsign ?? "").trim().toUpperCase().replace(/[^A-Z0-9-]/g, "").slice(0, 20) || callsignFor(kind, n);
+		// Taken (by an agent that picked it, say): the first free one of ASKED-n, ASKED-n-2, ASKED-n-3, …
+		let callsign = asked;
+		for (let i = 1; this.row("SELECT id FROM agents WHERE callsign = ?", callsign); i++) callsign = i === 1 ? `${asked}-${n}` : `${asked}-${n}-${i}`;
 		// The model goes into the trailer of every commit the agent lands: one line, no look-alike trailers.
 		const agent: Agent = { id: randomId(), callsign, kind, model: oneLine(input.model, 60) || null, color: colorFor(n - 1), joinedAt: now(), lastSeenAt: now() };
 		this.sql.exec(
@@ -593,7 +598,7 @@ export class Tower extends DurableObject<Env> {
 			agent.kind,
 			agent.model,
 			agent.color,
-			await sha256(key),
+			keyHash,
 			agent.joinedAt,
 			agent.lastSeenAt,
 		);
@@ -606,8 +611,18 @@ export class Tower extends DurableObject<Env> {
 	async joinWithCode(input: { callsign?: string; kind?: AgentKind; model?: string }): Promise<{ agent: Agent; key: string; expiresAt: number } | { error: string }> {
 		const recent = this.meta<number[]>("codeJoins", []).filter((t) => t > now() - 600_000);
 		if (recent.length >= 20) return { error: "20 agents joined in the last 10 minutes; try again in a few minutes" };
-		this.setMeta("codeJoins", [...recent, now()]);
-		return this.join(input);
+		// Counted before the join awaits anything, so joins at the same moment can't all slip under the limit; a
+		// join that fails gives its place back.
+		const at = now();
+		this.setMeta("codeJoins", [...recent, at]);
+		try {
+			return await this.join(input);
+		} catch (err) {
+			const joins = this.meta<number[]>("codeJoins", []);
+			const i = joins.lastIndexOf(at);
+			if (i >= 0) this.setMeta("codeJoins", [...joins.slice(0, i), ...joins.slice(i + 1)]);
+			throw err;
+		}
 	}
 
 	/** The agent a key belongs to, or when the key expired or was revoked. */
