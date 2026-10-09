@@ -85,3 +85,29 @@ describe("functions stay whole around text that looks like code", () => {
 		expect(symbolAt(syms, 4)).toBe("HARNESS");
 	});
 });
+
+describe("reading text in code doesn't lose the declarations after it", () => {
+	const names = (path: string, src: string) => extractSymbols(path, src).map((s) => `${s.name} ${s.start}-${s.end}`);
+
+	it("Python: triple quotes inside a one-line string or after a # open nothing", () => {
+		expect(names("a.py", "def is_docstring(line):\n    return line.startswith('\"\"\"')\n\n\ndef second():\n    return 2\n")).toEqual(["is_docstring 1-2", "second 5-6"]);
+		expect(names("b.py", "def opt():\n    add(default='#fff', help=\"\"\"Color of\nthe thing\"\"\")\n    return 1\n\n\ndef second():\n    return 2\n")).toEqual(["opt 1-4", "second 7-8"]);
+	});
+
+	it("Python: a comment indented into a block's end is the block's", () => {
+		expect(names("c.py", "def f():\n    x = 1\n    # return x\n\ndef g():\n    pass\n")).toEqual(["f 1-3", "g 5-6"]);
+	});
+
+	it("Go: a raw string right after a declaration, and one ending in a backslash", () => {
+		expect(names("a.go", 'package x\n\nconst OK = "OK"\nconst data = `\n<Test Attr="OK" />`\n')).toEqual(["OK 3-3", "data 4-5"]);
+		expect(names("b.go", "package x\n\nvar escaper = strings.NewReplacer(`\\`, `\\\\`)\n\nfunc Escape(s string) string {\n\treturn escaper.Replace(s)\n}\n\nfunc Other() {}\n")).toEqual(["escaper 3-3", "Escape 5-7", "Other 9-9"]);
+	});
+
+	it("TypeScript: a declaration with a template literal right after one without a block", () => {
+		expect(names("a.ts", "export type Id = string\nexport const SQL = `\nselect 1\n`\n")).toEqual(["Id 1-1", "SQL 2-4"]);
+	});
+
+	it("JSX that misreads a backtick doesn't hide what follows", () => {
+		expect(names("a.jsx", "const el = <A u={u} /><Link to={`/u/${id}`}>x</Link>;\nexport function after() {\n  return 1;\n}\n").map((n) => n.split(" ")[0])).toContain("after");
+	});
+});

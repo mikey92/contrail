@@ -146,7 +146,8 @@ function braceDepths(lines: string[], lang: Lang): { depths: number[]; open: boo
 				continue;
 			}
 			if (quote) {
-				if (ch === "\\") {
+				// (In a Go raw string a backslash is just a backslash.)
+				if (ch === "\\" && !(quote === "`" && lang === "go")) {
 					i++;
 				} else if (quote === "`" && lang === "js" && ch === "$" && next === "{") {
 					expressions.push(0);
@@ -216,6 +217,9 @@ function braceDepths(lines: string[], lang: Lang): { depths: number[]; open: boo
 		depths.push(depth);
 		open.push(quote === "`");
 	}
+	// Still inside one at the end of the file: a backtick was misread somewhere (a regular expression taken
+	// for a division, say), so which lines are text can't be told. None are, as before.
+	if (quote === "`" || expressions.length) open.fill(false);
 	return { depths, open };
 }
 
@@ -248,7 +252,7 @@ function extractBraces(lines: string[], lang: Lang, decls: Decl[], member: RegEx
 	const { depths, open } = braceDepths(lines, lang);
 	const out: SymbolSpan[] = [];
 	const depthBefore = (i: number) => (i === 0 ? 0 : depths[i - 1]);
-	// A line that starts inside a template literal is text: no declaration starts there.
+	// A line that starts inside a template literal is text: no declaration starts there, nor does one end.
 	const inString = (i: number) => i > 0 && open[i - 1];
 	const isDecl = (line: string) => decls.some(({ re }) => re.test(line));
 
@@ -261,18 +265,18 @@ function extractBraces(lines: string[], lang: Lang, decls: Decl[], member: RegEx
 			if (!opened) {
 				// A block-less declaration (`const x = 1;`) ends at its statement terminator, a blank
 				// line, or the next declaration (semicolon-free style), none of them inside a template literal.
+				if (j > i && !inString(j) && isDecl(lines[j])) return j - 1;
 				if (open[j]) continue;
 				if (/;\s*$/.test(lines[j])) return j;
 				if (inString(j)) continue;
 				if (j > i && lines[j].trim() === "") return j - 1;
-				if (j > i && isDecl(lines[j])) return j - 1;
 			}
 		}
 		return lines.length - 1;
 	};
 
 	for (let i = 0; i < lines.length; i++) {
-		if (depthBefore(i) !== 0 || inString(i)) continue;
+		if (depthBefore(i) !== 0) continue;
 		for (const decl of decls) {
 			const m = lines[i].match(decl.re);
 			if (!m) continue;
@@ -281,7 +285,7 @@ function extractBraces(lines: string[], lang: Lang, decls: Decl[], member: RegEx
 			out.push({ name, kind: decl.kind, start: decoratedFrom(lines, i, lang) + 1, end: end + 1 });
 			if (decl.container && member) {
 				for (let j = i + 1; j < end; j++) {
-					if (depthBefore(j) !== 1 || inString(j)) continue;
+					if (depthBefore(j) !== 1) continue;
 					const mm = lines[j].match(member);
 					const memberName = mm && (mm[1] ?? mm[2] ?? mm[3]);
 					// Keyword-introduced members (Rust `fn new`, Kotlin `fun when`) can't be statements.
@@ -305,21 +309,26 @@ function inTripleQuotes(lines: string[]): boolean[] {
 	let open: string | null = null;
 	for (const line of lines) {
 		inside.push(open !== null);
-		for (let i = 0; ; ) {
+		for (let i = 0; i < line.length; i++) {
 			if (open) {
-				const close = line.indexOf(open, i);
-				if (close === -1) break;
-				open = null;
-				i = close + 3;
-			} else {
-				// The next triple quote of either kind, outside a comment, opens one.
-				const hash = line.indexOf("#", i);
-				const quotes = ['"""', "'''"].map((q) => [line.indexOf(q, i), q] as const).filter(([at]) => at !== -1 && (hash === -1 || at < hash));
-				if (!quotes.length) break;
-				const [at, q] = quotes.sort((a, b) => a[0] - b[0])[0];
-				open = q;
-				i = at + 3;
+				if (line[i] === "\\") i++;
+				else if (line.startsWith(open, i)) {
+					open = null;
+					i += 2;
+				}
+				continue;
 			}
+			const ch = line[i];
+			// A comment runs to the end of the line.
+			if (ch === "#") break;
+			if (ch !== '"' && ch !== "'") continue;
+			if (line.startsWith(ch.repeat(3), i)) {
+				open = ch.repeat(3);
+				i += 2;
+				continue;
+			}
+			// A one-line string ('"""' in it opens nothing): on to its closing quote.
+			for (i++; i < line.length && line[i] !== ch; i++) if (line[i] === "\\") i++;
 		}
 	}
 	return inside;
@@ -338,7 +347,11 @@ function extractIndented(lines: string[], lang: "py" | "ruby"): SymbolSpan[] {
 				last = j;
 				continue;
 			}
-			if (lang === "py" && /^\s*#/.test(lines[j])) continue;
+			if (lang === "py" && /^\s*#/.test(lines[j])) {
+				// A comment says nothing about where a block ends, but one indented into it is its own.
+				if (indentOf(lines[j]) > indent) last = j;
+				continue;
+			}
 			if (indentOf(lines[j]) <= indent) {
 				// Ruby blocks close with an `end` at the declaration's indentation.
 				if (lang === "ruby" && indentOf(lines[j]) === indent && /^\s*end\b/.test(lines[j])) last = j;
