@@ -5,12 +5,13 @@
 // flight's workspace fork, three-way merges it onto the current trunk tip and commits it as one
 // squashed, attributed commit with the flight's contrail attached as a git note. The train's
 // merged tree is tested in a Dynamic Worker (a failing train is replayed landing by landing), and
-// the whole train is pushed to trunk in a single push.
+// the whole train is pushed to trunk in a single push. When the project's policy asks for it, a model from
+// another family than the agent's reviews each landing's change against its intent while the train merges.
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../env";
 import { extractSymbols } from "../git/symbols";
 import { airspaceViolations, type HeldByOther, policyTargetsTouched } from "../tower/clearance";
-import type { ConflictReport, FileChange, TestReport, TrunkFile } from "../shared/types";
+import type { AiReview, ConflictReport, FileChange, TestReport, TrunkFile } from "../shared/types";
 import { errorMessage, flightTrailer, landingTrailer, retryTransient } from "../util";
 import {
 	addNote,
@@ -35,6 +36,7 @@ import {
 	setMain,
 	writeFlatTree,
 } from "./gitops";
+import { type ReviewInput, reviewChange } from "./review";
 import { describeChanges, mergeTrees } from "./treemerge";
 import { CONFIG_FILE, type TestConfig, testConfig, testFiles, verifyTree } from "./verify";
 
@@ -48,6 +50,8 @@ export interface LandingJob {
 	note: Record<string, unknown>;
 	/** Targets the project's policy reserves for a human; touching one parks the landing for review. */
 	review?: string[];
+	/** The Workers AI model that reviews the change against its intent; a flag parks the landing for a person. */
+	reviewer?: string;
 	/** Code other flights are cleared to change right now. Landing a change to it is an airspace violation. */
 	heldByOthers?: HeldByOther[];
 	/** The workspace commit a human approved. Commits pushed after it need their own review. */
@@ -63,6 +67,8 @@ export interface LandingOutcome {
 	status: "landed" | "conflict" | "failed" | "review";
 	/** For "review": the protected targets the change touches. */
 	reviewRequired?: string[];
+	/** The AI reviewer's verdict, when the job asked for one. */
+	aiReview?: AiReview;
 	/** For "failed": code this landing changed that other flights are cleared to change. */
 	violations?: HeldByOther[];
 	forkHead: string | null;
@@ -89,6 +95,8 @@ interface TrainOptions {
 	oneByOne: boolean;
 	/** Fork heads already fetched in this train, by landing id. */
 	heads: Map<string, string>;
+	/** AI reviews under way or done, by landing id and fork head: a replayed train doesn't ask twice. */
+	reviews: Map<string, Promise<AiReview>>;
 	/**
 	 * A crossing's phase one: called with the outcomes once the train is merged and green, before
 	 * anything is pushed. Resolves true to push (phase two), false to leave trunk as it was.
@@ -196,7 +204,7 @@ export class Runway extends DurableObject<Env> {
 	}
 
 	async land(trunk: string, jobs: LandingJob[]): Promise<BatchResult> {
-		return this.exclusive(() => this.landTrain(trunk, jobs, { retry: 0, oneByOne: false, heads: new Map() }));
+		return this.exclusive(() => this.landTrain(trunk, jobs, { retry: 0, oneByOne: false, heads: new Map(), reviews: new Map() }));
 	}
 
 	/**
@@ -213,6 +221,7 @@ export class Runway extends DurableObject<Env> {
 					retry: 0,
 					oneByOne: false,
 					heads: new Map(),
+					reviews: new Map(),
 					hold: (outcomes) => {
 						// A train replayed after a failed push asks again: the decision stands.
 						if (decision) return decision;
@@ -283,6 +292,8 @@ export class Runway extends DurableObject<Env> {
 			const flight = flightTrailer(c.commit.message);
 			if (flight && !byFlight.has(flight)) byFlight.set(flight, { oid: c.oid, parent: c.commit.parent[0], at: c.commit.committer.timestamp * 1000 });
 		}
+		// Every review starts before the first merge, so a train waits for about one model call, not one per landing.
+		for (const job of jobs) if (job.reviewer && !onTrunk.has(job.landingId)) await this.startReview(r, start, job, opts);
 
 		for (const job of jobs) {
 			const t0 = Date.now();
@@ -370,7 +381,11 @@ export class Runway extends DurableObject<Env> {
 				}
 
 				const required = job.approvedHead === head ? [] : reviewRequired(job.review ?? [], merged.changes);
-				if (required.length || opts.oneByOne) {
+				// A person's approval of this commit covers it; otherwise the AI reviewer's flag parks it for one.
+				const review = job.approvedHead === head ? undefined : opts.reviews.get(`${job.landingId}@${head}`);
+				if (review) outcome.aiReview = await review;
+				const flagged = outcome.aiReview?.verdict === "flag";
+				if (required.length || flagged || opts.oneByOne) {
 					outcome.tests = await this.test(r, tree, merged.files, gate);
 					if (outcome.tests.failed > 0 && required.length && !opts.oneByOne && tip !== start) {
 						// Red on top of this train's other landings, which no test has passed yet: judge it on trunk as it was.
@@ -385,7 +400,7 @@ export class Runway extends DurableObject<Env> {
 						continue;
 					}
 				}
-				if (required.length) {
+				if (required.length || flagged) {
 					outcome.status = "review";
 					outcome.reviewRequired = required;
 					continue;
@@ -434,7 +449,8 @@ export class Runway extends DurableObject<Env> {
 
 		for (const { job, outcome, head } of boarded) {
 			const tests = outcome.tests && { passed: outcome.tests.passed, failed: outcome.tests.failed, train: outcome.tests.train };
-			await addNote(r, outcome.trunkAfter!, JSON.stringify({ ...job.note, forkHead: head, changes: outcome.changes, tests }, null, 2));
+			const aiReview = outcome.aiReview && { model: outcome.aiReview.model, verdict: outcome.aiReview.verdict, reason: outcome.aiReview.reason, concerns: outcome.aiReview.concerns };
+			await addNote(r, outcome.trunkAfter!, JSON.stringify({ ...job.note, forkHead: head, changes: outcome.changes, tests, ...(aiReview ? { aiReview } : {}) }, null, 2));
 		}
 
 		if (tip !== start) {
@@ -456,6 +472,40 @@ export class Runway extends DurableObject<Env> {
 		const moved = tip !== start || opts.retry > 0 || outcomes.some((o) => o.status === "landed");
 		// From this clone `r`: a clone dropped above is still whole for reading what it pushed.
 		return { outcomes, head: tip, trunk: moved ? await this.summarize(tip, r) : null };
+	}
+
+	/**
+	 * Starts the AI review of `job`: its fork's own change since it left trunk, judged against its intent, plan and
+	 * summary. Only the model call runs in the background; the git reads stay in line with the train's.
+	 */
+	private async startReview(r: Repo, start: string, job: LandingJob, opts: TrainOptions): Promise<void> {
+		try {
+			let head = opts.heads.get(job.landingId);
+			if (!head) {
+				head = await retryTransient(async () => {
+					const fork = await this.forkReadToken(job.repo);
+					return fetchFork(r, job.repo, fork.remote, fork.token);
+				});
+				opts.heads.set(job.landingId, head);
+			}
+			const key = `${job.landingId}@${head}`;
+			if (job.approvedHead === head || opts.reviews.has(key)) return;
+			const base = await mergeBase(r, start, head);
+			if (!base || base === head) return;
+			const changes = await describeChanges(r, await listTree(r, base), await listTree(r, head));
+			if (changes.length === 0) return;
+			const note = job.note as { intent?: ReviewInput["intent"]; summary?: string; plan?: string | null; decisions?: string[] };
+			const input: ReviewInput = {
+				intent: note.intent ?? { seq: 0, title: job.message.split("\n")[0], body: "" },
+				summary: note.summary ?? "",
+				plan: note.plan ?? null,
+				decisions: note.decisions ?? [],
+				changes,
+			};
+			opts.reviews.set(key, reviewChange(this.env.AI, job.reviewer!, input));
+		} catch {
+			// The landing itself fetches again and reports what went wrong.
+		}
 	}
 
 	/** Runs the test suite of `tree` in a Dynamic Worker. */

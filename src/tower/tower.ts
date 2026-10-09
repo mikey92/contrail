@@ -9,10 +9,12 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../env";
 import type { BatchResult, LandingJob, LandingOutcome } from "../runway/runway";
 import { DEFAULT_EDGE_MODEL } from "../edge/agent";
+import { reviewerFor } from "../runway/review";
 import { CONFIG_FILE } from "../runway/verify";
 import type {
 	Agent,
 	AgentKind,
+	AiReview,
 	Clearance,
 	ConflictReport,
 	ContrailEntry,
@@ -108,6 +110,23 @@ export interface RadioMessage {
 interface Policy {
 	review: string[];
 	planning: boolean;
+	/** A model from another family than the agent's reads every landing against its intent; a flag goes to a person. */
+	aiReview: boolean;
+}
+
+/** Why a landing waits for a person: code the policy reserves, the AI reviewer's flag, or both. */
+function reviewNeeds(required: string[], ai?: AiReview | null): string {
+	const parts = [];
+	if (required.length) parts.push(`it touches ${required.join(", ")}, which policy reserves for a human`);
+	if (ai?.verdict === "flag") parts.push(`the AI reviewer (${shortModel(ai.model)}) flagged it: ${ai.reason}`);
+	return parts.join("; and ") || "it needs a human review";
+}
+
+const shortModel = (model: string) => model.split("/").pop() ?? model;
+
+function aiReviewLine(ai: AiReview): string {
+	const verdict = ai.verdict === "approve" ? "approved" : ai.verdict === "flag" ? "flagged" : "skipped";
+	return `AI review by ${shortModel(ai.model)}: ${verdict}. ${ai.reason}${ai.concerns.length ? ` (${ai.concerns.join("; ")})` : ""}`;
 }
 
 interface Dispatch {
@@ -292,6 +311,7 @@ export class Tower extends DurableObject<Env> {
 			error: (r.error as string) ?? null,
 			unioned: r.unioned as number,
 			review: json(r.review as string, null),
+			aiReview: json(r.ai_review as string, null),
 			createdAt: r.created_at as number,
 			finishedAt: (r.finished_at as number) ?? null,
 			crossing: (r.crossing as string) ?? null,
@@ -1258,7 +1278,7 @@ export class Tower extends DurableObject<Env> {
 			case "landed":
 				return `Landed on trunk as ${l.trunkAfter?.slice(0, 8)}. Your flight is complete — call take_off for the next intent.`;
 			case "review":
-				return `Merged and green, but it touches ${l.review?.required.join(", ")}, which policy reserves for a human. Hold position: you will get a radio message with the decision (or call landing_status).`;
+				return `Merged and green, but ${reviewNeeds(l.review?.required ?? [], l.aiReview)}. Hold position: you will get a radio message with the decision (or call landing_status).`;
 			case "rejected":
 				return `A reviewer requested changes${l.review?.comment ? `: ${l.review.comment}` : ""}. Fix it, push, and request_landing again.`;
 			case "conflict":
@@ -1283,11 +1303,14 @@ export class Tower extends DurableObject<Env> {
 			"SELECT kind, text FROM contrail WHERE flight_id = ? AND kind IN ('plan', 'decision', 'handoff') ORDER BY id",
 			flight.id,
 		);
+		const policy = this.meta<{ review?: string[]; aiReview?: boolean }>("policy", {});
 		return {
 			landingId: l.id,
 			flightId: flight.id,
 			repo: flight.repo,
-			review: this.meta<{ review?: string[] }>("policy", {}).review ?? [],
+			review: policy.review ?? [],
+			// A crossing can't wait for a person (its other sectors are held meanwhile), so its legs are left to the tests.
+			reviewer: policy.aiReview && !l.crossing ? reviewerFor({ kind: agent.kind, model: agent.model }) : undefined,
 			approvedHead: l.review?.decision === "approved" ? (l.forkHead ?? undefined) : undefined,
 			flight: { code: flight.code, since: flight.createdAt },
 			prefix: this.project().prefix,
@@ -1319,6 +1342,8 @@ export class Tower extends DurableObject<Env> {
 				plan: flight.plan,
 				decisions: contrail.filter((c) => c.kind !== "plan").map((c) => c.text),
 				...(l.crossing ? { crossing: l.crossing } : {}),
+				// Back after a person approved it: the reviewer's flag they overruled stays on record.
+				...(l.aiReview ? { aiReview: l.aiReview } : {}),
 			},
 		};
 	}
@@ -1407,7 +1432,7 @@ export class Tower extends DurableObject<Env> {
 	private finishLanding(l: Landing, patch: Partial<Landing>) {
 		const landing: Landing = { ...l, ...patch, finishedAt: now() };
 		this.sql.exec(
-			"UPDATE landings SET status = ?, fork_head = ?, trunk_before = ?, trunk_after = ?, changes = ?, conflicts = ?, tests = ?, error = ?, unioned = ?, review = ?, finished_at = ? WHERE id = ?",
+			"UPDATE landings SET status = ?, fork_head = ?, trunk_before = ?, trunk_after = ?, changes = ?, conflicts = ?, tests = ?, error = ?, unioned = ?, review = ?, ai_review = ?, finished_at = ? WHERE id = ?",
 			landing.status,
 			landing.forkHead,
 			landing.trunkBefore,
@@ -1418,6 +1443,7 @@ export class Tower extends DurableObject<Env> {
 			landing.error,
 			landing.unioned,
 			landing.review ? JSON.stringify(landing.review) : null,
+			landing.aiReview ? JSON.stringify(landing.aiReview) : null,
 			landing.finishedAt,
 			landing.id,
 		);
@@ -1443,7 +1469,9 @@ export class Tower extends DurableObject<Env> {
 				changes: o.changes,
 				tests: o.tests,
 				unioned: o.unioned,
+				aiReview: o.aiReview ?? l.aiReview ?? null,
 			});
+			if (o.aiReview) this.addContrail(flight.id, null, "note", aiReviewLine(o.aiReview));
 			const t = now();
 			this.sql.exec("UPDATE flights SET status = 'landed', landed_at = ?, updated_at = ? WHERE id = ?", t, t, flight.id);
 			this.sql.exec("UPDATE intents SET status = 'landed', landed_commit = ? WHERE id = ?", o.trunkAfter, intent.id);
@@ -1486,11 +1514,14 @@ export class Tower extends DurableObject<Env> {
 			const review = { required: o.reviewRequired ?? [], decision: null, reviewer: null, comment: null, at: null };
 			// Back after an approval: the workspace moved on from the commit the human saw.
 			const moved = l.review?.decision === "approved" ? `The workspace moved after ${l.review.reviewer} approved it, so its new commits need a review too. ` : "";
-			this.finishLanding(l, { status: "review", forkHead: o.forkHead, trunkBefore: o.trunkBefore, changes: o.changes, tests: o.tests, unioned: o.unioned, review });
-			this.addContrail(flight.id, null, "note", `${moved}Green and ready, but policy requires a human review for ${review.required.join(", ")}. Waiting on the tower.`);
-			this.sendRadio(flight.id, "review", `${moved}Your landing passed merge and tests but touches ${review.required.join(", ")}, which needs a human review. Hold position; you will be told the decision.`);
-			this.emit("landing.review", `${flight.code} needs a human review: touches ${review.required.join(", ")}`, { flightId: flight.id, agentId: agent.id, data: { landingId: l.id } });
+			const needs = reviewNeeds(review.required, o.aiReview);
+			this.finishLanding(l, { status: "review", forkHead: o.forkHead, trunkBefore: o.trunkBefore, changes: o.changes, tests: o.tests, unioned: o.unioned, review, aiReview: o.aiReview ?? null });
+			if (o.aiReview) this.addContrail(flight.id, null, "note", aiReviewLine(o.aiReview));
+			this.addContrail(flight.id, null, "note", `${moved}Green and ready, but ${needs}. Waiting on the tower.`);
+			this.sendRadio(flight.id, "review", `${moved}Your landing passed merge and tests, but ${needs}. Hold position; you will be told the decision.`);
+			this.emit("landing.review", `${flight.code} needs a human review: ${needs}`, { flightId: flight.id, agentId: agent.id, data: { landingId: l.id, aiReview: o.aiReview ?? null } });
 			this.bump("reviews");
+			if (o.aiReview?.verdict === "flag") this.bump("aiFlags");
 			return;
 		}
 
@@ -1643,6 +1674,7 @@ export class Tower extends DurableObject<Env> {
 				summary: l.summary,
 				plan: notes.filter((n) => n.kind === "plan").map((n) => n.text).pop() ?? null,
 				decisions: notes.filter((n) => n.kind !== "plan").map((n) => n.text),
+				aiReview: l.aiReview ? { model: shortModel(l.aiReview.model), verdict: l.aiReview.verdict, reason: l.aiReview.reason } : null,
 			});
 			if (history.length >= 6) break;
 		}
@@ -1761,21 +1793,27 @@ export class Tower extends DurableObject<Env> {
 
 	// ───────────────────────── review by exception ─────────────────────────
 
-	/** review: targets whose landings wait for a human. planning: dispatch around code in the air (default on). */
-	async setPolicy(policy: { review?: string[]; planning?: boolean }): Promise<Policy> {
+	/**
+	 * review: targets whose landings wait for a human. planning: dispatch around code in the air (default on).
+	 * aiReview: a model from another family than the agent's reads every landing against its intent (default off).
+	 */
+	async setPolicy(policy: { review?: string[]; planning?: boolean; aiReview?: boolean }): Promise<Policy> {
 		const current = await this.policy();
-		const review = policy.review === undefined ? current.review : policy.review.map(normalizeTarget).filter(Boolean).slice(0, 100);
-		const planning = policy.planning ?? current.planning;
-		this.setMeta("policy", { review, planning });
-		if (policy.review !== undefined)
+		const review = Array.isArray(policy.review) ? policy.review.map((t) => normalizeTarget(String(t))).filter(Boolean).slice(0, 100) : current.review;
+		const planning = typeof policy.planning === "boolean" ? policy.planning : current.planning;
+		const aiReview = typeof policy.aiReview === "boolean" ? policy.aiReview : current.aiReview;
+		this.setMeta("policy", { review, planning, aiReview });
+		if (Array.isArray(policy.review))
 			this.emit("policy.updated", review.length ? `Human review required for: ${review.join(", ")}` : "No human review required: every green landing lands");
 		if (planning !== current.planning) this.emit("policy.updated", planning ? "Flight planning on" : "Flight planning off: intents fly in priority order");
-		return { review, planning };
+		if (aiReview !== current.aiReview)
+			this.emit("policy.updated", aiReview ? "AI review on: a model from another family reads every landing against its intent, and a flag goes to a person" : "AI review off: the tests and the review policy decide");
+		return { review, planning, aiReview };
 	}
 
 	async policy(): Promise<Policy> {
-		const p = this.meta<{ review?: string[]; planning?: boolean }>("policy", {});
-		return { review: p.review ?? [], planning: p.planning !== false };
+		const p = this.meta<{ review?: string[]; planning?: boolean; aiReview?: boolean }>("policy", {});
+		return { review: p.review ?? [], planning: p.planning !== false, aiReview: p.aiReview === true };
 	}
 
 	async reviewLanding(input: { landingId: string; decision: "approve" | "reject"; comment?: string; reviewer?: string }): Promise<Landing> {

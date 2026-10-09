@@ -43,4 +43,6 @@ export const SCHEMA = [
 	`ALTER TABLE landings ADD COLUMN crossing TEXT`,
 	// When an operator revoked the agent's key.
 	`ALTER TABLE agents ADD COLUMN revoked_at INTEGER`,
+	// The AI reviewer's verdict on the landing (JSON), when the project's policy asks for one.
+	`ALTER TABLE landings ADD COLUMN ai_review TEXT`,
 ];

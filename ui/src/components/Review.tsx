@@ -1,7 +1,25 @@
 import { useState } from "preact/hooks";
-import type { Agent, FileChange, Flight, Intent, Landing } from "../../../src/shared/types";
+import type { Agent, AiReview, FileChange, Flight, Intent, Landing } from "../../../src/shared/types";
 import { pressable } from "../a11y";
 import { KindBadge } from "./Airspace";
+
+/** The AI reviewer's verdict on a landing: who reviewed it, what it decided and why. */
+export function AiReviewNote({ review }: { review: AiReview }) {
+	const verdict = review.verdict === "approve" ? "approved it" : review.verdict === "flag" ? "flagged it" : "gave no verdict";
+	return (
+		<div class={`ainote ${review.verdict}`}>
+			<span class="lbl">AI review</span>
+			<span class="mono">{review.model.split("/").pop()}</span> {verdict}: {review.reason}
+			{review.concerns.length > 0 && (
+				<ul>
+					{review.concerns.map((c, i) => (
+						<li key={i}>{c}</li>
+					))}
+				</ul>
+			)}
+		</div>
+	);
+}
 
 export function Diff({ change }: { change: FileChange }) {
 	if (!change.hunks?.length) return null;
@@ -136,14 +154,17 @@ function ReviewCard({
 				<b>{agent?.callsign}</b> <span class="mono muted">{flight?.code}</span>
 			</div>
 			<div class="rcard-intent">{intent ? `INT-${intent.seq} ${intent.title}` : ""}</div>
-			<div class="rcard-why">
-				Policy requires a human for{" "}
-				{landing.review?.required.map((t) => (
-					<span key={t} class="chip holding">
-						{t}
-					</span>
-				))}
-			</div>
+			{(landing.review?.required.length ?? 0) > 0 && (
+				<div class="rcard-why">
+					Policy requires a human for{" "}
+					{landing.review?.required.map((t) => (
+						<span key={t} class="chip holding">
+							{t}
+						</span>
+					))}
+				</div>
+			)}
+			{landing.aiReview?.verdict === "flag" && <AiReviewNote review={landing.aiReview} />}
 			<div class="summary">{landing.summary}</div>
 			{landing.tests && (
 				<div class="tests good">

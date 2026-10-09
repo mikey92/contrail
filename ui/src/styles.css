@@ -2162,6 +2162,30 @@ details.diffs summary {
 	background: var(--bad-bg);
 	color: var(--bad-text);
 }
+.ainote {
+	margin: 8px 0;
+	font-size: 0.75rem;
+	line-height: 1.5;
+	padding: 7px 10px;
+	border-radius: var(--r-s);
+	background: var(--surface-2, var(--ok-bg));
+	color: var(--ink-2);
+}
+.ainote.approve {
+	background: var(--ok-bg);
+	color: var(--ok-text);
+}
+.ainote.flag {
+	background: var(--hold-bg);
+	color: var(--hold-text);
+}
+.ainote .lbl {
+	color: inherit;
+}
+.ainote ul {
+	margin: 4px 0 0;
+	padding-left: 18px;
+}
 
 /* agent kind badges */
 .kind {

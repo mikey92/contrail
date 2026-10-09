@@ -3,7 +3,7 @@ import type { Agent, Clearance, ContrailEntry, Flight, Intent, Landing } from ".
 import { relTime, statusLabel, tidy, toned } from "../store";
 import { Dialog } from "./Dialog";
 import { Icon, Spinner } from "./Icons";
-import { Diff } from "./Review";
+import { AiReviewNote, Diff } from "./Review";
 
 interface FlightDetail {
 	flight: Flight;
@@ -166,9 +166,12 @@ export function FlightDrawer({
 							</details>
 						</div>
 					)}
+					{l.aiReview && <AiReviewNote review={l.aiReview} />}
 					{l.review && (
 						<div class={`reviewnote ${l.review.decision ?? "pending"}`}>
-							{l.review.decision ? `${l.review.decision === "approved" ? "Approved" : "Changes requested"} by ${l.review.reviewer}${l.review.comment ? `: ${l.review.comment}` : ""}` : `Waiting for a human: ${l.review.required.join(", ")}`}
+							{l.review.decision
+								? `${l.review.decision === "approved" ? "Approved" : "Changes requested"} by ${l.review.reviewer}${l.review.comment ? `: ${l.review.comment}` : ""}`
+								: `Waiting for a human${l.review.required.length ? `: ${l.review.required.join(", ")}` : l.aiReview?.verdict === "flag" ? ": the AI reviewer flagged it" : ""}`}
 						</div>
 					)}
 					{l.conflicts.map((c) => (
@@ -230,7 +233,19 @@ export function FlightDrawer({
 
 interface WhyResult {
 	target: string;
-	history: { commit: string; when: string; flight: string; agent: string; model: string | null; intent: string; intentBody: string; summary: string; plan: string | null; decisions: string[] }[];
+	history: {
+		commit: string;
+		when: string;
+		flight: string;
+		agent: string;
+		model: string | null;
+		intent: string;
+		intentBody: string;
+		summary: string;
+		plan: string | null;
+		decisions: string[];
+		aiReview?: { model: string; verdict: string; reason: string } | null;
+	}[];
 	note?: string;
 }
 
@@ -289,6 +304,12 @@ export function WhyPanel({ slug, fixture, target, onClose }: { slug: string; fix
 							<span class="lbl">Decision</span> {d}
 						</div>
 					))}
+					{h.aiReview && (
+						<div class="why-dec">
+							<span class="lbl">AI review</span> {h.aiReview.verdict === "approve" ? "Approved" : h.aiReview.verdict === "flag" ? "Flagged" : "No verdict"} by{" "}
+							<span class="mono">{h.aiReview.model}</span>: {h.aiReview.reason}
+						</div>
+					)}
 				</div>
 			))}
 		</Dialog>

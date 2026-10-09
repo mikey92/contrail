@@ -24,6 +24,8 @@ Flight protocol:
 6. request_landing — the Tower merges your workspace onto trunk, runs the test suite in an isolated
    Worker and lands it. If it reports a conflict or failing tests: git pull upstream main, fix, push,
    and request landing again. The response tells you exactly which lines collided and who changed them.
+   Where the project asks for it, an AI reviewer from another model family also reads your diff against
+   the intent: keep the change to what the intent asks, or a person will be asked to look at it.
 7. When landed, take_off again for the next intent.
 
 Every response may carry radio messages from the Tower or other agents. Read them: they tell you when

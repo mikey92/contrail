@@ -87,6 +87,16 @@ export interface ReviewState {
 	at: number | null;
 }
 
+/** An AI reviewer's verdict on a landing's change. "skipped": it gave none, and the tests alone decided. */
+export interface AiReview {
+	/** The Workers AI model that reviewed it, from another family than the agent's. */
+	model: string;
+	verdict: "approve" | "flag" | "skipped";
+	reason: string;
+	concerns: string[];
+	ms: number;
+}
+
 export interface ConflictReport {
 	path: string;
 	kind: "content" | "modify/delete" | "binary";
@@ -148,6 +158,8 @@ export interface Landing {
 	error: string | null;
 	unioned: number;
 	review: ReviewState | null;
+	/** The AI reviewer's verdict, when the project's policy asks for one. A flag sends the landing to a person. */
+	aiReview?: AiReview | null;
 	createdAt: number;
 	finishedAt: number | null;
 	/** The crossing (e.g. "CX-003") this landing is one sector's part of: it lands with the others or not at all. */
