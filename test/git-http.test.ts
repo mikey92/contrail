@@ -115,8 +115,73 @@ describe("Workspace sync", () => {
 		const fork = join(root, `${name}-fork.git`);
 		git(root, "clone", "-q", "--bare", trunk.bare, fork);
 		git(fork, "config", "http.receivepack", "true");
-		return { trunk, forkUrl: `http://x:token@${base.slice("http://".length)}/${name}-fork.git`, work: join(root, `${name}-trunk-work`) };
+		return { trunk, fork, forkUrl: `http://x:token@${base.slice("http://".length)}/${name}-fork.git`, work: join(root, `${name}-trunk-work`) };
 	}
+	/** Trunk turns `docs` from a file into a directory (or back), in its own commit. */
+	function swapDocs(work: string, bare: string, toFile: boolean, also?: () => void) {
+		rmSync(join(work, "docs"), { recursive: true });
+		if (toFile) writeFileSync(join(work, "docs"), "see the wiki\n");
+		else {
+			mkdirSync(join(work, "docs"));
+			writeFileSync(join(work, "docs", "readme.md"), "# Docs\n");
+		}
+		also?.();
+		git(work, "add", "-A");
+		git(work, "commit", "-qm", "swap docs");
+		git(work, "push", "-q", bare, "main");
+	}
+
+	for (const toFile of [false, true]) {
+		it(`follows trunk turning a file into a directory or back (${toFile ? "to a file" : "to a directory"}), merged or fast-forward`, async () => {
+			const start = toFile ? { "a.js": "1\n", "docs/readme.md": "# Docs\n" } : { "a.js": "1\n", docs: "old docs\n" };
+			// Merged: the flight has a commit of its own.
+			const merged = trunkAndFork(`swap-merge-${toFile}`, start);
+			const ws = await Workspace.open(merged.forkUrl, merged.trunk.url, author);
+			await ws.write("b.js", "2\n");
+			await ws.commitAndPush("flight adds b.js");
+			swapDocs(merged.work, merged.trunk.bare, toFile);
+			expect((await ws.sync()).conflicts).toEqual([]);
+			expect(await ws.read(toFile ? "docs" : "docs/readme.md")).toBe(toFile ? "see the wiki\n" : "# Docs\n");
+			// Fast-forward: none yet; the flight's next commit then changes only what it changed.
+			const ff = trunkAndFork(`swap-ff-${toFile}`, start);
+			const ws2 = await Workspace.open(ff.forkUrl, ff.trunk.url, author);
+			swapDocs(ff.work, ff.trunk.bare, toFile);
+			expect((await ws2.sync()).fastForward).toBe(true);
+			await ws2.write("a.js", "2\n");
+			await ws2.commitAndPush("flight edits a.js");
+			expect(git(ff.fork, "diff", "--name-status", "main~1", "main")).toBe("M\ta.js");
+		}, 30_000);
+	}
+
+	it("puts trunk's directory beside a file the flight edited", async () => {
+		const { trunk, forkUrl, work } = trunkAndFork("edited-fd", { "a.js": "1\n", docs: "old docs\n" });
+		const ws = await Workspace.open(forkUrl, trunk.url, author);
+		await ws.write("docs", "old docs, edited\n");
+		await ws.commitAndPush("Edit docs");
+		swapDocs(work, trunk.bare, false, () => writeFileSync(join(work, "a.js"), "2\n"));
+		const sync = await ws.sync();
+		expect(sync.clashes).toEqual(["docs"]);
+		expect(await ws.read("docs")).toBe("old docs, edited\n");
+		expect(await ws.read("docs~trunk/readme.md")).toBe("# Docs\n");
+		expect(await ws.read("a.js")).toBe("2\n");
+	}, 30_000);
+
+	it("lets the agent keep trunk's file where its own directory was", async () => {
+		const { trunk, forkUrl, work } = trunkAndFork("keep-trunk", { "a.js": "1\n" });
+		const ws = await Workspace.open(forkUrl, trunk.url, author);
+		await ws.write("docs/readme.md", "# Docs\n");
+		await ws.commitAndPush("docs dir");
+		writeFileSync(join(work, "docs"), "see the wiki\n");
+		git(work, "add", "docs");
+		git(work, "commit", "-qm", "docs file");
+		git(work, "push", "-q", trunk.bare, "main");
+		expect((await ws.sync()).clashes).toEqual(["docs"]);
+		await ws.remove("docs/readme.md");
+		await ws.write("docs", await ws.read("docs~trunk"));
+		await ws.remove("docs~trunk");
+		expect(await ws.unsettledClashes()).toEqual([]);
+		expect(await ws.read("docs")).toBe("see the wiki\n");
+	}, 30_000);
 
 	it("puts trunk's side of a file/directory clash beside the workspace's, at path~trunk", async () => {
 		// The flight adds docs/readme.md; trunk meanwhile adds a file named docs.

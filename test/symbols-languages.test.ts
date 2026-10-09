@@ -196,6 +196,22 @@ void Cart::add(int x) {
 		].join("\n");
 		expect(names("util.cpp", cpp)).toEqual(["util.add", "util.Stack", "util.Stack.push", "util.detail.clamp", "a.b.f", "hidden", "c_api"]);
 		expect(symbolAt(extractSymbols("util.cpp", cpp), 10)).toBe("util.Stack.push");
+		expect(names("lib.cpp", "namespace lib::inline v2 {\n  int add(int a, int b) {\n    return a + b;\n  }\n}\n")).toEqual(["lib.v2.add"]);
+	});
+
+	it("a line that looks like a namespace but opens no block", () => {
+		// `extern "C"` for the one function after it (JNI), also behind #ifdef.
+		const jni = ['extern "C"', "JNIEXPORT jint JNICALL Java_x_start(JNIEnv *env, jclass k) {", "    return 1;", "}", "#ifdef __cplusplus", 'extern "C"', "#endif", "int add(int a, int b) {", "    return a + b;", "}"].join("\n");
+		expect(names("jni.cpp", jni)).toEqual(["Java_x_start", "add"]);
+		// In a template literal, and a Kotlin argument named namespace.
+		const gen = ["writeFileSync('env.d.ts', `", "declare module 'virtual:env' {", "  export const mode: string", "}", "`)", "export function other() {", "  return 1", "}"].join("\n");
+		expect(names("gen.ts", gen)).toContain("other");
+		expect(names("a.kt", "val cfg = Config(\n    namespace\n)\nfun build() {\n}\n")).toContain("build");
+		// What a namespace holds ends with it: top-level code after it is no part of its last declaration.
+		const dts = ["declare module '../..' {", "  interface ContextVariableMap extends JwtVariables<unknown> {}", "}", "//#endregion", "export { decode, jwt, sign };"].join("\n");
+		const spans = extractSymbols("env.d.ts", dts);
+		expect(spans.map((x) => x.name)).toEqual(["ContextVariableMap"]);
+		expect(symbolAt(spans, 5)).toBe("(top)");
 	});
 
 	it("Ruby classes and methods", () => {

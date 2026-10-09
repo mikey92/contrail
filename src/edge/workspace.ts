@@ -98,6 +98,8 @@ export class Workspace {
 	async remove(p: string) {
 		const { full } = this.path(p);
 		await this.repo.fs.promises.unlink(full);
+		// Git keeps no empty directories: one left empty goes too, so a file can take its name.
+		for (let d = full.slice(0, full.lastIndexOf("/")); d !== DIR && (await this.repo.fs.promises.readdir(d)).length === 0; d = d.slice(0, d.lastIndexOf("/"))) await this.repo.fs.promises.rmdir(d);
 	}
 
 	/** A file as it is on trunk, as of the last sync(). */
@@ -150,6 +152,13 @@ export class Workspace {
 		const base = await mergeBase(this.repo, head, upstream);
 		if (base === upstream) return { upstream, fastForward: false, changed: [], conflicts: [], clashes: [] };
 		if (base === head) {
+			// What trunk deleted goes first, so a file it turned into a directory (or back) leaves room for it.
+			const target = await this.flat(upstream);
+			for (const path of (await this.flat(head)).keys()) {
+				if (target.has(path)) continue;
+				await this.remove(path).catch(() => {});
+				await git.remove({ fs, dir, filepath: path, cache });
+			}
 			await git.writeRef({ fs, dir, ref: "refs/heads/main", value: upstream, force: true });
 			await git.checkout({ fs, dir, ref: "main", force: true, cache });
 			return { upstream, fastForward: true, changed: [], conflicts: [], clashes: [] };
@@ -158,11 +167,18 @@ export class Workspace {
 		const beforeTree = await this.flat(head);
 		// A path that is a file on one side and a directory on the other can't be both in a working tree: what
 		// trunk has there goes beside it, at <path>~trunk, for the agent to keep one of them.
-		const clashes = merged.conflicts.filter((c) => c.kind === "file/directory").map((c) => c.path);
+		// Read from the merged files: a modify/delete conflict on the same path hides treemerge's file/directory one.
+		const clashes = [...new Set([...merged.files.keys()].flatMap((p) => {
+			const dirs: string[] = [];
+			for (let i = p.indexOf("/"); i !== -1; i = p.indexOf("/", i + 1)) if (merged.files.has(p.slice(0, i))) dirs.push(p.slice(0, i));
+			return dirs;
+		}))];
 		const placed = (path: string) => {
 			const clash = clashes.find((c) => path === c || path.startsWith(`${c}/`));
 			return clash ? `${clash}${TRUNK_SIDE}${path.slice(clash.length)}` : path;
 		};
+		// Deletions first: a file trunk turned into a directory (or back) must go before what replaces it is written.
+		for (const path of beforeTree.keys()) if (!merged.files.has(path)) await this.remove(path).catch(() => {});
 		const changed: string[] = [];
 		for (const [path, item] of merged.files) {
 			if (beforeTree.get(path)?.oid === item.oid || item.mode === GITLINK) continue;
@@ -170,7 +186,6 @@ export class Workspace {
 			await this.write(placed(path), new TextDecoder().decode(blob));
 			changed.push(placed(path));
 		}
-		for (const path of beforeTree.keys()) if (!merged.files.has(path)) await this.remove(path).catch(() => {});
 		for (const [path, text] of merged.conflictTexts) await this.write(path, text);
 		this.pendingMerge = upstream;
 		if (merged.conflicts.length === 0) await this.commitAndPushMerge(merged.files, head, upstream);

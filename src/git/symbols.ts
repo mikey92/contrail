@@ -100,7 +100,7 @@ const C_NOT_NAMES = new Set(["decltype", "static_assert", "alignas", "alignof", 
 const NAMESPACES: Partial<Record<Lang, { re: RegExp; qualify: boolean }>> = {
 	js: { re: /^\s*(?:declare\s+global|(?:export\s+)?(?:declare\s+)?(?:namespace|module)\s+(?:[\w$.]+|"[^"]*"|'[^']*'))\s*\{\s*$/, qualify: false },
 	java: { re: /^\s*namespace(?:\s+[\w.\\]+)?\s*\{?\s*$/, qualify: false },
-	c: { re: /^\s*(?:(?:inline\s+)?namespace(?:\s+([\w:]+))?|extern\s+"C(?:\+\+)?")\s*\{?\s*$/, qualify: true },
+	c: { re: /^\s*(?:(?:inline\s+)?namespace(?:\s+((?:\w+::(?:inline\s+)?)*\w+))?|extern\s+"C(?:\+\+)?")\s*\{?\s*$/, qualify: true },
 };
 
 export function languageOf(path: string): Lang {
@@ -291,14 +291,24 @@ function extractBraces(lines: string[], lang: Lang, decls: Decl[], member: RegEx
 	};
 
 	const namespace = NAMESPACES[lang];
+	/**
+	 * Whether a namespace line at `i` opens its block: its `{` counts there (not in a string or comment), or opens
+	 * the next line of code. `extern "C"` alone may introduce just one function.
+	 */
+	const opens = (i: number, depth: number, to: number) => {
+		if (depths[i] > depth) return true;
+		let next = i + 1;
+		while (next < to && /^\s*(?:$|\/\/|#)/.test(lines[next])) next++;
+		return depths[i] === depth && /^\s*\{/.test(lines[next] ?? "");
+	};
 	/** The declarations from line `from` to `to` at brace depth `depth`, their names after `prefix`. */
 	const scan = (from: number, to: number, depth: number, prefix: string) => {
 		for (let i = from; i < to; i++) {
 			if (depthBefore(i) !== depth) continue;
 			const ns = namespace?.re.exec(lines[i]);
-			if (ns) {
+			if (ns && opens(i, depth, to)) {
 				const end = blockEnd(i, depth);
-				scan(i + 1, end, depth + 1, namespace!.qualify && ns[1] ? `${prefix}${ns[1].replace(/::/g, ".")}.` : prefix);
+				scan(i + 1, end, depth + 1, namespace!.qualify && ns[1] ? `${prefix}${ns[1].replace(/::(?:inline\s+)?/g, ".")}.` : prefix);
 				i = end;
 				continue;
 			}
@@ -310,7 +320,8 @@ function extractBraces(lines: string[], lang: Lang, decls: Decl[], member: RegEx
 				const m = text.match(decl.re);
 				if (!m) continue;
 				const name = prefix + (decl.name ? decl.name(m) : m[m.length - 1]);
-				const end = blockEnd(i, depth);
+				// Nothing declared in a namespace ends after its closing line.
+				const end = Math.min(blockEnd(i, depth), to);
 				out.push({ name, kind: decl.kind, start: decoratedFrom(lines, i, lang) + 1, end: end + 1 });
 				if (decl.container && member) {
 					for (let j = i + 1; j < end; j++) {
