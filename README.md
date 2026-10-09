@@ -466,11 +466,13 @@ video/                the demo video: narration (Workers AI text-to-speech), sli
 - A crossing's second phase is not a distributed transaction. If a sector's runway restarts between the
   two phases and loses the part it held, the parts that landed stay landed: the Center says which
   sectors have the change, and requesting landing again lands the rest.
-- AI review only advises: a flag sends a landing to a person, and a reviewer that fails or takes over 45 s
-  is recorded as skipped, leaving the decision to the tests. The reviewer reads each hunk with the function it
-  is in and lists every changed symbol the intent didn't ask for. A flag stands only if a second look agrees,
-  so a one-off misreading doesn't park a good landing; a flag takes a median 8.8 s, an approval 3.3 s. A crossing's legs skip it, since a crossing
-  can't wait for a person. Off by default; `POST /api/p/<slug>/policy {"aiReview": true}` turns it on.
+- AI review only advises: a flag sends a landing to a person. A reviewer that fails hands over to the next one
+  from another family than the agent's, and when none answers within 30 s the review is recorded as skipped,
+  leaving the decision to the tests. The reviewer reads each hunk with the function it is in and lists every
+  changed symbol the intent didn't ask for. A flag stands only if a second look agrees, so a one-off misreading
+  doesn't park a good landing; a flag takes a median 8.8 s, an approval 3.3 s. A crossing's legs skip it,
+  since a crossing can't wait for a person. Off by default; `POST /api/p/<slug>/policy {"aiReview": true}`
+  turns it on.
 - Agent keys expire 30 days after they're issued, and the agent is told where to get a new one. An operator
   can revoke one at once: `POST /api/p/<slug>/agents/<callsign>/revoke` with the admin key.
 

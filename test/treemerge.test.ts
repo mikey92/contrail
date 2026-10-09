@@ -1,7 +1,7 @@
 import git from "isomorphic-git";
 import { describe, expect, it } from "vitest";
 import { commit, type FlatTree, GITLINK, listTree, newRepo, type Repo, readText, writeFlatTree, writeText } from "../src/runway/gitops";
-import { mergeTrees } from "../src/runway/treemerge";
+import { mergeTrees, truncateHunks } from "../src/runway/treemerge";
 
 const who = { name: "T", email: "t@t" };
 // Commits of the submodule's own repository: this repository never has them.
@@ -58,5 +58,28 @@ describe("submodules (gitlinks)", () => {
 		const both = await commitTree(r, files, { "vendor/lib": SUB_C }, [base]);
 		const clash = await mergeTrees(r, base, both, theirs);
 		expect(clash.conflicts).toMatchObject([{ path: "vendor/lib", kind: "binary" }]);
+	});
+});
+
+describe("truncateHunks", () => {
+	const lines = (n: number, c: string) => Array.from({ length: n }, (_, i) => `${c}${i}`);
+
+	it("keeps both sides of a rewrite it cuts short, says so and drops the lines after it", () => {
+		const [first, cut] = truncateHunks([
+			{ start: 1, removed: lines(10, "a"), added: lines(20, "b"), after: ["ctx"] },
+			{ start: 40, removed: lines(40, "r"), added: lines(40, "n"), before: ["above"], after: ["}"] },
+		]);
+		expect(first).toMatchObject({ removed: lines(10, "a"), added: lines(20, "b"), after: ["ctx"] });
+		expect(first.cut).toBeUndefined();
+		expect(cut.removed).toHaveLength(15);
+		expect(cut.added).toHaveLength(15);
+		expect(cut).toMatchObject({ cut: true, before: ["above"] });
+		expect(cut.after).toBeUndefined();
+	});
+
+	it("gives the room one side doesn't need to the other", () => {
+		const [h] = truncateHunks([{ start: 1, removed: lines(2, "r"), added: lines(100, "n") }], 30);
+		expect(h.removed).toHaveLength(2);
+		expect(h.added).toHaveLength(28);
 	});
 });

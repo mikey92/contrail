@@ -13,24 +13,34 @@ export interface TreeMergeResult {
 	unioned: number;
 }
 
-/** Keeps diffs small enough to ship to the Radar: at most 60 changed lines per file. */
-function truncateHunks(hunks: NonNullable<FileChange["hunks"]>): FileChange["hunks"] {
+/**
+ * Keeps diffs small enough to ship to the Radar: at most `budget` changed lines per file. A hunk cut short keeps
+ * some of both sides, so a rewrite doesn't read as a deletion, says it was cut, and loses the lines after it.
+ */
+export function truncateHunks(hunks: NonNullable<FileChange["hunks"]>, budget = 60): NonNullable<FileChange["hunks"]> {
 	const out: NonNullable<FileChange["hunks"]> = [];
-	let budget = 60;
 	for (const h of hunks) {
 		if (budget <= 0) break;
-		const removed = h.removed.slice(0, budget);
-		budget -= removed.length;
-		const added = h.added.slice(0, Math.max(0, budget));
-		budget -= added.length;
-		out.push({ ...h, removed, added });
+		if (h.removed.length + h.added.length <= budget) {
+			out.push(h);
+			budget -= h.removed.length + h.added.length;
+			continue;
+		}
+		const removed = Math.min(h.removed.length, budget - Math.min(h.added.length, Math.ceil(budget / 2)));
+		const added = Math.min(h.added.length, budget - removed);
+		const { after: _after, ...rest } = h;
+		out.push({ ...rest, removed: h.removed.slice(0, removed), added: h.added.slice(0, added), cut: true });
+		budget = 0;
 	}
 	return out;
 }
 
 const same = (a?: TreeItem, b?: TreeItem) => (!a && !b) || (!!a && !!b && a.oid === b.oid && a.mode === b.mode);
 
-/** What `next` changed against `base`, file by file. With `context`, hunks also carry their symbols and that many lines around them. */
+/**
+ * What `next` changed against `base`, file by file. With `context` (for the AI reviewer), hunks also carry their
+ * symbols and that many lines around them, and a file keeps more of its lines.
+ */
 export async function describeChanges(repo: Repo, base: FlatTree, next: FlatTree, context = 0): Promise<FileChange[]> {
 	const changes: FileChange[] = [];
 	const paths = new Set([...base.keys(), ...next.keys()]);
@@ -43,19 +53,22 @@ export async function describeChanges(repo: Repo, base: FlatTree, next: FlatTree
 		const status: FileChange["status"] = !b ? "added" : !n ? "deleted" : "modified";
 		let additions = 0;
 		let deletions = 0;
-		let hunks: FileChange["hunks"] = [];
+		let hunks: NonNullable<FileChange["hunks"]> = [];
+		let symbols: string[] | null = null;
 		if (before !== null && after !== null) {
 			hunks = context ? contextChanges(path, before, after, context) : lineChanges(before, after);
 			for (const h of hunks) {
 				additions += h.added.length;
 				deletions += h.removed.length;
 			}
+			// The hunks already name the symbols they touch: the same set touchedSymbols would work out again.
+			if (context) symbols = [...new Set(hunks.flatMap((h) => h.symbols ?? []))].sort();
 		} else {
 			additions = after?.split("\n").length ?? 0;
 			deletions = before?.split("\n").length ?? 0;
 			if (after !== null) hunks = [{ start: 1, removed: [], added: after.split("\n") }];
 		}
-		changes.push({ path, status, symbols: touchedSymbols(path, before, after), additions, deletions, hunks: truncateHunks(hunks) });
+		changes.push({ path, status, symbols: symbols ?? touchedSymbols(path, before, after), additions, deletions, hunks: truncateHunks(hunks, context ? 200 : 60) });
 	}
 	return changes;
 }

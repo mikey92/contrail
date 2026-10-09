@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { diffText, EFFORT, modelFamily, parseVerdict, REVIEWERS, reviewChange, reviewerFor, reviewMessages, type ReviewInput } from "../src/runway/review";
+import { diffText, EFFORT, modelFamily, parseVerdict, REVIEWERS, reviewChange, reviewersFor, reviewMessages, type ReviewInput } from "../src/runway/review";
 import type { FileChange } from "../src/shared/types";
 
 const change = (path: string, added: string[], removed: string[] = [], symbols: string[] = []): FileChange => ({
@@ -33,13 +33,12 @@ describe("reviewer choice", () => {
 		for (const m of REVIEWERS) expect(modelFamily(m)).not.toBeNull();
 	});
 
-	it("never picks the author's own family", () => {
-		expect(reviewerFor({ kind: "edge", model: "@cf/zai-org/glm-5.3-flash" })).toBe(REVIEWERS[0]);
-		expect(reviewerFor({ kind: "claude-code", model: "sonnet" })).toBe(REVIEWERS[0]);
-		const deepseekAuthor = reviewerFor({ kind: "edge", model: "@cf/deepseek-ai/deepseek-v4-flash-0731" });
-		expect(modelFamily(deepseekAuthor)).not.toBe("deepseek");
-		const kimiAuthor = reviewerFor({ kind: "edge", model: "@cf/moonshotai/kimi-k2.7-code" });
-		expect(modelFamily(kimiAuthor)).not.toBe("moonshot");
+	it("never picks the author's own family, and keeps the rest in order to fall back on", () => {
+		expect(reviewersFor({ kind: "edge", model: "@cf/zai-org/glm-5.3-flash" })).toEqual(REVIEWERS);
+		expect(reviewersFor({ kind: "claude-code", model: "sonnet" })).toEqual(REVIEWERS);
+		expect(reviewersFor({ kind: "edge", model: "@cf/qwen/qwen3-30b-a3b-fp8" })).toEqual([REVIEWERS[1], REVIEWERS[2]]);
+		expect(reviewersFor({ kind: "edge", model: "@cf/deepseek-ai/deepseek-v4-flash-0731" })).toEqual([REVIEWERS[0], REVIEWERS[2]]);
+		expect(reviewersFor({ kind: "edge", model: "@cf/moonshotai/kimi-k2.7-code" })).toEqual([REVIEWERS[0], REVIEWERS[1]]);
 	});
 });
 
@@ -68,8 +67,30 @@ describe("the prompt", () => {
 	it("stays bounded however big the change", () => {
 		const big = Array.from({ length: 400 }, (_, i) => change(`src/f${i}.js`, Array.from({ length: 60 }, () => "x".repeat(80))));
 		const text = diffText(big);
-		expect(text.length).toBeLessThan(30_000);
+		expect(text.length).toBeLessThanOrEqual(24_000);
 		expect(text).toMatch(/\.\.\. \d+ more files not shown$/);
+	});
+
+	it("doesn't let a big file early on hide the files after it", () => {
+		const readme = change("README.md", Array.from({ length: 120 }, (_, i) => `${i} ${"word ".repeat(96)}`));
+		const pricing = change("src/pricing.js", ['  if (code === "FRIEND50") {', "    return Math.round(amount / 2);", "  }"], [], ["applyCoupon"]);
+		const text = diffText([readme, pricing]);
+		expect(text).toContain("--- src/pricing.js (modified; applyCoupon) +3 -0");
+		expect(text).toContain('+  if (code === "FRIEND50") {');
+		expect(text).toMatch(/--- README\.md[\s\S]*more changed lines not shown/);
+		expect(text.length).toBeLessThanOrEqual(24_000);
+	});
+
+	it("keeps the note on what it left out inside the prompt", () => {
+		const many = Array.from({ length: 600 }, (_, i) => change(`src/module-${i}.js`, ["export const x = 1;"]));
+		const user = reviewMessages(input(many))[1].content;
+		expect(user).toMatch(/\.\.\. \d+ more files not shown\n<\/diff>/);
+	});
+
+	it("says when a hunk was cut short instead of showing the lines after it", () => {
+		const text = diffText([{ ...change("test/a.test.js", ["  assert.ok(1);"], ["  assert.ok(0);"]), additions: 40, deletions: 40, hunks: [{ start: 3, removed: ["  assert.ok(0);"], added: ["  assert.ok(1);"], cut: true, after: ["}"] }] }]);
+		expect(text).toContain("+  assert.ok(1);\n... the rest of this hunk is not shown");
+		expect(text).not.toContain("\n }");
 	});
 
 	it("keeps agent text from closing the tags it sits in", () => {
@@ -103,6 +124,8 @@ describe("parseVerdict", () => {
 			concerns: ["Unrelated price change"],
 		});
 		expect(parseVerdict("Looks good to me")).toBeNull();
+		// Cut off while still thinking: a draft inside the thinking is not an answer.
+		expect(parseVerdict('<think>Draft: {"verdict": "approve", "reason": "ok"} — wait, applyCoupon changed too')).toBeNull();
 		expect(parseVerdict('{"verdict":"maybe"}')).toBeNull();
 	});
 
@@ -144,9 +167,29 @@ describe("reviewChange", () => {
 					: { choices: [{ finish_reason: "stop", message: { content: '{"verdict":"approve","reason":"Does what the intent asks."}' } }] };
 			},
 		};
-		const r = await reviewChange(ai, DEEPSEEK, input([]));
+		const r = await reviewChange(ai, DEEPSEEK, input([]), 30_000, "low");
 		expect(r.verdict).toBe("approve");
-		expect(efforts).toEqual([EFFORT, "none"]);
+		expect(efforts).toEqual(["low", "none"]);
+	});
+
+	it("doesn't ask the same thing twice when the reviewer wasn't thinking", async () => {
+		const efforts: unknown[] = [];
+		const ai = { run: async (_m: string, i: any) => (efforts.push(i.reasoning_effort), { choices: [{ finish_reason: "length", message: { content: "" } }] }) };
+		expect((await reviewChange(ai, DEEPSEEK, input([]))).verdict).toBe("skipped");
+		expect(efforts).toEqual([EFFORT]);
+	});
+
+	it("falls back to the next reviewer when one fails or gives no verdict, but not past the time limit", async () => {
+		const asked: string[] = [];
+		const ai = (answers: Record<string, () => Promise<unknown>>) => ({ run: (m: string) => (asked.push(m), answers[m]()) });
+		const failing = ai({ "@cf/a": () => Promise.reject(new Error("3040: capacity")), "@cf/b": async () => ({ response: '{"verdict":"approve","reason":"Fine."}' }) });
+		expect(await reviewChange(failing, ["@cf/a", "@cf/b"], input([]))).toMatchObject({ model: "@cf/b", verdict: "approve" });
+		const rambling = ai({ "@cf/a": async () => ({ response: "It looks fine to me." }), "@cf/b": async () => ({ response: '{"verdict":"approve"}' }) });
+		expect((await reviewChange(rambling, ["@cf/a", "@cf/b"], input([]))).model).toBe("@cf/b");
+		asked.length = 0;
+		const hanging = ai({ "@cf/a": () => new Promise(() => {}), "@cf/b": async () => ({ response: '{"verdict":"approve"}' }) });
+		expect(await reviewChange(hanging, ["@cf/a", "@cf/b"], input([]), 20)).toMatchObject({ model: "@cf/a", verdict: "skipped" });
+		expect(asked).toEqual(["@cf/a"]);
 	});
 
 	it("lets a flag stand only when a second look agrees, with a third to break a tie", async () => {
@@ -190,6 +233,21 @@ describe("reviewChange", () => {
 		expect((await reviewChange(ai, REVIEWERS[0], input([]))).verdict).toBe("approve");
 		expect(sent[0]).not.toContain("/no_think");
 		expect(sent[1]).toMatch(/\/no_think$/);
+	});
+
+	it("asks the second look at a flag the same way it got the flag", async () => {
+		const sent: string[] = [];
+		const ai = {
+			run: async (_m: string, i: any) => {
+				sent.push(i.messages.at(-1).content);
+				return sent.length === 1
+					? { choices: [{ finish_reason: "length", message: { content: "" } }] }
+					: { choices: [{ finish_reason: "stop", message: { content: '{"verdict":"flag","reason":"Unasked coupon."}' } }] };
+			},
+		};
+		expect((await reviewChange(ai, REVIEWERS[0], input([]))).verdict).toBe("flag");
+		expect(sent).toHaveLength(3);
+		expect(sent[2]).toMatch(/\/no_think$/);
 	});
 
 	it("passes a reasoning effort only to reviewers that take one", async () => {

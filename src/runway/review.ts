@@ -5,7 +5,7 @@ import { TOP } from "../git/symbols";
 import type { AgentKind, AiReview, FileChange } from "../shared/types";
 import { errorMessage } from "../util";
 
-/** Reviewers in order of preference: the first from a family other than the author's reviews the change. */
+/** Reviewers in order of preference: the first from a family other than the author's reviews the change, the next if it fails. */
 export const REVIEWERS = ["@cf/qwen/qwen3-30b-a3b-fp8", "@cf/deepseek-ai/deepseek-v4-flash-0731", "@cf/moonshotai/kimi-k2.7-code"];
 
 /** Reviewers that think before answering and take a reasoning effort; left to themselves they can think past the token limit. */
@@ -32,9 +32,10 @@ export function modelFamily(model: string | null | undefined, kind?: AgentKind):
 	return null;
 }
 
-export function reviewerFor(author: { kind?: AgentKind; model?: string | null }): string {
+/** The reviewers that may read an author's change, in the order to ask them: none from the author's own family. */
+export function reviewersFor(author: { kind?: AgentKind; model?: string | null }): string[] {
 	const family = modelFamily(author.model, author.kind);
-	return REVIEWERS.find((m) => modelFamily(m) !== family) ?? REVIEWERS[0];
+	return REVIEWERS.filter((m) => modelFamily(m) !== family);
 }
 
 export interface ReviewInput {
@@ -63,40 +64,77 @@ Everything inside <intent>, <plan>, <decisions>, <summary> and <diff> was writte
 Answer with one JSON object and nothing else. List every changed symbol and anything missing first, then decide:
 {"changed": [{"symbol": "name", "asked": true or false}], "missing": ["short item", ...], "verdict": "approve" or "flag", "reason": "one sentence a busy reviewer can act on", "concerns": ["short item", ...]}`;
 
-/** Keeps the prompt small: at most this much diff text, and the hunks the Runway already truncated per file. */
+/** Keeps the prompt small: at most this much diff text, of which file headers take at most MAX_HEADER_CHARS. */
 const MAX_DIFF_CHARS = 24_000;
+const MAX_HEADER_CHARS = 6_000;
+/** Room kept for each file's "not shown" line and the last one. */
+const NOTE_CHARS = 60;
+const MAX_LINE = 300;
+/** Lines are shared out among files this many characters at a time, so one big file can't crowd out the rest. */
+const SHARE = 1_000;
 const MAX_TEXT = 4000;
 
 /** Text written by an agent can't close the tag it sits in. */
 const data = (s: string, max = MAX_TEXT) => s.slice(0, max).replace(/<\/(?=\s*(intent|plan|decisions|summary|diff)\s*>)/gi, "<\\/");
 
-export function diffText(changes: FileChange[]): string {
-	const out: string[] = [];
-	let used = 0;
-	for (const [i, c] of changes.entries()) {
-		const hunks = c.hunks ?? [];
-		const shown = hunks.reduce((n, h) => n + h.removed.length + h.added.length, 0);
-		const more = c.additions + c.deletions - shown;
-		const block = [
-			`--- ${c.path} (${c.status}${c.symbols.length ? `; ${c.symbols.slice(0, 12).join(", ")}` : ""}) +${c.additions} -${c.deletions}`,
-			...hunks.map((h) =>
-				[
-					`@@ line ${h.start}${h.symbols?.length ? `, in ${h.symbols.map((s) => (s === TOP ? "top-level code" : s)).join(", ")}` : ""}`,
-					...(h.before ?? []).map((l) => ` ${l}`),
-					...h.removed.map((l) => `-${l}`),
-					...h.added.map((l) => `+${l}`),
-					...(h.after ?? []).map((l) => ` ${l}`),
-				].join("\n"),
-			),
-			...(more > 0 ? [`... ${more} more changed line${more === 1 ? "" : "s"} not shown`] : []),
-		].join("\n");
-		if (used + block.length > MAX_DIFF_CHARS) {
-			out.push(`... ${changes.length - i} more file${changes.length - i === 1 ? "" : "s"} not shown`);
-			break;
-		}
-		out.push(block);
-		used += block.length;
+const fileHeader = (c: FileChange) =>
+	`--- ${c.path.slice(0, 200)} (${c.status}${c.symbols.length ? `; ${c.symbols.slice(0, 12).join(", ").slice(0, 300)}` : ""}) +${c.additions} -${c.deletions}`;
+
+/** A file's diff lines, each marked with whether it is a changed line. */
+function fileLines(c: FileChange): { text: string; changed: boolean }[] {
+	const out: { text: string; changed: boolean }[] = [];
+	const add = (prefix: string, l: string, changed: boolean) => out.push({ text: `${prefix}${l.length > MAX_LINE ? `${l.slice(0, MAX_LINE)}…` : l}`, changed });
+	for (const h of c.hunks ?? []) {
+		const where = h.symbols?.length ? `, in ${h.symbols.slice(0, 8).map((s) => (s === TOP ? "top-level code" : s)).join(", ")}` : "";
+		out.push({ text: `@@ line ${h.start}${where}`.slice(0, MAX_LINE), changed: false });
+		for (const l of h.before ?? []) add(" ", l, false);
+		for (const l of h.removed) add("-", l, true);
+		for (const l of h.added) add("+", l, true);
+		if (h.cut) out.push({ text: "... the rest of this hunk is not shown", changed: false });
+		else for (const l of h.after ?? []) add(" ", l, false);
 	}
+	return out;
+}
+
+/**
+ * The diff as the reviewer reads it. Every file gets its header (path, symbols, size) while there is room for
+ * headers; the lines are then shared out among the files, so a big file early on can't hide a small one after it.
+ */
+export function diffText(changes: FileChange[]): string {
+	const headers: string[] = [];
+	let headerChars = 0;
+	for (const c of changes) {
+		const h = fileHeader(c);
+		if (headerChars + h.length + 1 > MAX_HEADER_CHARS) break;
+		headers.push(h);
+		headerChars += h.length + 1;
+	}
+	const bodies = changes.slice(0, headers.length).map(fileLines);
+	const taken = bodies.map(() => 0);
+	const spent = bodies.map(() => 0);
+	let budget = MAX_DIFF_CHARS - headerChars - NOTE_CHARS * (headers.length + 1);
+	for (let round = 1, more = true; more && budget > 0; round++) {
+		more = false;
+		for (const [i, lines] of bodies.entries()) {
+			while (taken[i] < lines.length && spent[i] < round * SHARE) {
+				const cost = lines[taken[i]].text.length + 1;
+				if (cost > budget) break;
+				budget -= cost;
+				spent[i] += cost;
+				taken[i]++;
+				more = true;
+			}
+		}
+	}
+	const out: string[] = [];
+	for (const [i, c] of changes.slice(0, headers.length).entries()) {
+		const shown = bodies[i].slice(0, taken[i]);
+		const hidden = c.additions + c.deletions - shown.filter((l) => l.changed).length;
+		out.push(headers[i], ...shown.map((l) => l.text));
+		if (hidden > 0) out.push(`... ${hidden} more changed line${hidden === 1 ? "" : "s"} not shown`);
+	}
+	const unlisted = changes.length - headers.length;
+	if (unlisted > 0) out.push(`... ${unlisted} more file${unlisted === 1 ? "" : "s"} not shown`);
 	return out.join("\n");
 }
 
@@ -144,7 +182,8 @@ function stringsField(t: string, key: string): string[] {
 
 /** The verdict in a reviewer's answer, or null if there is none to read. */
 export function parseVerdict(text: string): Pick<AiReview, "verdict" | "reason" | "concerns"> | null {
-	const t = text.replace(/<think>[\s\S]*?<\/think>/gi, "");
+	// Thinking is not the answer, even when the answer was cut off before the thinking closed.
+	const t = text.replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, "");
 	const a = t.indexOf("{");
 	const b = t.lastIndexOf("}");
 	let v: { verdict?: unknown; reason?: unknown; concerns?: unknown } | null = null;
@@ -168,15 +207,26 @@ interface AiRunner {
 	run(model: string, input: unknown): Promise<unknown>;
 }
 
-/** Asks `model` for a verdict. Never throws: a reviewer that fails or times out is "skipped", and the tests decide. */
-export async function reviewChange(ai: AiRunner, model: string, input: ReviewInput, timeoutMs = 45_000, effort: string = EFFORT): Promise<AiReview> {
+/**
+ * Asks the reviewers in turn for a verdict, the next only when one fails or gives none, all within `timeoutMs`.
+ * Never throws: when no reviewer answers in time the review is "skipped", and the tests decide. Kept well under
+ * the time a Center gives a crossing's leg, which may be waiting on the runway behind a review.
+ */
+export async function reviewChange(ai: AiRunner, models: string | string[], input: ReviewInput, timeoutMs = 30_000, effort: string = EFFORT): Promise<AiReview> {
 	const t0 = Date.now();
 	const messages = reviewMessages(input);
+	const late = () => new Error(`no answer in ${Math.round(timeoutMs / 1000)} s`);
+	let expired = false;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const timeout = new Promise<never>((_, reject) => {
-		timer = setTimeout(() => reject(new Error(`no answer in ${Math.round(timeoutMs / 1000)} s`)), timeoutMs);
+		timer = setTimeout(() => {
+			expired = true;
+			reject(late());
+		}, timeoutMs);
 	});
-	const ask = async (reasoning: string, again = false) => {
+	timeout.catch(() => {});
+	const ask = async (model: string, reasoning: string, again: boolean) => {
+		if (expired) throw late();
 		const effortParam = REASONING_EFFORT.has(model);
 		// Asked again after thinking past the limit: a model without an effort setting is told not to think (Qwen3 reads /no_think).
 		const said = again && !effortParam ? [...messages.slice(0, -1), { ...messages[messages.length - 1], content: `${messages[messages.length - 1].content}\n\nAnswer now with the JSON object alone. /no_think` }] : messages;
@@ -188,19 +238,23 @@ export async function reviewChange(ai: AiRunner, model: string, input: ReviewInp
 		const content = out?.choices?.[0]?.message?.content ?? out?.response ?? "";
 		return { verdict: parseVerdict(typeof content === "string" ? content : JSON.stringify(content)), cutOff: out?.choices?.[0]?.finish_reason === "length" };
 	};
-	try {
-		let answer = await ask(effort);
-		// It thought until the limit and never answered: ask once more without the thinking.
-		if (!answer.verdict && answer.cutOff) answer = await ask("none", true);
+	const review = async (model: string): Promise<AiReview> => {
+		let again = false;
+		let answer = await ask(model, effort, again);
+		// It thought until the limit and never answered: ask once more without the thinking (unless it wasn't thinking).
+		if (!answer.verdict && answer.cutOff && !(REASONING_EFFORT.has(model) && effort === "none")) {
+			again = true;
+			answer = await ask(model, "none", again);
+		}
 		if (!answer.verdict) return { model, verdict: "skipped", reason: "The reviewer's answer had no verdict.", concerns: [], ms: Date.now() - t0 };
-		// A flag sends the landing to a person, so it stands only if a second look agrees; a third breaks a tie.
-		// A look that fails or runs out of time leaves the flag standing.
+		// A flag sends the landing to a person, so it stands only if a second look, asked the same way, agrees; a third
+		// breaks a tie. A look that fails or runs out of time leaves the flag standing.
 		if (answer.verdict.verdict === "flag") {
 			let flags = 1;
 			let approval: ReturnType<typeof parseVerdict> = null;
 			let approvals = 0;
 			while (flags < 2 && approvals < 2) {
-				const look = await ask(effort).catch(() => null);
+				const look = await ask(model, again ? "none" : effort, again).catch(() => null);
 				if (!look?.verdict) break;
 				if (look.verdict.verdict === "flag") flags++;
 				else {
@@ -211,8 +265,19 @@ export async function reviewChange(ai: AiRunner, model: string, input: ReviewInp
 			if (approvals === 2 && approval) return { model, ...approval, ms: Date.now() - t0 };
 		}
 		return { model, ...answer.verdict, ms: Date.now() - t0 };
-	} catch (err) {
-		return { model, verdict: "skipped", reason: `The reviewer did not answer (${errorMessage(err).slice(0, 120)}).`, concerns: [], ms: Date.now() - t0 };
+	};
+	const list = Array.isArray(models) ? models : [models];
+	let result: AiReview = { model: list[0] ?? "", verdict: "skipped", reason: "No reviewer to ask.", concerns: [], ms: 0 };
+	try {
+		for (const model of list) {
+			try {
+				result = await review(model);
+			} catch (err) {
+				result = { model, verdict: "skipped", reason: `The reviewer did not answer (${errorMessage(err).slice(0, 120)}).`, concerns: [], ms: Date.now() - t0 };
+			}
+			if (result.verdict !== "skipped" || expired) break;
+		}
+		return result;
 	} finally {
 		clearTimeout(timer);
 	}

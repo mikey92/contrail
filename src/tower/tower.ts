@@ -9,7 +9,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../env";
 import type { BatchResult, LandingJob, LandingOutcome } from "../runway/runway";
 import { DEFAULT_EDGE_MODEL } from "../edge/agent";
-import { reviewerFor } from "../runway/review";
+import { reviewersFor } from "../runway/review";
 import { CONFIG_FILE } from "../runway/verify";
 import type {
 	Agent,
@@ -1311,7 +1311,7 @@ export class Tower extends DurableObject<Env> {
 			repo: flight.repo,
 			review: policy.review ?? [],
 			// A crossing can't wait for a person (its other sectors are held meanwhile), so its legs are left to the tests.
-			reviewer: policy.aiReview && !l.crossing ? reviewerFor({ kind: agent.kind, model: agent.model }) : undefined,
+			reviewers: policy.aiReview && !l.crossing ? reviewersFor({ kind: agent.kind, model: agent.model }) : undefined,
 			approvedHead: l.review?.decision === "approved" ? (l.forkHead ?? undefined) : undefined,
 			flight: { code: flight.code, since: flight.createdAt },
 			prefix: this.project().prefix,

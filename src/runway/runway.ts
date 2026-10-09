@@ -50,8 +50,8 @@ export interface LandingJob {
 	note: Record<string, unknown>;
 	/** Targets the project's policy reserves for a human; touching one parks the landing for review. */
 	review?: string[];
-	/** The Workers AI model that reviews the change against its intent; a flag parks the landing for a person. */
-	reviewer?: string;
+	/** Workers AI models that review the change against its intent, the next if one fails; a flag parks the landing for a person. */
+	reviewers?: string[];
 	/** Code other flights are cleared to change right now. Landing a change to it is an airspace violation. */
 	heldByOthers?: HeldByOther[];
 	/** The workspace commit a human approved. Commits pushed after it need their own review. */
@@ -293,7 +293,7 @@ export class Runway extends DurableObject<Env> {
 			if (flight && !byFlight.has(flight)) byFlight.set(flight, { oid: c.oid, parent: c.commit.parent[0], at: c.commit.committer.timestamp * 1000 });
 		}
 		// Every review starts before the first merge, so a train waits for about one model call, not one per landing.
-		for (const job of jobs) if (job.reviewer && !onTrunk.has(job.landingId)) await this.startReview(r, start, job, opts);
+		for (const job of jobs) if (job.reviewers?.length && !onTrunk.has(job.landingId)) await this.startReview(r, start, job, opts);
 
 		for (const job of jobs) {
 			const t0 = Date.now();
@@ -387,7 +387,7 @@ export class Runway extends DurableObject<Env> {
 				const flagged = outcome.aiReview?.verdict === "flag";
 				if (required.length || flagged || opts.oneByOne) {
 					outcome.tests = await this.test(r, tree, merged.files, gate);
-					if (outcome.tests.failed > 0 && required.length && !opts.oneByOne && tip !== start) {
+					if (outcome.tests.failed > 0 && (required.length || flagged) && !opts.oneByOne && tip !== start) {
 						// Red on top of this train's other landings, which no test has passed yet: judge it on trunk as it was.
 						const alone = await mergeTrees(r, (await mergeBase(r, start, head)) ?? base, start, head);
 						if (alone.conflicts.length === 0) {
@@ -502,7 +502,7 @@ export class Runway extends DurableObject<Env> {
 				decisions: note.decisions ?? [],
 				changes,
 			};
-			opts.reviews.set(key, reviewChange(this.env.AI, job.reviewer!, input));
+			opts.reviews.set(key, reviewChange(this.env.AI, job.reviewers!, input));
 		} catch {
 			// The landing itself fetches again and reports what went wrong.
 		}
