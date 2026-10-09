@@ -29,7 +29,7 @@ Workers and Workers AI.
 | --- | --- | --- |
 | **How do agents know what other agents are working on?** | Before take-off, the tower routes each intent around code already in the air. Before editing, an agent claims the exact functions it will change. The radar and the `radar` tool show every claim and hold, and a waiting agent is told who holds the code and why. | Flight planning cut the time agents spent holding a claim from 5.8 h to 18 min |
 | **What happens when they make conflicting changes?** | Most never happen: two agents can't hold the same function. The runway, trunk's only writer, merges each flight onto the latest trunk, checks the claims again and runs the project's tests on the merged tree in a Dynamic Worker. A text or semantic conflict goes back to its flight with its cause; in a train, only the culprit's does. | 3,000 of 3,000 landed with none lost or doubled, with up to 854 scripted agents in the air at once |
-| **How do you review everything they produce?** | The project's own tests review every landing on the merged tree, in milliseconds. People review only the code a policy reserves for them: those landings wait in a review inbox, merged and green, with their diff and contrail. | Ramda: up to 1,238 tests per landing, in at most 102 ms |
+| **How do you review everything they produce?** | The project's own tests review every landing on the merged tree, in milliseconds. With AI review on, a Workers AI model from another family than the agent's reads each change against its intent and flags off-intent edits, unkept claims and weakened tests. People review only what a policy reserves for them or the reviewer flags: those landings wait in a review inbox, merged and green, with the diff, the contrail and the reviewer's reason. | Ramda: up to 1,238 tests per landing, in at most 102 ms. The AI reviewer judged 26 of 26 sample changes right before we chose it, in a median 2.6 s |
 | **How do you keep track of not just what changed, but why?** | Each landing's intent, plan, decisions and test results ride with its commit as a git note (`refs/notes/contrail`). `why(path#symbol)` returns them for any function, and a flight that takes over an intent inherits them. | `git log --notes=contrail` on any clone of trunk |
 
 Real models flew the Ramda run (16 changes by 4 Claude Code, 2 Codex and 2 Workers AI edge agents), the Bookshop
@@ -45,6 +45,9 @@ The video was recorded on October 4. Since then, on the same live deployment:
   7.6 times one trunk ([Scaling](#scaling-to-100000-agents)).
 - **Crossings.** One change across sectors lands in all of them at once; a real Claude Code landed one in
   three services in 69 s ([Shop](https://contrail.mikey9220.workers.dev/c/shop)).
+- **AI review.** With a project's policy on, a model from another family than the agent's reads every landing
+  against its intent. A flag parks the landing in the review inbox with the reason; the tests stay the gate.
+  On the live deployment it approved an on-intent change and flagged one that slipped in an unasked 50% coupon.
 - **Apple's Human Interface Guidelines** on every page: system font, Dark Mode, contrast, 44-point targets,
   VoiceOver labels and reduced motion.
 - **Hardening.** Three bug reviews and two security reviews, every finding fixed: agent keys expire after
@@ -104,7 +107,7 @@ sequenceDiagram
 | Merge conflict | **Structured conflict** | Parallel inserts (two agents appending functions or tests) are merged automatically. Real overlaps come back as exact hunks with the function name, plus the flight, agent and intent that changed trunk. |
 | Commit message | **Contrail** | The intent, plan, decisions and test evidence of every landing, attached to its commit as a git note (`refs/notes/contrail`). Agents ask `why(path#symbol)` before they change code someone else wrote. A flight that takes over an aborted intent inherits the earlier flight's plan, decisions and notes. |
 | Notifications | **Radio & turbulence** | Every tool response carries messages. Agents hear when a hold is released, when someone waits on them, or when trunk changed code they hold. |
-| Required reviews | **Review by exception** | A policy reserves sensitive code for a human (`src/money.js#formatMoney`). Only landings that touch it wait in the review inbox; everything else lands once it is green. A change to the test gate's own configuration always waits for a human. |
+| Required reviews | **Review by exception** | A policy reserves sensitive code for a human (`src/money.js#formatMoney`). Only landings that touch it wait in the review inbox; everything else lands once it is green. A change to the test gate's own configuration always waits for a human. With `aiReview` on, a model from another family than the agent's also reads every landing against its intent, and a landing it flags waits in the same inbox with the reason. |
 
 ## What is new here
 
@@ -119,7 +122,7 @@ with the reasons attached.
 | Who picks the next task | People | People | People | The tower, routing work around code that is in the air |
 | What a waiting agent learns | That its branch conflicts | That its change failed | Who holds the file | Who holds the function, for which intent, and a radio call when it is free |
 | Context kept with the code | PR description | PR description | Nothing | Intent, plan, decisions and test results as a git note, read with `why()` and inherited by the next flight |
-| Human review | Every change | Every change | n/a | Only code a policy reserves for people |
+| Human review | Every change | Every change | n/a | Only code a policy reserves for people, and changes the AI reviewer flags |
 
 ## What an agent sees
 
@@ -161,7 +164,7 @@ landed ISBN-13 validation, and CODEX-7's new test used a made-up ISBN.
 | Sectors: the load test ×10 in one monorepo ([replay](https://contrail.mikey9220.workers.dev/c/monorepo?replay=/replays/monorepo.jsonl.gz&speed=4)) | 1,000 scripted agents, 100 per sector | 3,000/3,000 landed in 8:42, 5.7 landings per second, with no lost or doubled updates in any sector or in the composed monorepo trunk. See [Scaling](#scaling-to-100000-agents). |
 | Crossings: one change across three sectors ([Shop](https://contrail.mikey9220.workers.dev/c/shop)) | 1 Claude Code (Sonnet), told only "Use the contrail tools. Take off, follow the crossing protocol until your crossing has landed" | It renamed a field of the order JSON in the orders API, payments and the storefront, with their tests, and all three parts landed at once 69 s after it was started: three sector commits and one monorepo commit. See [Crossings](#scaling-to-100000-agents). |
 | End-to-end crossing test ([`scripts/crossing-smoke.mjs`](scripts/crossing-smoke.mjs)) | A scripted git agent and a sector's own flight | 27/27 checks. A crossing lands in two sectors as one monorepo commit with exactly its four files. Failing tests in one sector keep both sectors and the monorepo where they were until the fix lands. A crossing holds behind a sector's flight, is turned away while it lacks that clearance, hears over the radio when the code is free, and lands after resolving a real conflict. A change outside every sector is refused, and aborting closes every leg. |
-| End-to-end protocol test ([`scripts/smoke.mjs`](scripts/smoke.mjs)) | Scripted git agents | Sibling methods merged in parallel, a hold, a landing turned away for touching code another flight holds, a real conflict with its cause, a semantic conflict caught by tests, resolution, `why()`, review by exception, a train with a culprit, and a playground starting over |
+| End-to-end protocol test ([`scripts/smoke.mjs`](scripts/smoke.mjs)) | Scripted git agents | Sibling methods merged in parallel, a hold, a landing turned away for touching code another flight holds, a real conflict with its cause, a semantic conflict caught by tests, resolution, `why()`, review by exception, AI review (an on-intent change approved, an unasked coupon flagged, then landed without it), a train with a culprit, and a playground starting over |
 
 From request to trunk, a landing takes about 1 s on the Bookshop and 2–3 s on Ramda: fetch the fork,
 merge, run the suite, push. Workspace forks take about 2.5 s and run in parallel, one per flight. Under
@@ -366,7 +369,7 @@ The swarm launcher gives each agent its own key and keeps the admin key to itsel
 ```bash
 node scripts/create-project.mjs stress demo/stress "Stress"   # demo/stress/intents.json is the 300-intent run
 curl -X POST $CONTRAIL_URL/api/p/stress/policy -H "authorization: Bearer $CONTRAIL_ADMIN_KEY" \
-  -d '{"planning":false}'                                      # planning is on by default
+  -d '{"planning":false}'                                      # planning is on by default; {"aiReview":true} turns on AI review
 curl -X POST $CONTRAIL_URL/api/p/stress/edge/launch -H "authorization: Bearer $CONTRAIL_ADMIN_KEY" \
   -d '{"count":100,"mode":"scripted"}'                         # 100 load-test agents, no LLM
 node scripts/verify-stress.mjs stress                          # checks for lost or doubled updates
@@ -433,7 +436,7 @@ src/
   mcp.ts              stateless MCP server (Streamable HTTP)
   agent-api.ts        the agent tools (12 for a project, 10 for a Center's crossings), shared by MCP and REST
   tower/              Tower DO: flights, clearances, flight planning, landing queue, contrail, radar events, review policy
-  runway/             Runway DO: warm trunk clone, 3-way tree merge, clearance check, Dynamic Worker test gate, notes
+  runway/             Runway DO: warm trunk clone, 3-way tree merge, clearance check, Dynamic Worker test gate, AI review, notes
   center/             Center DO: composes sector trunks into one monorepo trunk; lands crossings across sectors at once
   edge/               edge agents: Durable Object + in-memory git workspace + Workers AI loop
   git/                symbol extraction, diff3 merge with insert/insert union, in-memory fs
@@ -461,6 +464,9 @@ video/                the demo video: narration (Workers AI text-to-speech), sli
 - A crossing's second phase is not a distributed transaction. If a sector's runway restarts between the
   two phases and loses the part it held, the parts that landed stay landed: the Center says which
   sectors have the change, and requesting landing again lands the rest.
+- AI review only advises: a flag sends a landing to a person, and a reviewer that fails or takes over 45 s
+  is recorded as skipped, leaving the decision to the tests. A crossing's legs skip it, since a crossing
+  can't wait for a person. Off by default; `POST /api/p/<slug>/policy {"aiReview": true}` turns it on.
 - Agent keys expire 30 days after they're issued, and the agent is told where to get a new one. An operator
   can revoke one at once: `POST /api/p/<slug>/agents/<callsign>/revoke` with the admin key.
 
