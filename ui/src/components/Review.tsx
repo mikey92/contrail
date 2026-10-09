@@ -8,7 +8,7 @@ export function AiReviewNote({ review }: { review: AiReview }) {
 	const verdict = review.verdict === "approve" ? "approved it" : review.verdict === "flag" ? "flagged it" : "gave no verdict";
 	return (
 		<div class={`ainote ${review.verdict}`}>
-			<span class="lbl">AI review</span>
+			<span class="lbl">AI review</span>{" "}
 			<span class="mono">{review.model.split("/").pop()}</span> {verdict}: {review.reason}
 			{review.concerns.length > 0 && (
 				<ul>
@@ -80,7 +80,7 @@ export function ReviewInbox({
 	return (
 		<div class="reviews">
 			<h2 class="section-title">Waiting for a human · {waiting.length}</h2>
-			{waiting.length === 0 && <div class="empty">Nothing needs a human right now. Green landings outside the review policy land on their own.</div>}
+			{waiting.length === 0 && <div class="empty">Nothing needs a human right now. Green landings land on their own unless they touch code the review policy reserves, change the test gate, or the AI reviewer flags them.</div>}
 			{waiting.map((l) => (
 				<ReviewCard key={l.id} slug={slug} recorded={recorded} landing={l} flight={flights[l.flightId]} agents={agents} intents={intents} onSelect={onSelect} />
 			))}
@@ -121,16 +121,11 @@ function ReviewCard({
 	const [err, setErr] = useState<string | null>(null);
 	// Asked for in the card (a password field), never in a browser prompt that shows it as you type.
 	const [key, setKey] = useState(adminKey);
-	const [knownKey] = useState(() => !!adminKey());
+	const [knownKey, setKnownKey] = useState(() => !!adminKey());
 	const agent = flight && agents[flight.agentId];
 	const intent = flight && intents[flight.intentId];
 	const decide = async (decision: "approve" | "reject") => {
 		if (!key) return setErr("Enter the admin key first.");
-		try {
-			localStorage.setItem("contrail-admin", key);
-		} catch {
-			// private mode
-		}
 		setErr(null);
 		setBusy(true);
 		try {
@@ -139,7 +134,23 @@ function ReviewCard({
 				headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
 				body: JSON.stringify({ decision, comment: comment || undefined, reviewer: "operator" }),
 			});
-			if (!res.ok) setErr((await res.json().catch(() => ({}))).error ?? `HTTP ${res.status}`);
+			// Kept only once the tower takes it, so a wrong key doesn't hide the field it was typed into.
+			if (res.status === 401) {
+				try {
+					localStorage.removeItem("contrail-admin");
+				} catch {
+					// private mode
+				}
+				setKnownKey(false);
+				setKey("");
+				setErr("That admin key wasn’t accepted.");
+			} else if (!res.ok) setErr((await res.json().catch(() => ({}))).error ?? `HTTP ${res.status}`);
+			else
+				try {
+					localStorage.setItem("contrail-admin", key);
+				} catch {
+					// private mode
+				}
 		} catch {
 			setErr("The tower didn’t answer. Check your connection and try again.");
 		} finally {
@@ -199,6 +210,7 @@ function ReviewCard({
 						<span class="sr-only">Comment for the agent</span>
 						<textarea class="rcomment" placeholder="Comment for the agent (optional)" value={comment} onInput={(e) => setComment((e.target as HTMLTextAreaElement).value)} />
 					</label>
+					{!knownKey && <p class="muted rwho">Only the project’s operator, with the admin key, can decide.</p>}
 					{!knownKey && (
 						<label class="rkey">
 							<span>Admin key</span>

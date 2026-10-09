@@ -1,7 +1,7 @@
 import git from "isomorphic-git";
 import { describe, expect, it } from "vitest";
 import { commit, type FlatTree, GITLINK, listTree, newRepo, type Repo, readText, writeFlatTree, writeText } from "../src/runway/gitops";
-import { mergeTrees, truncateHunks } from "../src/runway/treemerge";
+import { describeChanges, mergeTrees, truncateHunks } from "../src/runway/treemerge";
 
 const who = { name: "T", email: "t@t" };
 // Commits of the submodule's own repository: this repository never has them.
@@ -81,5 +81,31 @@ describe("truncateHunks", () => {
 		const [h] = truncateHunks([{ start: 1, removed: lines(2, "r"), added: lines(100, "n") }], 30);
 		expect(h.removed).toHaveLength(2);
 		expect(h.added).toHaveLength(28);
+	});
+});
+
+describe("describeChanges", () => {
+	it("says what it can't show as text, shows a deleted file's lines, a mode change and a submodule's commit", async () => {
+		const r = newRepo();
+		await git.init({ fs: r.fs, dir: r.dir, defaultBranch: "main" });
+		const blob = (bytes: Uint8Array) => git.writeBlob({ fs: r.fs, dir: r.dir, blob: bytes });
+		const before: FlatTree = new Map([
+			["run.sh", { oid: await writeText(r, "echo hi\n"), mode: "100644" }],
+			["old.js", { oid: await writeText(r, "export const old = 1;\n"), mode: "100644" }],
+			["vendor/lib", { oid: SUB_A, mode: GITLINK }],
+		]);
+		const after: FlatTree = new Map([
+			["run.sh", { oid: before.get("run.sh")!.oid, mode: "100755" }],
+			["logo.png", { oid: await blob(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 0xff])), mode: "100644" }],
+			["vendor/lib", { oid: SUB_B, mode: GITLINK }],
+		]);
+		const changes = await describeChanges(r, before, after, 2);
+		const by = Object.fromEntries(changes.map((c) => [c.path, c]));
+		expect(by["run.sh"]).toMatchObject({ status: "modified", mode: "100644 → 100755", additions: 0, deletions: 0 });
+		expect(by["logo.png"]).toMatchObject({ status: "added", binary: true });
+		expect(by["old.js"]).toMatchObject({ status: "deleted", deletions: 2 });
+		expect(by["old.js"].hunks?.[0].removed).toContain("export const old = 1;");
+		expect(by["vendor/lib"].hunks?.[0]).toMatchObject({ removed: [`Subproject commit ${SUB_A}`], added: [`Subproject commit ${SUB_B}`] });
+		expect(by["vendor/lib"].binary).toBeUndefined();
 	});
 });

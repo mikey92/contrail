@@ -171,7 +171,9 @@ export function FlightDrawer({
 						<div class={`reviewnote ${l.review.decision ?? "pending"}`}>
 							{l.review.decision
 								? `${l.review.decision === "approved" ? "Approved" : "Changes requested"} by ${l.review.reviewer}${l.review.comment ? `: ${l.review.comment}` : ""}`
-								: `Waiting for a human${l.review.required.length ? `: ${l.review.required.join(", ")}` : l.aiReview?.verdict === "flag" ? ": the AI reviewer flagged it" : ""}`}
+								: l.status === "review"
+									? `Waiting for a human${l.review.required.length ? `: ${l.review.required.join(", ")}` : l.aiReview?.verdict === "flag" ? ": the AI reviewer flagged it" : ""}`
+									: "Not reviewed: the flight ended first"}
 						</div>
 					)}
 					{l.conflicts.map((c) => (

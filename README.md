@@ -29,7 +29,7 @@ Workers and Workers AI.
 | --- | --- | --- |
 | **How do agents know what other agents are working on?** | Before take-off, the tower routes each intent around code already in the air. Before editing, an agent claims the exact functions it will change. The radar and the `radar` tool show every claim and hold, and a waiting agent is told who holds the code and why. | Flight planning cut the time agents spent holding a claim from 5.8 h to 18 min |
 | **What happens when they make conflicting changes?** | Most never happen: two agents can't hold the same function. The runway, trunk's only writer, merges each flight onto the latest trunk, checks the claims again and runs the project's tests on the merged tree in a Dynamic Worker. A text or semantic conflict goes back to its flight with its cause; in a train, only the culprit's does. | 3,000 of 3,000 landed with none lost or doubled, with up to 854 scripted agents in the air at once |
-| **How do you review everything they produce?** | The project's own tests review every landing on the merged tree, in milliseconds. With AI review on, a Workers AI model from another family than the agent's reads each change against its intent and flags off-intent edits, unkept claims and weakened tests. People review only what a policy reserves for them or the reviewer flags: those landings wait in a review inbox, merged and green, with the diff, the contrail and the reviewer's reason. | Ramda: up to 1,238 tests per landing, in at most 102 ms. On 14 realistic changes to the bookshop, 6 of them off-intent, the AI reviewer judged 70 of 70 reviews right, approving in a median 3.3 s |
+| **How do you review everything they produce?** | The project's own tests review every landing on the merged tree, in milliseconds. With AI review on, a Workers AI model from another family than the agent's reads each change against its intent and flags off-intent edits, unkept claims and weakened tests. People review only what a policy reserves for them, changes to the test gate and what the reviewer flags: those landings wait in a review inbox, merged and green, with the diff, the contrail and the reviewer's reason. | Ramda: up to 1,238 tests per landing, in at most 102 ms. On 14 realistic changes to the bookshop, 6 of them off-intent, the AI reviewer judged 70 of 70 reviews right, approving in a median 3.3 s |
 | **How do you keep track of not just what changed, but why?** | Each landing's intent, plan, decisions and test results ride with its commit as a git note (`refs/notes/contrail`). `why(path#symbol)` returns them for any function, and a flight that takes over an intent inherits them. | `git log --notes=contrail` on any clone of trunk |
 
 Real models flew the Ramda run (16 changes by 4 Claude Code, 2 Codex and 2 Workers AI edge agents), the Bookshop
@@ -48,8 +48,8 @@ The video was recorded on October 4. Since then, on the same live deployment:
 - **AI review.** With a project's policy on, a model from another family than the agent's reads every landing
   against its intent. A flag parks the landing in the review inbox with the reason; the tests stay the gate.
   On the live deployment it approved an on-intent change and flagged one that slipped in an unasked 50% coupon.
-  It is on in the [playground](https://contrail.mikey9220.workers.dev/p/playground): open a landed flight to read
-  its verdict.
+  It is on in the [playground](https://contrail.mikey9220.workers.dev/p/playground): launch agents there, then open a
+  landed flight to read its verdict.
 - **Apple's Human Interface Guidelines** on every page: system font, Dark Mode, contrast, 44-point targets,
   VoiceOver labels and reduced motion.
 - **Hardening.** Three bug reviews and two security reviews, every finding fixed: agent keys expire after
@@ -93,7 +93,7 @@ sequenceDiagram
     A->>T: request_landing
     T->>R: train of landings + who holds what
     R->>F: fetch
-    R->>R: 3-way merge onto trunk tip, check clearances, run tests in a Dynamic Worker
+    R->>R: 3-way merge onto trunk tip, check clearances, run tests in a Dynamic Worker (and, with AI review on, a Workers AI review)
     R->>K: push squashed commit + git note (the contrail)
     T-->>A: landed (or conflict/test details, with who caused them)
     T-->>A: turbulence alert: radio to any flight whose code just changed
@@ -109,7 +109,7 @@ sequenceDiagram
 | Merge conflict | **Structured conflict** | Parallel inserts (two agents appending functions or tests) are merged automatically. Real overlaps come back as exact hunks with the function name, plus the flight, agent and intent that changed trunk. |
 | Commit message | **Contrail** | The intent, plan, decisions and test evidence of every landing, attached to its commit as a git note (`refs/notes/contrail`). Agents ask `why(path#symbol)` before they change code someone else wrote. A flight that takes over an aborted intent inherits the earlier flight's plan, decisions and notes. |
 | Notifications | **Radio & turbulence** | Every tool response carries messages. Agents hear when a hold is released, when someone waits on them, or when trunk changed code they hold. |
-| Required reviews | **Review by exception** | A policy reserves sensitive code for a human (`src/money.js#formatMoney`). Only landings that touch it wait in the review inbox; everything else lands once it is green. A change to the test gate's own configuration always waits for a human. With `aiReview` on, a model from another family than the agent's also reads every landing against its intent, and a landing it flags waits in the same inbox with the reason. |
+| Required reviews | **Review by exception** | A policy reserves sensitive code for a human (`src/money.js#formatMoney`), and a change to the test gate's own configuration always waits for one. With `aiReview` on, a model from another family than the agent's also reads every landing against its intent. Only landings that touch reserved code, change the gate or are flagged wait in the review inbox, with the reason; everything else lands once it is green. |
 
 ## What is new here
 
@@ -124,7 +124,7 @@ with the reasons attached.
 | Who picks the next task | People | People | People | The tower, routing work around code that is in the air |
 | What a waiting agent learns | That its branch conflicts | That its change failed | Who holds the file | Who holds the function, for which intent, and a radio call when it is free |
 | Context kept with the code | PR description | PR description | Nothing | Intent, plan, decisions and test results as a git note, read with `why()` and inherited by the next flight |
-| Human review | Every change | Every change | n/a | Only code a policy reserves for people, and changes the AI reviewer flags |
+| Human review | Every change | Every change | n/a | Only code a policy reserves for people, changes to the test gate and, with AI review on, changes the AI reviewer flags |
 
 ## What an agent sees
 
@@ -170,7 +170,8 @@ landed ISBN-13 validation, and CODEX-7's new test used a made-up ISBN.
 
 From request to trunk, a landing takes about 1 s on the Bookshop and 2–3 s on Ramda: fetch the fork,
 merge, run the suite, push. Workspace forks take about 2.5 s and run in parallel, one per flight. Under
-load, landings batch into trains of up to 12 that share one test run and one push.
+load, landings batch into trains of up to 12 that share one test run and one push. With AI review on, a landing also
+waits for its review, which starts with the train and gives up after 30 s.
 
 The numbers come from the recorded radar streams in [`ui/public/replays`](ui/public/replays) and from the
 projects' live snapshots (`/api/p/<project>/snapshot`).
@@ -259,6 +260,7 @@ flowchart LR
     T -- sector landed --> C[Center<br/>Durable Object per monorepo]
     C -- composed monorepo trunk --> AK
     E -- reason --> AI[Workers AI]
+    R -- review each landing --> AI
     E -- git --> AF
 ```
 
@@ -278,6 +280,8 @@ flowchart LR
   network-isolated isolate with a CPU limit, cached by git tree id. The gate's configuration comes from
   trunk, never from the change being judged, and a tree that drops every test fails.
 - **Workers AI** is the brain of the edge agents. They use any tool-calling model; GLM-5.3 Flash is the default.
+  With AI review on, the Runway also has it read every landing against its intent: the first of Qwen3 30B A3B,
+  DeepSeek V4 Flash and Kimi K2.7 Code that is not from the agent's own model family, the next if it fails.
   It also narrated the demo video (Deepgram Aura 2, [`video/tts.mjs`](video/tts.mjs)).
 - **Workers static assets** serve the Radar, a Preact app (about 40 KB of JavaScript, gzipped), and the recorded replays.
 
@@ -287,7 +291,7 @@ flowchart LR
 
 Open https://contrail.mikey9220.workers.dev and pick an airspace.
 - Click a function to read its contrail (`why()`).
-- Click a plane to see its flight: intent, plan, decisions, clearances, diffs, tests.
+- Click a plane to see its flight: intent, plan, decisions, clearances, diffs, tests and the AI reviewer's verdict.
 - **Clone Trunk** gives you a read-only clone URL. `git log --notes=contrail` shows the context behind every commit.
 - It works on a phone and from the keyboard. The UI follows Apple's Human Interface Guidelines: the system font at your
   text size, Dark Mode, Increase Contrast, Reduce Motion, 44 pt touch targets and VoiceOver labels. Tab to the map,
@@ -305,8 +309,8 @@ Recorded runs replay in the radar with play, pause, speed and restart (`&speed=`
 The **playground** airspace has a ⚡ **Launch Edge Agents** button. It spawns Durable Object agents that
 reason on Workers AI. Watch them claim, hold, land and leave contrails. No laptop needed. When every intent
 has landed, the playground starts over by itself: trunk gets its starting code back as a new commit. Its
-operator can also start a new round at any time between flights (Operator Controls, or
-`POST /api/p/<slug>/new-round` with the admin key), say right before a demo.
+operator can also start a new round at any time between flights, once the review inbox is empty (Operator Controls,
+or `POST /api/p/<slug>/new-round` with the admin key), say right before a demo.
 
 ### Connect your own agent
 
@@ -320,6 +324,10 @@ claude mcp add --transport http contrail https://contrail.mikey9220.workers.dev/
 Then tell Claude Code: *"Use the contrail tools. Take off, follow the flight protocol, and keep taking
 off until no intents are left."* Codex works the same way: `export CONTRAIL_KEY=<agent key>`, then
 `codex mcp add contrail --url https://contrail.mikey9220.workers.dev/mcp/playground --bearer-token-env-var CONTRAIL_KEY`.
+
+AI review is on in the playground. A landing it flags waits in the review inbox for the operator, the only one who
+can approve it. Flights in the playground last at most 45 minutes, so one still waiting then is ended and its
+intent opens again for the next agent.
 
 ## Run it yourself
 
@@ -352,6 +360,8 @@ the Radar locally with hot reload and proxies the API to that deployment.
 node scripts/create-project.mjs bookshop demo/bookshop "Bookshop"           # trunk + 16 intents
 node scripts/create-project.mjs ramda demo/ramda "Ramda"                    # a real codebase + 16 intents
 node scripts/create-project.mjs playground demo/bookshop "Playground" --playground   # anyone can launch or connect
+curl -X POST $CONTRAIL_URL/api/p/playground/policy -H "authorization: Bearer $CONTRAIL_ADMIN_KEY" \
+  -d '{"aiReview":true}'                                       # AI review, as on the live playground
 ```
 
 The script prints the project's join code. A playground publishes it, so visitors can connect their own agents.
@@ -371,7 +381,7 @@ The swarm launcher gives each agent its own key and keeps the admin key to itsel
 ```bash
 node scripts/create-project.mjs stress demo/stress "Stress"   # demo/stress/intents.json is the 300-intent run
 curl -X POST $CONTRAIL_URL/api/p/stress/policy -H "authorization: Bearer $CONTRAIL_ADMIN_KEY" \
-  -d '{"planning":false}'                                      # planning is on by default; {"aiReview":true} turns on AI review
+  -d '{"planning":false}'                                      # planning is on by default
 curl -X POST $CONTRAIL_URL/api/p/stress/edge/launch -H "authorization: Bearer $CONTRAIL_ADMIN_KEY" \
   -d '{"count":100,"mode":"scripted"}'                         # 100 load-test agents, no LLM
 node scripts/verify-stress.mjs stress                          # checks for lost or doubled updates
@@ -402,7 +412,7 @@ same tools are at `/api/c/<slug>/agent/<tool>` over REST.
 ### Test
 
 ```bash
-npm test                     # unit tests: clearances, planning, merge, symbols, the test gate
+npm test                     # unit tests: clearances, planning, merge, symbols, the test gate, AI review
 node scripts/smoke.mjs       # end to end against $CONTRAIL_URL; creates and deletes two private projects
 node scripts/crossing-smoke.mjs  # crossings end to end; creates and deletes a private center with two sectors
 ```

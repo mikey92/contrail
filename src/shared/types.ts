@@ -144,6 +144,10 @@ export interface FileChange {
 	 * hunk's symbols and the unchanged lines around it.
 	 */
 	hunks?: { start: number; removed: string[]; added: string[]; cut?: boolean; symbols?: string[]; before?: string[]; after?: string[] }[];
+	/** Not text (or not readable as text), so its lines can't be shown. */
+	binary?: boolean;
+	/** A changed file mode, "100644 → 100755"; a symlink's is 120000. */
+	mode?: string;
 }
 
 export interface Landing {

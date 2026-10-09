@@ -95,7 +95,7 @@ export const TOOLS: ToolDef[] = [
 	{
 		name: "request_landing",
 		description:
-			"After committing and pushing to your workspace (git push origin HEAD:main), ask the Tower to land your work on trunk. It merges onto the current trunk, runs the test suite in an isolated Worker, and lands it as one attributed commit. Waits for the result. On conflict or failing tests you get the exact details: pull upstream, fix, push, and call again.",
+			"After committing and pushing to your workspace (git push origin HEAD:main), ask the Tower to land your work on trunk. It merges onto the current trunk, runs the test suite in an isolated Worker, and lands it as one attributed commit. Waits for the result. On conflict or failing tests you get the exact details: pull upstream, fix, push, and call again. If the project's review policy or its AI reviewer sends it to a person, it waits merged and green: hold position and check landing_status for the decision.",
 		inputSchema: { type: "object", properties: { summary: str("What changed and why, 1-5 sentences. Becomes the commit body.") }, required: ["summary"] },
 		run: (t, a, args) => t.requestLanding(a, { summary: String(args.summary ?? "") }),
 		summarize: (r) => {

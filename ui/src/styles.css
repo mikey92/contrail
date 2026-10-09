@@ -1841,6 +1841,7 @@ pre.theirs {
 	font-size: 0.8125rem;
 	line-height: 1.5;
 	white-space: pre-wrap;
+	overflow-wrap: anywhere;
 	margin-top: 1px;
 	color: var(--ink-2);
 }
@@ -2166,6 +2167,7 @@ details.diffs summary {
 	margin: 8px 0;
 	font-size: 0.75rem;
 	line-height: 1.5;
+	overflow-wrap: anywhere;
 	padding: 7px 10px;
 	border-radius: var(--r-s);
 	background: var(--surface-2, var(--ok-bg));
@@ -3161,6 +3163,10 @@ details.diffs summary {
 }
 .operator label.inline {
 	display: contents;
+}
+.rwho {
+	margin: 4px 0 0;
+	font-size: 0.75rem;
 }
 .rkey {
 	display: flex;

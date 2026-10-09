@@ -12,7 +12,7 @@ import type { Env } from "../env";
 import { extractSymbols } from "../git/symbols";
 import { airspaceViolations, type HeldByOther, policyTargetsTouched } from "../tower/clearance";
 import type { AiReview, ConflictReport, FileChange, TestReport, TrunkFile } from "../shared/types";
-import { errorMessage, flightTrailer, landingTrailer, retryTransient } from "../util";
+import { errorMessage, flightTrailer, landingTrailer, retryTransient, sha256 } from "../util";
 import {
 	addNote,
 	cloneMain,
@@ -30,6 +30,7 @@ import {
 	pushMain,
 	pushNotes,
 	readItemText,
+	readNote,
 	readText,
 	type Repo,
 	seed,
@@ -52,6 +53,8 @@ export interface LandingJob {
 	review?: string[];
 	/** Workers AI models that review the change against its intent, the next if one fails; a flag parks the landing for a person. */
 	reviewers?: string[];
+	/** What the reviewer reads besides the diff, as the Tower puts it: who wrote the intent, who made each decision. */
+	reviewInput?: Omit<ReviewInput, "changes">;
 	/** Code other flights are cleared to change right now. Landing a change to it is an airspace violation. */
 	heldByOthers?: HeldByOther[];
 	/** The workspace commit a human approved. Commits pushed after it need their own review. */
@@ -97,6 +100,10 @@ interface TrainOptions {
 	heads: Map<string, string>;
 	/** AI reviews under way or done, by landing id and fork head: a replayed train doesn't ask twice. */
 	reviews: Map<string, Promise<AiReview>>;
+	/** When this train stops waiting for its reviews (they all share one deadline, set when the first starts). */
+	reviewBy?: number;
+	/** Called off when the train is done: the reviews of landings it turned away before they were needed. */
+	calls?: AbortController;
 	/**
 	 * A crossing's phase one: called with the outcomes once the train is merged and green, before
 	 * anything is pushed. Resolves true to push (phase two), false to leave trunk as it was.
@@ -125,6 +132,14 @@ interface Gate {
 }
 
 const MAX_SUMMARY_FILE_BYTES = 256 * 1024;
+/** How long a train waits for its AI reviews, all told. Well under a Center's 45 s for a crossing's leg queued behind it. */
+const REVIEW_MS = 30_000;
+/** Reviews kept for the next train, so a flight that asks again with the same commit isn't reviewed again. */
+const REVIEW_CACHE = 200;
+/** Reviewers that keep failing (overloaded, out of quota) are left alone for a while: this many failures in the window. */
+const REVIEW_TROUBLE = 4;
+const REVIEW_TROUBLE_MS = 2 * 60_000;
+const REVIEW_PAUSE_MS = 3 * 60_000;
 const MAX_REPO_BYTES = 64 * 1024 * 1024;
 
 export class Runway extends DurableObject<Env> {
@@ -134,6 +149,9 @@ export class Runway extends DurableObject<Env> {
 	private token: { value: string; expires: number } | null = null;
 	private queue: Promise<unknown> = Promise.resolve();
 	private symbolCache = new Map<string, TrunkFile["symbols"]>();
+	private reviewed = new Map<string, Promise<AiReview>>();
+	private reviewTrouble: number[] = [];
+	private reviewsPausedUntil = 0;
 	private lineCache = new Map<string, number>();
 	/** A crossing's landing that is merged and green and waits for decide(); the runway is held meanwhile. */
 	private held: { landingId: string; decide: (commit: boolean) => void; result: Promise<BatchResult> } | null = null;
@@ -204,7 +222,14 @@ export class Runway extends DurableObject<Env> {
 	}
 
 	async land(trunk: string, jobs: LandingJob[]): Promise<BatchResult> {
-		return this.exclusive(() => this.landTrain(trunk, jobs, { retry: 0, oneByOne: false, heads: new Map(), reviews: new Map() }));
+		return this.exclusive(async () => {
+			const calls = new AbortController();
+			try {
+				return await this.landTrain(trunk, jobs, { retry: 0, oneByOne: false, heads: new Map(), reviews: new Map(), calls });
+			} finally {
+				calls.abort();
+			}
+		});
 	}
 
 	/**
@@ -268,7 +293,8 @@ export class Runway extends DurableObject<Env> {
 	/**
 	 * Each landing in a train is merged onto the tip left by the one before it, and the train's final
 	 * tree is tested once, like a merge queue. If that run fails, the train is replayed one landing at a
-	 * time so only the culprit is turned away. Landings that need a human review are tested on their own.
+	 * time so only the culprit is turned away. Landings that wait for a person (the policy, the AI reviewer's flag)
+	 * are tested in a run of their own, and on trunk alone if that run is red.
 	 */
 	private async landTrain(trunk: string, jobs: LandingJob[], opts: TrainOptions): Promise<BatchResult> {
 		const before = this.repo;
@@ -292,14 +318,21 @@ export class Runway extends DurableObject<Env> {
 			const flight = flightTrailer(c.commit.message);
 			if (flight && !byFlight.has(flight)) byFlight.set(flight, { oid: c.oid, parent: c.commit.parent[0], at: c.commit.committer.timestamp * 1000 });
 		}
-		// Every review starts before the first merge, so a train waits for about one model call, not one per landing.
+		// Every review starts before the first merge and they run side by side, so a train waits for its slowest review
+		// (at most REVIEW_MS in all), not for one after another.
+		opts.reviewBy ??= Date.now() + REVIEW_MS;
 		for (const job of jobs) if (job.reviewers?.length && !onTrunk.has(job.landingId)) await this.startReview(r, start, job, opts);
 
 		for (const job of jobs) {
 			const t0 = Date.now();
 			const already = onTrunk.get(job.landingId);
 			if (already) {
+				// Its review is on record in the note it landed with.
+				const recorded = await readNote(r, already.oid)
+					.then((n) => (n ? (JSON.parse(n) as { aiReview?: Omit<AiReview, "ms"> }).aiReview : undefined))
+					.catch(() => undefined);
 				outcomes.push({
+					...(recorded ? { aiReview: { ...recorded, ms: 0 } } : {}),
 					landingId: job.landingId,
 					status: "landed",
 					forkHead: null,
@@ -381,8 +414,11 @@ export class Runway extends DurableObject<Env> {
 				}
 
 				const required = job.approvedHead === head ? [] : reviewRequired(job.review ?? [], merged.changes);
-				// A person's approval of this commit covers it; otherwise the AI reviewer's flag parks it for one.
-				const review = job.approvedHead === head ? undefined : opts.reviews.get(`${job.landingId}@${head}`);
+				// A person's approval of this commit covers it; otherwise the AI reviewer's flag parks it for one. A review
+				// that couldn't start before the train (the fork didn't fetch) starts now, so none lands unrecorded.
+				const key = `${job.landingId}@${head}`;
+				if (job.reviewers?.length && job.approvedHead !== head && !opts.reviews.has(key)) await this.startReview(r, start, job, opts);
+				const review = job.approvedHead === head ? undefined : opts.reviews.get(key);
 				if (review) outcome.aiReview = await review;
 				const flagged = outcome.aiReview?.verdict === "flag";
 				if (required.length || flagged || opts.oneByOne) {
@@ -449,8 +485,11 @@ export class Runway extends DurableObject<Env> {
 
 		for (const { job, outcome, head } of boarded) {
 			const tests = outcome.tests && { passed: outcome.tests.passed, failed: outcome.tests.failed, train: outcome.tests.train };
-			const aiReview = outcome.aiReview && { model: outcome.aiReview.model, verdict: outcome.aiReview.verdict, reason: outcome.aiReview.reason, concerns: outcome.aiReview.concerns };
-			await addNote(r, outcome.trunkAfter!, JSON.stringify({ ...job.note, forkHead: head, changes: outcome.changes, tests, ...(aiReview ? { aiReview } : {}) }, null, 2));
+			// The verdict on the commit a person approved belongs to that commit only, not to one pushed after it.
+			const { aiReview: approved, ...note } = job.note as Record<string, unknown> & { aiReview?: AiReview };
+			const ai = outcome.aiReview ?? (head === job.approvedHead ? approved : undefined);
+			const aiReview = ai && { model: ai.model, verdict: ai.verdict, reason: ai.reason, concerns: ai.concerns };
+			await addNote(r, outcome.trunkAfter!, JSON.stringify({ ...note, forkHead: head, changes: outcome.changes, tests, ...(aiReview ? { aiReview } : {}) }, null, 2));
 		}
 
 		if (tip !== start) {
@@ -461,7 +500,7 @@ export class Runway extends DurableObject<Env> {
 			} catch (err) {
 				// Someone else moved trunk underneath us: drop the clone and replay the train once.
 				this.repo = null;
-				if (opts.retry < 1) return this.landTrain(trunk, jobs, { ...opts, retry: opts.retry + 1, heads: new Map() });
+				if (opts.retry < 1) return this.landTrain(trunk, jobs, { ...opts, retry: opts.retry + 1, heads: new Map(), reviewBy: Date.now() + REVIEW_MS });
 				throw err;
 			}
 			// Notes that trunk turned down (they don't build on its own) mean this clone's notes are stale: clone again next time.
@@ -475,10 +514,14 @@ export class Runway extends DurableObject<Env> {
 	}
 
 	/**
-	 * Starts the AI review of `job`: its fork's own change since it left trunk, judged against its intent, plan and
-	 * summary. Only the model call runs in the background; the git reads stay in line with the train's.
+	 * Starts the AI review of `job`: its fork's own change since it left trunk, judged against its intent, plan,
+	 * decisions and summary. Only the model calls run in the background; the git reads stay in line with the train's.
+	 * Once the fork's head is known, the train always finds a review for it here: a real one, or a skipped one that
+	 * says why there isn't.
 	 */
 	private async startReview(r: Repo, start: string, job: LandingJob, opts: TrainOptions): Promise<void> {
+		const skipped = (reason: string): Promise<AiReview> => Promise.resolve({ model: job.reviewers?.[0] ?? "", verdict: "skipped", reason, concerns: [], ms: 0 });
+		let key: string | null = null;
 		try {
 			let head = opts.heads.get(job.landingId);
 			if (!head) {
@@ -488,24 +531,52 @@ export class Runway extends DurableObject<Env> {
 				});
 				opts.heads.set(job.landingId, head);
 			}
-			const key = `${job.landingId}@${head}`;
+			key = `${job.landingId}@${head}`;
 			if (job.approvedHead === head || opts.reviews.has(key)) return;
 			const base = await mergeBase(r, start, head);
 			if (!base || base === head) return;
-			const changes = await describeChanges(r, await listTree(r, base), await listTree(r, head), 2);
-			if (changes.length === 0) return;
+			if (Date.now() < this.reviewsPausedUntil) {
+				opts.reviews.set(key, skipped("AI review is paused for a few minutes: the reviewers kept failing."));
+				return;
+			}
 			const note = job.note as { intent?: ReviewInput["intent"]; summary?: string; plan?: string | null; decisions?: string[] };
-			const input: ReviewInput = {
+			const asked: Omit<ReviewInput, "changes"> = job.reviewInput ?? {
 				intent: note.intent ?? { seq: 0, title: job.message.split("\n")[0], body: "" },
 				summary: note.summary ?? "",
 				plan: note.plan ?? null,
 				decisions: note.decisions ?? [],
-				changes,
 			};
-			opts.reviews.set(key, reviewChange(this.env.AI, job.reviewers!, input));
-		} catch {
-			// The landing itself fetches again and reports what went wrong.
+			const cacheKey = await sha256(JSON.stringify([job.reviewers, base, head, asked]));
+			let review = this.reviewed.get(cacheKey);
+			if (!review) {
+				const changes = await describeChanges(r, await listTree(r, base), await listTree(r, head), 2);
+				if (changes.length === 0) return;
+				const left = Math.max(1, (opts.reviewBy ?? Date.now() + REVIEW_MS) - Date.now());
+				review = reviewChange(this.env.AI, job.reviewers!, { ...asked, changes }, left, undefined, opts.calls?.signal);
+				this.remember(cacheKey, review);
+			}
+			opts.reviews.set(key, review);
+		} catch (err) {
+			// The landing fetches the fork again itself; if it gets as far as the review, this says why there isn't one.
+			if (key && !opts.reviews.has(key)) opts.reviews.set(key, skipped(`The review could not start (${errorMessage(err).slice(0, 100)}).`));
 		}
+	}
+
+	/** Keeps a review for later trains, unless it was skipped; reviewers that keep failing are left alone for a while. */
+	private remember(key: string, review: Promise<AiReview>) {
+		this.reviewed.set(key, review);
+		while (this.reviewed.size > REVIEW_CACHE) this.reviewed.delete(this.reviewed.keys().next().value!);
+		void review.then((done) => {
+			if (done.verdict !== "skipped") return;
+			this.reviewed.delete(key);
+			if (/called off/.test(done.reason)) return;
+			const now = Date.now();
+			this.reviewTrouble = [...this.reviewTrouble.filter((at) => now - at < REVIEW_TROUBLE_MS), now];
+			if (this.reviewTrouble.length >= REVIEW_TROUBLE) {
+				this.reviewsPausedUntil = now + REVIEW_PAUSE_MS;
+				this.reviewTrouble = [];
+			}
+		});
 	}
 
 	/** Runs the test suite of `tree` in a Dynamic Worker. */

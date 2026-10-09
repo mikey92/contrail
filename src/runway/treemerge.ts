@@ -1,7 +1,7 @@
 // Three-way merge of whole trees: trunk ("ours") × a flight's workspace ("theirs") over their merge base.
 import { contextChanges, lineChanges, mergeText, touchedSymbols } from "../git/merge";
 import type { ConflictReport, FileChange } from "../shared/types";
-import { type FlatTree, listTree, readItemText, type Repo, type TreeItem, writeText } from "./gitops";
+import { type FlatTree, GITLINK, listTree, readItemText, type Repo, type TreeItem, writeText } from "./gitops";
 
 export interface TreeMergeResult {
 	files: FlatTree;
@@ -48,29 +48,39 @@ export async function describeChanges(repo: Repo, base: FlatTree, next: FlatTree
 		const b = base.get(path);
 		const n = next.get(path);
 		if (same(b, n)) continue;
-		const before = b ? await readItemText(repo, b) : null;
-		const after = n ? await readItemText(repo, n) : null;
+		// A submodule reads as the commit it points at, as in `git diff`.
+		const text = async (item?: TreeItem) => (!item ? null : item.mode === GITLINK ? `Subproject commit ${item.oid}` : await readItemText(repo, item));
+		const before = await text(b);
+		const after = await text(n);
 		const status: FileChange["status"] = !b ? "added" : !n ? "deleted" : "modified";
-		let additions = 0;
-		let deletions = 0;
-		let hunks: NonNullable<FileChange["hunks"]> = [];
-		let symbols: string[] | null = null;
-		if (before !== null && after !== null) {
-			hunks = context ? contextChanges(path, before, after, context) : lineChanges(before, after);
-			for (const h of hunks) {
-				additions += h.added.length;
-				deletions += h.removed.length;
-			}
-			// The hunks already name the symbols they touch: the same set touchedSymbols would work out again.
-			if (context) symbols = [...new Set(hunks.flatMap((h) => h.symbols ?? []))].sort();
-		} else {
-			additions = after?.split("\n").length ?? 0;
-			deletions = before?.split("\n").length ?? 0;
-			if (after !== null) hunks = [{ start: 1, removed: [], added: after.split("\n") }];
-		}
-		changes.push({ path, status, symbols: symbols ?? touchedSymbols(path, before, after), additions, deletions, hunks: truncateHunks(hunks, context ? 200 : 60) });
+		const binary = (!!b && before === null) || (!!n && after === null);
+		const mode = b && n && b.mode !== n.mode ? `${b.mode} → ${n.mode}` : !b && n?.mode === "120000" ? "120000 (symlink)" : undefined;
+		changes.push({ path, status, ...describeText(path, before, after, context), ...(binary ? { binary } : {}), ...(mode ? { mode } : {}) });
 	}
 	return changes;
+}
+
+/** What changed in one file, from its text before and after (null: the file is new, deleted or binary). */
+export function describeText(path: string, before: string | null, after: string | null, context = 0): Omit<FileChange, "path" | "status"> {
+	let additions = 0;
+	let deletions = 0;
+	let hunks: NonNullable<FileChange["hunks"]> = [];
+	let symbols: string[] | null = null;
+	if (before !== null && after !== null) {
+		hunks = context ? contextChanges(path, before, after, context) : lineChanges(before, after);
+		for (const h of hunks) {
+			additions += h.added.length;
+			deletions += h.removed.length;
+		}
+		// The hunks already name the symbols they touch: the same set touchedSymbols would work out again.
+		if (context) symbols = [...new Set(hunks.flatMap((h) => h.symbols ?? []))].sort();
+	} else {
+		additions = after?.split("\n").length ?? 0;
+		deletions = before?.split("\n").length ?? 0;
+		if (after !== null) hunks = [{ start: 1, removed: [], added: after.split("\n") }];
+		else if (before !== null) hunks = [{ start: 1, removed: before.split("\n"), added: [] }];
+	}
+	return { symbols: symbols ?? touchedSymbols(path, before, after), additions, deletions, hunks: truncateHunks(hunks, context ? 200 : 60) };
 }
 
 export async function mergeTrees(repo: Repo, baseOid: string, oursOid: string, theirsOid: string): Promise<TreeMergeResult> {

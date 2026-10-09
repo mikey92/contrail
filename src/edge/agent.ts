@@ -463,11 +463,14 @@ export class EdgeAgent extends DurableObject<Env> {
 				if (l.status === "review") {
 					const why = [
 						...(l.review?.required.length ? [`policy covers ${l.review.required.join(", ")}`] : []),
-						...(l.aiReview?.verdict === "flag" ? [`the AI reviewer flagged it: ${l.aiReview.reason}`] : []),
+						...(l.aiReview?.verdict === "flag" ? [`the AI reviewer flagged it: ${l.aiReview.reason.replace(/[\s.!?]+$/, "")}`] : []),
 					];
 					return `Awaiting human review (${why.join("; ") || "a person decides"}). Call land again later to check.${radio(r)}`;
 				}
-				if (l.status === "rejected") return `Reviewer requested changes: ${l.review?.comment ?? ""}. Fix it, run_tests, land again.${radio(r)}`;
+				if (l.status === "rejected") {
+					const asked = (l.review?.comment || (l.aiReview?.verdict === "flag" ? l.aiReview.reason : "")).trim().replace(/[\s.!?]+$/, "");
+					return `Reviewer requested changes${asked ? `: ${asked}` : ""}. Fix it, run_tests, land again.${radio(r)}`;
+				}
 				return `Still on approach (${l.status}). Call land again shortly.${radio(r)}`;
 			}
 			default:

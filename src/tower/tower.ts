@@ -65,6 +65,8 @@ const TAKEOFFS_PER_10_MIN = 10;
 const MAX_LIVE_FORKS = 3000;
 /** In a playground, a flight older than this is aborted even if its agent is still calling in. */
 const PLAYGROUND_FLIGHT_MS = 45 * 60_000;
+/** The error of a landing whose flight ended before it landed. */
+const ABORTED = "flight aborted before landing";
 /** Forks deleted per alarm (once a minute), so a backlog drains without a burst of Artifacts calls. */
 const RETIRE_BATCH = 50;
 /** A crossing's leg that is ready this long without word from its Center is let go (the Center restarted). */
@@ -118,11 +120,22 @@ interface Policy {
 function reviewNeeds(required: string[], ai?: AiReview | null): string {
 	const parts = [];
 	if (required.length) parts.push(`it touches ${required.join(", ")}, which policy reserves for a human`);
-	if (ai?.verdict === "flag") parts.push(`the AI reviewer (${shortModel(ai.model)}) flagged it: ${ai.reason}`);
+	if (ai?.verdict === "flag") parts.push(`the AI reviewer (${shortModel(ai.model)}) flagged it: ${sentence(ai.reason)}`);
 	return parts.join("; and ") || "it needs a human review";
 }
 
 const shortModel = (model: string) => model.split("/").pop() ?? model;
+
+/** A reason without its closing punctuation, to sit inside a sentence of ours. */
+const sentence = (s: string) => s.replace(/[\s.!?]+$/, "");
+
+/** What a person asked for when sending a landing back: their comment, or else the AI reviewer's flag. */
+const changesAsked = (l: Pick<Landing, "review" | "aiReview">) => (l.review?.comment || (l.aiReview?.verdict === "flag" ? l.aiReview.reason : "")).trim();
+
+/** The AI verdict a finished landing keeps: this run's, or the one on record if it was for the same commit. */
+function verdictFor(o: Pick<LandingOutcome, "aiReview" | "forkHead">, l: Pick<Landing, "aiReview" | "forkHead">): AiReview | null {
+	return o.aiReview ?? (o.forkHead && o.forkHead === l.forkHead ? (l.aiReview ?? null) : null);
+}
 
 function aiReviewLine(ai: AiReview): string {
 	const verdict = ai.verdict === "approve" ? "approved" : ai.verdict === "flag" ? "flagged" : "skipped";
@@ -890,7 +903,9 @@ export class Tower extends DurableObject<Env> {
 				workspace,
 				upstream,
 				setup: workspaceInstructions({ cloneUrl: workspace.cloneUrl, upstreamUrl: upstream.cloneUrl, dir, flightCode: code, callsign: agent.callsign, testCommand: this.meta<string | null>("testCommand", null) ?? undefined }),
-				briefing: PROTOCOL,
+				briefing: this.meta<{ aiReview?: boolean }>("policy", {}).aiReview
+					? `${PROTOCOL}\n\nAI review is on in this airspace: before your change lands, a model from another family than yours reads your diff, plan and summary against the intent. Change only what the intent asks, and say in your summary only what the diff does. A flagged landing waits, merged and green, for a person.${this.project().playground ? " Flights in this playground end 45 minutes after take-off." : ""}`
+					: PROTOCOL,
 				radio: this.drainRadio(flightId),
 			};
 		} catch (err) {
@@ -924,7 +939,9 @@ export class Tower extends DurableObject<Env> {
 	private endFlight(flight: Flight, agentId: string | null, reason?: string) {
 		this.setFlightStatus(flight.id, "aborted");
 		for (const l of this.rows("SELECT * FROM landings WHERE flight_id = ? AND status IN ('queued', 'review')", flight.id).map((r) => this.toLanding(r)))
-			this.finishLanding(l, { status: "failed", error: "flight aborted before landing" });
+			this.finishLanding(l, { status: "failed", error: reason ? `${ABORTED}: ${reason.slice(0, 300)}` : ABORTED });
+		// Ended by the tower, not by its agent: the agent hears why on its next call.
+		if (!agentId) this.sendRadio(flight.id, "abort", `${flight.code} was ended${reason ? `: ${reason.slice(0, 300)}` : ""}. Call take_off to fly again.`);
 		this.sql.exec("UPDATE intents SET status = 'open', flight_id = NULL WHERE id = ? AND status = 'assigned' AND flight_id = ?", flight.intentId, flight.id);
 		this.releaseAll(flight.id);
 		if (reason) this.addContrail(flight.id, agentId, "note", `Aborted: ${reason}`);
@@ -936,7 +953,8 @@ export class Tower extends DurableObject<Env> {
 	/**
 	 * Flights whose agent has not been heard from in an hour are aborted, so their intents fly again. Not
 	 * those with a landing under way or awaiting review (the runway or a reviewer still has the next word),
-	 * nor a crossing's legs, which its Center ends.
+	 * nor a crossing's legs, which its Center ends. In a playground, a flight also ends 45 minutes after take-off
+	 * unless its landing is on the runway, even one awaiting review.
 	 */
 	private abortStale() {
 		const stale = this.rows(
@@ -1279,17 +1297,25 @@ export class Tower extends DurableObject<Env> {
 			case "landed":
 				return `Landed on trunk as ${l.trunkAfter?.slice(0, 8)}. Your flight is complete — call take_off for the next intent.`;
 			case "review":
-				return `Merged and green, but ${reviewNeeds(l.review?.required ?? [], l.aiReview)}. Hold position: you will get a radio message with the decision (or call landing_status).`;
-			case "rejected":
-				return `A reviewer requested changes${l.review?.comment ? `: ${l.review.comment}` : ""}. Fix it, push, and request_landing again.`;
+				return `Merged and green, but ${reviewNeeds(l.review?.required ?? [], l.aiReview)}. Hold position: a person approves it or requests changes, and landing_status shows the decision.${
+					this.project().playground
+						? " Nobody may be watching this playground, and its flights end 45 minutes after take-off. To change the work instead, push the fix, call abort, then take_off with the same intent."
+						: ""
+				}`;
+			case "rejected": {
+				const asked = changesAsked(l);
+				return `A reviewer requested changes${asked ? `: ${sentence(asked)}` : ""}. Fix it, push, and request_landing again.`;
+			}
 			case "conflict":
 				return "Conflict with trunk. Run `git pull --no-rebase upstream main`, resolve the conflicting hunks (the report shows who changed them and why), commit, push to origin, then request_landing again.";
 			case "failed":
 				if (l.error?.startsWith("airspace violation"))
 					return `Your change touches code another flight is cleared to change (${l.error.replace(/^airspace violation: /, "")}). Call request_clearance for it: you hold until it is free, and the radio tells you when. Then pull upstream main and request_landing again.`;
-				return l.tests && l.tests.failed > 0
-					? "Tests failed on the merged tree. Pull upstream, reproduce, fix, push, then request_landing again."
-					: `Landing failed: ${l.error}. Fix it, push, and request_landing again.`;
+				if (l.error?.startsWith(ABORTED))
+					return `Your flight ended before this landed${l.error.length > ABORTED.length ? ` (${l.error.slice(ABORTED.length + 2)})` : ""}. Call take_off to fly again; pass the same intent to pick it up.`;
+				return `${
+					l.tests && l.tests.failed > 0 ? "Tests failed on the merged tree. Pull upstream, reproduce, fix, push, then request_landing again." : `Landing failed: ${l.error}. Fix it, push, and request_landing again.`
+				}${l.aiReview?.verdict === "flag" ? ` The AI reviewer also flagged it: ${sentence(l.aiReview.reason)}.` : ""}`;
 			default:
 				return "Still on approach. Call landing_status in a little while.";
 		}
@@ -1300,10 +1326,11 @@ export class Tower extends DurableObject<Env> {
 		const flight = this.flightById(l.flightId);
 		const agent = this.agentById(flight.agentId);
 		const intent = this.intentById(flight.intentId);
-		const contrail = this.rows<{ kind: string; text: string }>(
-			"SELECT kind, text FROM contrail WHERE flight_id = ? AND kind IN ('plan', 'decision', 'handoff') ORDER BY id",
+		const contrail = this.rows<{ kind: string; text: string; agent_id: string | null }>(
+			"SELECT kind, text, agent_id FROM contrail WHERE flight_id = ? AND kind IN ('plan', 'decision', 'handoff') ORDER BY id",
 			flight.id,
 		);
+		const decisions = contrail.filter((c) => c.kind !== "plan");
 		const policy = this.meta<{ review?: string[]; aiReview?: boolean }>("policy", {});
 		return {
 			landingId: l.id,
@@ -1312,6 +1339,14 @@ export class Tower extends DurableObject<Env> {
 			review: policy.review ?? [],
 			// A crossing can't wait for a person (its other sectors are held meanwhile), so its legs are left to the tests.
 			reviewers: policy.aiReview && !l.crossing ? reviewersFor({ kind: agent.kind, model: agent.model }) : undefined,
+			// Who wrote what is the Tower's to say: an agent's intent is not the project's word, and only entries the
+			// Tower wrote itself (a person's review) may speak as a person.
+			reviewInput: {
+				intent: { seq: intent.seq, title: intent.title, body: intent.body, byAgent: intent.createdBy !== "operator" },
+				summary: l.summary,
+				plan: flight.plan,
+				decisions: decisions.map((c) => `${c.agent_id ? "agent" : c.kind === "decision" ? "person" : "tower"}: ${c.text}`),
+			},
 			approvedHead: l.review?.decision === "approved" ? (l.forkHead ?? undefined) : undefined,
 			flight: { code: flight.code, since: flight.createdAt },
 			prefix: this.project().prefix,
@@ -1341,7 +1376,7 @@ export class Tower extends DurableObject<Env> {
 				intent: { seq: intent.seq, title: intent.title, body: intent.body },
 				summary: l.summary,
 				plan: flight.plan,
-				decisions: contrail.filter((c) => c.kind !== "plan").map((c) => c.text),
+				decisions: decisions.map((c) => c.text),
 				...(l.crossing ? { crossing: l.crossing } : {}),
 				// Back after a person approved it: the reviewer's flag they overruled stays on record.
 				...(l.aiReview ? { aiReview: l.aiReview } : {}),
@@ -1470,7 +1505,7 @@ export class Tower extends DurableObject<Env> {
 				changes: o.changes,
 				tests: o.tests,
 				unioned: o.unioned,
-				aiReview: o.aiReview ?? l.aiReview ?? null,
+				aiReview: verdictFor(o, l),
 			});
 			if (o.aiReview) this.addContrail(flight.id, null, "note", aiReviewLine(o.aiReview));
 			const t = now();
@@ -1519,7 +1554,7 @@ export class Tower extends DurableObject<Env> {
 			this.finishLanding(l, { status: "review", forkHead: o.forkHead, trunkBefore: o.trunkBefore, changes: o.changes, tests: o.tests, unioned: o.unioned, review, aiReview: o.aiReview ?? null });
 			if (o.aiReview) this.addContrail(flight.id, null, "note", aiReviewLine(o.aiReview));
 			this.addContrail(flight.id, null, "note", `${moved}Green and ready, but ${needs}. Waiting on the tower.`);
-			this.sendRadio(flight.id, "review", `${moved}Your landing passed merge and tests, but ${needs}. Hold position; you will be told the decision.`);
+			this.sendRadio(flight.id, "review", `${moved}Your landing passed merge and tests, but ${needs}. Hold position: a person approves it or requests changes, and landing_status shows the decision.`);
 			this.emit("landing.review", `${flight.code} needs a human review: ${needs}`, { flightId: flight.id, agentId: agent.id, data: { landingId: l.id, aiReview: o.aiReview ?? null } });
 			this.bump("reviews");
 			if (o.aiReview?.verdict === "flag") this.bump("aiFlags");
@@ -1528,7 +1563,8 @@ export class Tower extends DurableObject<Env> {
 
 		if (o.status === "conflict") {
 			const conflicts = o.conflicts.map((c) => ({ ...c, causedBy: this.causedBy(flight, c) }));
-			this.finishLanding(l, { status: "conflict", forkHead: o.forkHead, trunkBefore: o.trunkBefore, changes: o.changes, conflicts, unioned: o.unioned });
+			this.finishLanding(l, { status: "conflict", forkHead: o.forkHead, trunkBefore: o.trunkBefore, changes: o.changes, conflicts, unioned: o.unioned, aiReview: verdictFor(o, l) });
+			if (o.aiReview?.verdict === "flag") this.addContrail(flight.id, null, "note", aiReviewLine(o.aiReview));
 			this.setFlightStatus(flight.id, "diverted");
 			const where = conflicts.map((c) => `${c.path}${c.hunks.length ? `#${[...new Set(c.hunks.flatMap((h) => h.symbols))].join(",")}` : ""}`).join("; ");
 			const who = [...new Set(conflicts.flatMap((c) => c.causedBy.map((b) => `${b.callsign} (${b.code}: ${b.intent})`)))].join(", ");
@@ -1542,7 +1578,8 @@ export class Tower extends DurableObject<Env> {
 			return;
 		}
 
-		this.finishLanding(l, { status: "failed", forkHead: o.forkHead, trunkBefore: o.trunkBefore, changes: o.changes, tests: o.tests, error: o.error, unioned: o.unioned });
+		this.finishLanding(l, { status: "failed", forkHead: o.forkHead, trunkBefore: o.trunkBefore, changes: o.changes, tests: o.tests, error: o.error, unioned: o.unioned, aiReview: verdictFor(o, l) });
+		if (o.aiReview?.verdict === "flag") this.addContrail(flight.id, null, "note", aiReviewLine(o.aiReview));
 		this.setFlightStatus(flight.id, "diverted");
 		const failing = o.tests?.results.filter((r) => !r.ok).map((r) => `${r.file} › ${r.name}`) ?? [];
 		this.addContrail(flight.id, null, "test", `Landing rejected: ${o.error}${failing.length ? `\n${failing.join("\n")}` : ""}`);
@@ -1830,6 +1867,7 @@ export class Tower extends DurableObject<Env> {
 			this.sql.exec("UPDATE landings SET status = 'queued', review = ? WHERE id = ?", JSON.stringify(review), l.id);
 			this.patch("landing", { ...l, status: "queued", review });
 			this.addContrail(flight.id, null, "decision", `Approved by ${reviewer}${comment ? `: ${comment}` : ""}`);
+			this.sendRadio(flight.id, "review", `${reviewer} approved your landing${comment ? `: ${sentence(comment)}` : ""}. It lands next.`);
 			this.emit("review.approved", `${reviewer} approved ${flight.code}${comment ? ` — ${comment}` : ""}`, { flightId: flight.id });
 			this.ctx.waitUntil(this.processQueue());
 			return { ...l, status: "queued", review };
@@ -1838,8 +1876,9 @@ export class Tower extends DurableObject<Env> {
 		const landing = this.finishLanding(l, { status: "rejected", review });
 		this.setFlightStatus(flight.id, "diverted");
 		this.patch("flight", this.flightById(flight.id));
-		this.sendRadio(flight.id, "review", `${reviewer} requested changes: ${comment ?? "(no comment)"}. Fix, push, and request_landing again.`);
-		this.addContrail(flight.id, null, "decision", `Changes requested by ${reviewer}: ${comment ?? ""}`);
+		const asked = changesAsked({ review, aiReview: l.aiReview });
+		this.sendRadio(flight.id, "review", `${reviewer} requested changes${asked ? `: ${sentence(asked)}` : ""}. Fix, push, and request_landing again.`);
+		this.addContrail(flight.id, null, "decision", `Changes requested by ${reviewer}${asked ? `: ${asked}` : ""}`);
 		this.emit("review.rejected", `${reviewer} sent ${flight.code} back${comment ? ` — ${comment}` : ""}`, { flightId: flight.id });
 		return landing;
 	}
@@ -1887,8 +1926,14 @@ export class Tower extends DurableObject<Env> {
 		if (now() - last < 90_000) return { error: `the tower is busy: try again in ${Math.ceil((90_000 - (now() - last)) / 1000)}s` };
 		// Taken before any await, so a double click can't launch twice while a restart is in progress.
 		this.setMeta("lastPublicLaunch", now());
-		if (!this.row("SELECT id FROM intents WHERE status = 'open' LIMIT 1") && !(await this.restartPlayground()))
-			return { error: "the agents in this airspace are still finishing; try again in a minute" };
+		if (!this.row("SELECT id FROM intents WHERE status = 'open' LIMIT 1") && !(await this.restartPlayground())) {
+			this.setMeta("lastPublicLaunch", last);
+			return {
+				error: this.row("SELECT id FROM landings WHERE status = 'review' LIMIT 1")
+					? "every intent is taken, and a landing waits for the operator's review: try again once it is decided or its flight ends (45 minutes after take-off)"
+					: "the agents in this airspace are still finishing; try again in a minute",
+			};
+		}
 		return this.launchEdge({ count: Math.min(4, Math.max(1, input.count)), maxFlights: 3, limit: 6 });
 	}
 
@@ -1896,14 +1941,15 @@ export class Tower extends DurableObject<Env> {
 
 	/**
 	 * An operator starts the playground over now, with work still open (before a demo, say). Not while a flight
-	 * is in the air or a landing is on the runway: those belong to agents that are still working.
+	 * is in the air, a landing is on the runway or one waits in the review inbox: those belong to agents that are
+	 * still working.
 	 */
 	async newRound(): Promise<{ open: number } | { error: string }> {
 		if (!this.project().playground) return { error: "only a playground starts over" };
-		if (this.row("SELECT id FROM landings WHERE status = 'review' LIMIT 1")) return { error: "a landing waits in the review inbox: approve or reject it, then try again" };
+		if (this.row("SELECT id FROM landings WHERE status = 'review' LIMIT 1")) return { error: "a landing waits in the review inbox: approve it, or stop the edge agents if it is theirs, then try again" };
 		const flying = this.row<{ c: number }>(`SELECT COUNT(*) AS c FROM flights WHERE status IN (${ACTIVE.map(() => "?").join(",")})`, ...ACTIVE)?.c ?? 0;
 		if (flying) return { error: `${flying} ${flying === 1 ? "flight is" : "flights are"} still in the air: stop the edge agents or let them land, then try again` };
-		if (this.row("SELECT id FROM landings WHERE status IN ('queued', 'merging', 'verifying', 'review') LIMIT 1")) return { error: "a landing is on the runway; try again in a moment" };
+		if (this.row("SELECT id FROM landings WHERE status IN ('queued', 'merging', 'verifying') LIMIT 1")) return { error: "a landing is on the runway; try again in a moment" };
 		// Edge agents waiting to board would take off into the new round unseen: they stop with the old one.
 		await this.stopEdge();
 		if (!(await this.restartPlayground(true))) return { error: "the playground could not start over right now; try again in a moment" };
