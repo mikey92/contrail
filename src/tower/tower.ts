@@ -948,11 +948,12 @@ export class Tower extends DurableObject<Env> {
 			now() - STALE_FLIGHT_MS,
 		).map((r) => this.toFlight(r));
 		for (const flight of stale) this.endFlight(flight, null, "no word from its agent for an hour");
-		// A playground is shared: one flight held open for ever would keep its round from ever starting over.
+		// A playground is shared: one flight held open for ever would keep its round from ever starting over. That
+		// includes one whose landing waits for a review, since nobody may be there to give it.
 		if (this.meta<ProjectInfo | null>("project", null)?.playground)
 			for (const r of this.rows(
 				`SELECT f.* FROM flights f JOIN intents i ON i.id = f.intent_id WHERE f.status IN (${ACTIVE.map(() => "?").join(",")}) AND f.created_at < ? AND i.created_by NOT LIKE 'center:%'
-				 AND NOT EXISTS (SELECT 1 FROM landings l WHERE l.flight_id = f.id AND l.status IN ('queued', 'merging', 'verifying', 'review'))`,
+				 AND NOT EXISTS (SELECT 1 FROM landings l WHERE l.flight_id = f.id AND l.status IN ('queued', 'merging', 'verifying'))`,
 				...ACTIVE,
 				now() - PLAYGROUND_FLIGHT_MS,
 			))
@@ -1899,6 +1900,7 @@ export class Tower extends DurableObject<Env> {
 	 */
 	async newRound(): Promise<{ open: number } | { error: string }> {
 		if (!this.project().playground) return { error: "only a playground starts over" };
+		if (this.row("SELECT id FROM landings WHERE status = 'review' LIMIT 1")) return { error: "a landing waits in the review inbox: approve or reject it, then try again" };
 		const flying = this.row<{ c: number }>(`SELECT COUNT(*) AS c FROM flights WHERE status IN (${ACTIVE.map(() => "?").join(",")})`, ...ACTIVE)?.c ?? 0;
 		if (flying) return { error: `${flying} ${flying === 1 ? "flight is" : "flights are"} still in the air: stop the edge agents or let them land, then try again` };
 		if (this.row("SELECT id FROM landings WHERE status IN ('queued', 'merging', 'verifying', 'review') LIMIT 1")) return { error: "a landing is on the runway; try again in a moment" };
