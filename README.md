@@ -48,6 +48,8 @@ The video was recorded on October 4. Since then, on the same live deployment:
 - **AI review.** With a project's policy on, a model from another family than the agent's reads every landing
   against its intent. A flag parks the landing in the review inbox with the reason; the tests stay the gate.
   On the live deployment it approved an on-intent change and flagged one that slipped in an unasked 50% coupon.
+  It is on in the [playground](https://contrail.mikey9220.workers.dev/p/playground): open a landed flight to read
+  its verdict.
 - **Apple's Human Interface Guidelines** on every page: system font, Dark Mode, contrast, 44-point targets,
   VoiceOver labels and reduced motion.
 - **Hardening.** Three bug reviews and two security reviews, every finding fixed: agent keys expire after
