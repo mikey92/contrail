@@ -119,15 +119,15 @@ export function Radar({ slug, fixture }: { slug: string; fixture: string | null 
 						{ended ? "Replay ended" : "Replay"}
 					</div>
 				) : (
-					<div class={`live ${s.connected ? "on" : ""}`} role="status">
-						{s.connected ? "Live" : "Reconnecting"}
+					<div class={`live ${s.connected ? "on" : ""}`} role="status" title={s.connected ? undefined : "Reconnecting to the live feed"}>
+						<span class="live-text">{s.connected ? "Live" : "Reconnecting"}</span>
 					</div>
 				)}
 				<div class="actions">
 					{s.project?.playground && <LaunchButton slug={slug} />}
-					<button class="btn ghost" onClick={() => setClone(true)} title="Clone trunk with its contrail notes">
+					<button class="btn ghost" onClick={() => setClone(true)} title="Clone trunk with its contrail notes" aria-label="Clone Trunk…">
 						<Icon name="clone" size={15} />
-						Clone Trunk…
+						<span class="wide">Clone Trunk…</span>
 					</button>
 					<button class="btn" onClick={() => setConnect(true)} aria-label="Connect an Agent">
 						<span class="long">Connect an Agent…</span>

@@ -234,12 +234,18 @@ function rectFor(target: string, files: FileBox[], groups: GroupBox[], rests: Re
 	if (path.endsWith("/")) {
 		const g = groups.find((g) => g.name === path);
 		if (g) return g;
-		// A directory below a group's (source/internal/): the box around its files, or else the group it is in.
+		// A directory below a group's (source/internal/): the box around its files, or else the group it is in. The
+		// map doesn't keep a directory's files together: a box that would take in other files is the group's too.
+		const group = groups.find((g) => path.startsWith(g.name)) ?? null;
 		const inside: Rect[] = [...files.filter((f) => f.path.startsWith(path)), ...rests.filter((r) => [...r.paths].some((p) => p.startsWith(path)))];
-		if (!inside.length) return groups.find((g) => path.startsWith(g.name)) ?? null;
+		if (!inside.length) return group;
 		const x = Math.min(...inside.map((r) => r.x));
 		const y = Math.min(...inside.map((r) => r.y));
-		return { x, y, w: Math.max(...inside.map((r) => r.x + r.w)) - x, h: Math.max(...inside.map((r) => r.y + r.h)) - y };
+		const box = { x, y, w: Math.max(...inside.map((r) => r.x + r.w)) - x, h: Math.max(...inside.map((r) => r.y + r.h)) - y };
+		const others: Rect[] = [...files.filter((f) => !f.path.startsWith(path)), ...rests.filter((r) => [...r.paths].some((p) => !p.startsWith(path)))];
+		// (Neighbours share an edge: overlapping means by more than a pixel.)
+		const overlaps = (r: Rect) => r.x < box.x + box.w - 1 && box.x < r.x + r.w - 1 && r.y < box.y + box.h - 1 && box.y < r.y + r.h - 1;
+		return group && others.some(overlaps) ? group : box;
 	}
 	const file = files.find((f) => f.path === path);
 	if (!file) {

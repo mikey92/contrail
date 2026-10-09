@@ -359,8 +359,9 @@ function crossingState(cx: Crossing): { label: string; tone: string } {
 
 function legState(leg: CrossingLeg, crossing: Crossing["status"]): { label: string; tone: string } {
 	const l = leg.landing;
-	// A leg with no landing is flying, unless its flight is over: the crossing landed without a change here, or ended.
-	if (!l && leg.closed) return crossing === "landed" ? { label: "no change", tone: "landed" } : { label: "closed", tone: "aborted" };
+	// A leg with no landing is flying, unless its flight is over: the crossing was aborted, or landed (in all its sectors
+	// or some) without a change here.
+	if (!l && leg.closed) return crossing === "aborted" ? { label: "closed", tone: "aborted" } : { label: "no change", tone: "landed" };
 	if (!l) return { label: "flying", tone: "airborne" };
 	if (l.status === "landed") return { label: `landed ${l.commit?.slice(0, 8) ?? ""}`, tone: "landed" };
 	if (l.status === "verifying") return { label: "ready, held", tone: "approach" };

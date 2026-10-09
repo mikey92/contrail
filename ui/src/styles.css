@@ -2554,7 +2554,7 @@ details.diffs summary {
 .topbar {
 	container: topbar / inline-size;
 }
-@container topbar (max-width: 100em) {
+@container topbar (max-width: 110em) {
 	/* The playground's Launch button needs the room. */
 	.has-launch .stat:nth-child(n + 5) {
 		display: none;
@@ -2571,7 +2571,8 @@ details.diffs summary {
 	}
 }
 @container topbar (max-width: 78em) {
-	.stats .stat:nth-child(n + 4) {
+	.stats .stat:nth-child(n + 4),
+	.has-launch .stat:nth-child(n + 3) {
 		display: none;
 	}
 	.proj-sub {
@@ -2579,7 +2580,8 @@ details.diffs summary {
 	}
 }
 @container topbar (max-width: 64em) {
-	.stats .stat:nth-child(n + 3) {
+	.stats .stat:nth-child(n + 3),
+	.has-launch .stats {
 		display: none;
 	}
 }
@@ -2589,6 +2591,32 @@ details.diffs summary {
 	.live.on,
 	.live.replay {
 		display: none;
+	}
+}
+/* Still one row (a phone gives the buttons a row of their own): the playground's other buttons go short, and the
+   badge says Live or Reconnecting with its dot alone (the words stay for screen readers). */
+@media not all and (max-width: 700px) {
+	@container topbar (max-width: 90em) {
+		.has-launch .btn .long,
+		.has-launch .btn .wide {
+			display: none;
+		}
+		.has-launch .btn .short {
+			display: inline;
+		}
+	}
+	@container topbar (max-width: 78em) {
+		.live {
+			padding: 4px 7px;
+		}
+		.live-text {
+			position: absolute;
+			width: 1px;
+			height: 1px;
+			overflow: hidden;
+			clip: rect(0, 0, 0, 0);
+			white-space: nowrap;
+		}
 	}
 }
 @media (max-width: 1280px) {

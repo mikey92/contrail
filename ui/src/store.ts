@@ -219,15 +219,13 @@ let recordedNow: number | null = null;
 export const replayTime = () => recordedNow;
 
 /**
- * Server time at recording time 0. Events carry the server's clock and reach the recorder a few ms later,
- * so the median of `at - t` over the events estimates it; without events, the snapshot's last event does.
+ * Server time at recording time 0. Events carry the server's clock and reach the recorder some ms later, so
+ * the largest `at - t` over the events (the one that came quickest) estimates it: no event is then on screen
+ * before the time it happened. Without events, the snapshot's last event does.
  */
 function recordingStart(lines: Line[]): number | null {
-	const offsets = lines
-		.filter((l) => l.m?.kind === "event" && typeof l.m.event?.at === "number")
-		.map((l) => l.m.event.at - l.t)
-		.sort((a, b) => a - b);
-	if (offsets.length) return offsets[offsets.length >> 1];
+	const offsets = lines.filter((l) => l.m?.kind === "event" && typeof l.m.event?.at === "number").map((l) => l.m.event.at - l.t);
+	if (offsets.length) return offsets.reduce((a, b) => Math.max(a, b));
 	const snap = lines.find((l) => l.m?.kind === "snapshot");
 	const last = Math.max(0, ...(snap?.m.snapshot.events ?? []).map((e: RadarEvent) => e.at));
 	return snap && last ? last - snap.t : null;
@@ -575,22 +573,27 @@ export function useRadar(slug: string, fixture: string | null) {
 		let retry = 500;
 		let ping: number | undefined;
 		// Too big for the live feed (a large repository): the snapshot comes over HTTP. What the socket says while it
-		// is on its way waits, then goes on top of it; a snapshot that doesn't come is asked for again.
+		// is on its way waits, then goes on top of it (what the snapshot already has, and anything queued for an
+		// earlier one, is older than it); a snapshot that doesn't come is asked for again, the radar live meanwhile.
 		let pending: Action[] | null = null;
 		let resyncs = 0;
 		const resync = (attempt = 0) => {
 			const n = ++resyncs;
-			pending ??= [];
+			pending = [];
 			fetch(`/api/p/${slug}/snapshot`)
 				.then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
 				.then((snapshot: RadarSnapshot) => {
 					if (closed || n !== resyncs) return;
 					const queued = pending ?? [];
 					pending = null;
-					dispatch({ type: "batch", actions: [{ type: "snapshot", snapshot }, ...queued], quiet: true });
+					dispatch({ type: "batch", actions: [{ type: "snapshot", snapshot }, ...queued] });
 				})
 				.catch(() => {
-					if (!closed && n === resyncs) setTimeout(() => !closed && n === resyncs && resync(attempt + 1), Math.min(30_000, 1000 * 2 ** attempt));
+					if (closed || n !== resyncs) return;
+					const queued = pending ?? [];
+					pending = null;
+					if (queued.length) dispatch({ type: "batch", actions: queued });
+					setTimeout(() => !closed && n === resyncs && resync(attempt + 1), Math.min(30_000, 1000 * 2 ** attempt));
 				});
 		};
 		const connect = () => {
