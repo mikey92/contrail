@@ -423,7 +423,8 @@ node scripts/crossing-smoke.mjs  # crossings end to end; creates and deletes a p
 `create-project.mjs` loads a directory's text files as trunk (dotfiles and `node_modules` stay out), or imports a
 public GitHub repository (`node scripts/create-project.mjs myproject https://github.com/owner/repo "My project"
 --intents intents.json`, with `--branch master` when its branch isn't `main`). `DELETE /api/projects/<slug>` with
-the admin key deletes a project (`/api/centers/<slug>` a center), say to run a script again after it failed.
+the admin key deletes a project (`/api/centers/<slug>` a center). `create-sectors.mjs` and `create-center.mjs`
+delete what they made when they fail part way, so they can simply be run again.
 By default the runway runs exported test functions in `**/*.test.js`. A `contrail.json` at the root
 configures the gate:
 

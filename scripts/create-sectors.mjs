@@ -73,32 +73,40 @@ async function call(method, path, body) {
 const monorepo = {
   "README.md": `# ${name}\n\nA load-test monorepo for Contrail: ${sectors} sectors, each a directory with its own shared counters.\nEvery sector lands in parallel through its own runway; the Center composes them into this trunk.\n`,
 };
+// What this run made: if it fails part way, it deletes them, so it can simply be run again.
 const slugs = [];
-for (let i = 0; i < sectors; i++) {
-  const id = String(i).padStart(2, "0");
-  const prefix = `sector-${id}/`;
-  const files = Object.fromEntries(Object.entries(sectorFiles).map(([p, text]) => [`${prefix}${p}`, text]));
-  Object.assign(monorepo, files);
-  const sectorSlug = `${slug}-s${id}`;
-  await call("POST", "/api/projects", {
-    slug: sectorSlug,
-    name: `Sector ${id}`,
-    description: `Sector ${id} of ${name}: owns ${prefix}`,
+try {
+  for (let i = 0; i < sectors; i++) {
+    const id = String(i).padStart(2, "0");
+    const prefix = `sector-${id}/`;
+    const files = Object.fromEntries(Object.entries(sectorFiles).map(([p, text]) => [`${prefix}${p}`, text]));
+    Object.assign(monorepo, files);
+    const sectorSlug = `${slug}-s${id}`;
+    await call("POST", "/api/projects", {
+      slug: sectorSlug,
+      name: `Sector ${id}`,
+      description: `Sector ${id} of ${name}: owns ${prefix}`,
+      public: true,
+      center: slug,
+      prefix,
+      source: { kind: "files", files },
+    });
+    slugs.push(sectorSlug);
+    await call("POST", `/api/p/${sectorSlug}/intents`, { intents: intentsFor(prefix, perSector, 42 + i) });
+    console.log(`sector ${sectorSlug} owns ${prefix}: ${perSector} intents`);
+  }
+  const { center } = await call("POST", "/api/centers", {
+    slug,
+    name,
+    description: `${sectors} sectors × ${perSector} scripted intents on 24 shared counters each. Sectors land in parallel; the Center composes one monorepo trunk.`,
     public: true,
-    center: slug,
-    prefix,
-    source: { kind: "files", files },
+    sectors: slugs,
+    files: monorepo,
   });
-  await call("POST", `/api/p/${sectorSlug}/intents`, { intents: intentsFor(prefix, perSector, 42 + i) });
-  slugs.push(sectorSlug);
-  console.log(`sector ${sectorSlug} owns ${prefix}: ${perSector} intents`);
+  console.log(`center ${slug}: monorepo trunk ${center.trunkRepo}, ${center.sectors.length} sectors`);
+} catch (err) {
+  console.error(`failed: ${err.message}`);
+  for (const s of slugs.reverse()) await call("DELETE", `/api/projects/${s}`).then(() => console.error(`deleted ${s}`), (e) => console.error(`could not delete ${s}: ${e.message}`));
+  if (/: 409 /.test(err.message)) console.error("That name is taken (an earlier run?): delete it with DELETE /api/projects/<slug> or /api/centers/<slug>, or pick another slug.");
+  process.exit(1);
 }
-const { center } = await call("POST", "/api/centers", {
-  slug,
-  name,
-  description: `${sectors} sectors × ${perSector} scripted intents on 24 shared counters each. Sectors land in parallel; the Center composes one monorepo trunk.`,
-  public: true,
-  sectors: slugs,
-  files: monorepo,
-});
-console.log(`center ${slug}: monorepo trunk ${center.trunkRepo}, ${center.sectors.length} sectors`);
