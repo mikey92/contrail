@@ -233,7 +233,13 @@ function rectFor(target: string, files: FileBox[], groups: GroupBox[], rests: Re
 	const [path, symbol] = target.split("#");
 	if (path.endsWith("/")) {
 		const g = groups.find((g) => g.name === path);
-		return g ?? null;
+		if (g) return g;
+		// A directory below a group's (source/internal/): the box around its files, or else the group it is in.
+		const inside: Rect[] = [...files.filter((f) => f.path.startsWith(path)), ...rests.filter((r) => [...r.paths].some((p) => p.startsWith(path)))];
+		if (!inside.length) return groups.find((g) => path.startsWith(g.name)) ?? null;
+		const x = Math.min(...inside.map((r) => r.x));
+		const y = Math.min(...inside.map((r) => r.y));
+		return { x, y, w: Math.max(...inside.map((r) => r.x + r.w)) - x, h: Math.max(...inside.map((r) => r.y + r.h)) - y };
 	}
 	const file = files.find((f) => f.path === path);
 	if (!file) {

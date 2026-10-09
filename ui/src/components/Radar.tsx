@@ -186,17 +186,21 @@ export function Radar({ slug, fixture }: { slug: string; fixture: string | null 
 							key={selected}
 							slug={slug}
 							fixture={fixture}
+							replay={recorded && !fixture}
 							flightId={selected}
 							flight={s.flights[selected]}
 							liveContrail={s.contrail}
 							landings={s.landings}
+							clearances={s.clearances}
+							agents={s.agents}
+							intents={s.intents}
 							onClose={() => setSelected(null)}
 							onWhy={setWhy}
 						/>
 					)}
 				</section>
 			</main>
-			{why && <WhyPanel slug={slug} fixture={fixture} target={why} onClose={() => setWhy(null)} />}
+			{why && <WhyPanel slug={slug} fixture={fixture} replay={recorded && !fixture} target={why} onClose={() => setWhy(null)} />}
 			{connect && <ConnectModal slug={slug} onClose={() => setConnect(false)} />}
 			{operator && <OperatorPanel slug={slug} playground={s.project?.playground} onClose={() => setOperator(false)} />}
 			{clone && <ClonePanel slug={slug} onClose={() => setClone(false)} />}

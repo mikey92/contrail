@@ -215,6 +215,8 @@ function toAction(m: any): Action | null {
 
 /** In a replay or fixture, the recorded time of the moment on screen: relTime() counts ages back from it. */
 let recordedNow: number | null = null;
+/** The recorded time on screen in a replay (null when live): what had happened by then is what a panel shows. */
+export const replayTime = () => recordedNow;
 
 /**
  * Server time at recording time 0. Events carry the server's clock and reach the recorder a few ms later,
@@ -480,6 +482,12 @@ export function useRadar(slug: string, fixture: string | null) {
 		const timer = setInterval(() => dispatch({ type: "expire" }), 1000);
 		return () => clearInterval(timer);
 	}, []);
+	// "12s ago" keeps counting when nothing happens: a fresh render every 15 seconds.
+	const [, setTick] = useState(0);
+	useEffect(() => {
+		const timer = setInterval(() => setTick((n) => n + 1), 15_000);
+		return () => clearInterval(timer);
+	}, []);
 
 	useEffect(() => {
 		const params = new URLSearchParams(location.search);
@@ -566,28 +574,44 @@ export function useRadar(slug: string, fixture: string | null) {
 		let opened = false;
 		let retry = 500;
 		let ping: number | undefined;
+		// Too big for the live feed (a large repository): the snapshot comes over HTTP. What the socket says while it
+		// is on its way waits, then goes on top of it; a snapshot that doesn't come is asked for again.
+		let pending: Action[] | null = null;
+		let resyncs = 0;
+		const resync = (attempt = 0) => {
+			const n = ++resyncs;
+			pending ??= [];
+			fetch(`/api/p/${slug}/snapshot`)
+				.then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+				.then((snapshot: RadarSnapshot) => {
+					if (closed || n !== resyncs) return;
+					const queued = pending ?? [];
+					pending = null;
+					dispatch({ type: "batch", actions: [{ type: "snapshot", snapshot }, ...queued], quiet: true });
+				})
+				.catch(() => {
+					if (!closed && n === resyncs) setTimeout(() => !closed && n === resyncs && resync(attempt + 1), Math.min(30_000, 1000 * 2 ** attempt));
+				});
+		};
 		const connect = () => {
 			const proto = location.protocol === "https:" ? "wss" : "ws";
 			ws = new WebSocket(`${proto}://${location.host}/api/p/${slug}/live`);
 			ws.onopen = () => {
 				opened = true;
 				retry = 500;
+				// A new socket starts with a snapshot of its own: an earlier resync is moot.
+				pending = null;
+				resyncs++;
 				dispatch({ type: "connected", value: true });
 				ping = setInterval(() => ws?.readyState === 1 && ws.send("ping"), 25000) as unknown as number;
 			};
 			ws.onmessage = (m) => {
 				if (m.data === "pong") return;
 				const message = JSON.parse(m.data);
-				// Too big for the live feed (a large repository): the snapshot comes over HTTP.
-				if (message?.kind === "resync") {
-					fetch(`/api/p/${slug}/snapshot`)
-						.then((r) => (r.ok ? r.json() : null))
-						.then((snapshot) => snapshot && !closed && dispatch({ type: "snapshot", snapshot }))
-						.catch(() => {});
-					return;
-				}
+				if (message?.kind === "resync") return resync();
 				const action = toAction(message);
-				if (action) dispatch(action);
+				if (action && pending) pending.push(action);
+				else if (action) dispatch(action);
 			};
 			ws.onclose = async () => {
 				clearInterval(ping);

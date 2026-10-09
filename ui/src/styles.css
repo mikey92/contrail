@@ -2584,8 +2584,10 @@ details.diffs summary {
 	}
 }
 @container topbar (max-width: 56em) {
+	/* Not "Reconnecting": a frozen radar must say so. */
 	.stats,
-	.live {
+	.live.on,
+	.live.replay {
 		display: none;
 	}
 }
@@ -2637,7 +2639,8 @@ details.diffs summary {
 		display: inline;
 	}
 	.stats,
-	.live {
+	.live.on,
+	.live.replay {
 		display: none;
 	}
 	.steps,

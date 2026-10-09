@@ -118,7 +118,7 @@ export function OperatorPanel({ slug, playground, onClose }: { slug: string; pla
 						</div>
 					</section>
 				)}
-				<form class="op" onSubmit={submit(() => intentTitle && call("/intents", { intents: [{ title: intentTitle, body: intentBody, priority: 5 }] }).then((ok) => ok && setIntentTitle("")))}>
+				<form class="op" onSubmit={submit(() => intentTitle && call("/intents", { intents: [{ title: intentTitle, body: intentBody, priority: 5 }] }).then((ok) => ok && (setIntentTitle(""), setIntentBody(""))))}>
 					<h3>File an intent</h3>
 					<label class="field">
 						<span class="sr-only">Title</span>

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "preact/hooks";
 import type { Agent, Clearance, ContrailEntry, Flight, Intent, Landing } from "../../../src/shared/types";
-import { relTime, statusLabel, tidy, toned } from "../store";
+import { relTime, replayTime, statusLabel, tidy, toned } from "../store";
 import { Dialog } from "./Dialog";
 import { Icon, Spinner } from "./Icons";
 import { AiReviewNote, Diff } from "./Review";
@@ -38,19 +38,28 @@ async function load(slug: string, fixture: string | null, ref: string, code: str
 export function FlightDrawer({
 	slug,
 	fixture,
+	replay = false,
 	flightId,
 	flight,
 	liveContrail,
 	landings,
+	clearances: liveClearances = [],
+	agents = {},
+	intents = {},
 	onClose,
 	onWhy,
 }: {
 	slug: string;
 	fixture: string | null;
+	/** A recorded run: the flight as it was at the moment on screen, not as the live airspace has it now. */
+	replay?: boolean;
 	flightId: string;
 	flight: Flight | undefined;
 	liveContrail: ContrailEntry[];
 	landings: Record<string, Landing>;
+	clearances?: Clearance[];
+	agents?: Record<string, Agent>;
+	intents?: Record<string, Intent>;
 	onClose: () => void;
 	onWhy: (t: string) => void;
 }) {
@@ -62,11 +71,24 @@ export function FlightDrawer({
 		let cancelled = false;
 		load(slug, fixture, flightId, flight?.code)
 			.then((d) => !cancelled && (setDetail(d), setError(null)))
-			.catch(() => !cancelled && setError("This flight’s details aren’t available."));
+			.catch(() => {
+				if (cancelled) return;
+				// A replay whose live airspace has moved on (a new round): what the recording itself knows.
+				const agent = flight && agents[flight.agentId];
+				const intent = flight && intents[flight.intentId];
+				if (replay && flight && agent && intent) setDetail({ flight, agent, intent, clearances: [], contrail: [], landings: [] });
+				else setError("This flight’s details aren’t available.");
+			});
 		return () => {
 			cancelled = true;
 		};
 	}, [flightId, version]);
+	// On one column (a phone, a narrow window) the drawer opens below the map: bring it into view.
+	useEffect(() => {
+		if (!matchMedia("(max-width: 1100px)").matches) return;
+		const smooth = !matchMedia("(prefers-reduced-motion: reduce)").matches;
+		requestAnimationFrame(() => document.querySelector(".drawer")?.scrollIntoView({ block: "start", behavior: smooth ? "smooth" : "auto" }));
+	}, [flightId]);
 
 	if (error && !detail) {
 		return (
@@ -84,12 +106,18 @@ export function FlightDrawer({
 				</span>
 			</aside>
 		);
-	const { agent, intent, clearances, contrail } = detail;
+	const { agent, intent } = detail;
 	const f = flight ?? detail.flight;
 	const flightLandings = Object.values(landings)
 		.filter((l) => l.flightId === flightId)
 		.sort((a, b) => a.seq - b.seq);
-	const allLandings = flightLandings.length ? flightLandings : detail.landings;
+	// In a replay, only what had happened by the moment on screen: the live airspace knows how it ended.
+	const at = replay ? replayTime() : null;
+	const allLandings = replay ? flightLandings : flightLandings.length ? flightLandings : detail.landings;
+	const clearances = replay ? liveClearances.filter((c) => c.flightId === flightId) : detail.clearances;
+	const contrail = replay
+		? (detail.contrail.length ? detail.contrail : liveContrail.filter((c) => c.flightId === flightId)).filter((e) => at === null || e.at <= at)
+		: detail.contrail;
 
 	return (
 		<aside class="drawer" aria-label={`Flight ${f.code}`}>
@@ -251,7 +279,7 @@ interface WhyResult {
 	note?: string;
 }
 
-export function WhyPanel({ slug, fixture, target, onClose }: { slug: string; fixture: string | null; target: string; onClose: () => void }) {
+export function WhyPanel({ slug, fixture, replay = false, target, onClose }: { slug: string; fixture: string | null; replay?: boolean; target: string; onClose: () => void }) {
 	const [data, setData] = useState<WhyResult | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	useEffect(() => {
@@ -272,6 +300,9 @@ export function WhyPanel({ slug, fixture, target, onClose }: { slug: string; fix
 			cancelled = true;
 		};
 	}, [target]);
+	// In a replay, the landings made by the moment on screen (the live airspace has the ones after it too).
+	const at = replay ? replayTime() : null;
+	const history = data ? data.history.filter((h) => at === null || Date.parse(h.when) <= at) : [];
 	return (
 		<Dialog kicker="Why this code looks the way it does" title={target} titleMono wide onClose={onClose}>
 			{!data && !error && (
@@ -286,7 +317,8 @@ export function WhyPanel({ slug, fixture, target, onClose }: { slug: string; fix
 				</div>
 			)}
 			{data?.note && <div class="muted">{data.note}</div>}
-			{data?.history.map((h) => (
+			{data && at !== null && data.history.length > 0 && history.length === 0 && <div class="muted">Nothing had landed on this code yet at this point of the replay.</div>}
+			{history.map((h) => (
 				<div key={h.commit} class="why-item">
 					<div class="why-top">
 						<span class="mono sha">{h.commit}</span>
