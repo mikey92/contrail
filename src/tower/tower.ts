@@ -940,6 +940,8 @@ export class Tower extends DurableObject<Env> {
 				radio: this.drainRadio(flightId),
 			};
 		} catch (err) {
+			// Ended meanwhile (Stop, abort): that already released, reopened and reported it.
+			if (this.flightById(flightId).status === "aborted") throw err;
 			this.setFlightStatus(flightId, "aborted");
 			this.releaseAll(flightId);
 			this.sql.exec("UPDATE intents SET status = 'open', flight_id = NULL WHERE id = ? AND flight_id = ?", intent.id, flightId);
@@ -1154,8 +1156,12 @@ export class Tower extends DurableObject<Env> {
 	async releaseClearance(agentId: string, input: { targets?: string[]; flight?: string }): Promise<{ released: string[]; radio: RadioMessage[] }> {
 		const flight = this.ownFlight(agentId, input.flight);
 		this.touchAgent(agentId);
-		// The same names request_clearance stored: `src/cart.js#add` is `src/cart.js#Cart.add`.
-		const targets = input.targets?.map((t) => this.resolveTarget(normalizeTarget(String(t).slice(0, 300))));
+		// As asked, and as request_clearance would store it now (`src/cart.js#add` is `src/cart.js#Cart.add`): a name
+		// granted for code that didn't exist yet stays as it was asked for, even once trunk has the code.
+		const targets = input.targets?.flatMap((t) => {
+			const asked = normalizeTarget(String(t).slice(0, 300));
+			return [asked, this.resolveTarget(asked)];
+		});
 		const mine = this.rows<{ id: string; target: string }>("SELECT id, target FROM clearances WHERE flight_id = ?", flight.id);
 		const released = mine.filter((c) => !targets || targets.includes(c.target));
 		for (const c of released) this.sql.exec("DELETE FROM clearances WHERE id = ?", c.id);

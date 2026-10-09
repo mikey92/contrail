@@ -181,6 +181,38 @@ describe("Tower", () => {
 		expect((await a.tower.requestClearance(y, { targets: ["src/cart.js#Cart.add"] })).granted).toEqual(["src/cart.js#Cart.add"]);
 	});
 
+	it("releases a clearance for new code by its name, after trunk got code of that name meanwhile", async () => {
+		const a = await airspace();
+		await a.tower.addIntents([{ title: "One" }, { title: "Two" }], "operator");
+		const [x, y] = [await a.join("X"), await a.join("Y")];
+		await a.fly(x);
+		const fy = await a.fly(y);
+		expect((await a.tower.requestClearance(x, { targets: ["src/cart.js#discount"] })).granted).toEqual(["src/cart.js#discount"]);
+		await a.tower.requestClearance(y, { targets: ["src/cart.js#discount"] });
+		expect(a.flight(fy.id)).toBe("holding");
+		// Another flight lands Cart.discount: the name X asked for now resolves to it.
+		const files = [{ ...FILES[0], symbols: [...FILES[0].symbols, { name: "Cart.discount", kind: "method", start: 21, end: 29 }] }];
+		a.db.prepare("INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)").run("trunk", JSON.stringify({ head: "t2", files, landedCount: 1 }));
+		expect((await a.tower.releaseClearance(x, { targets: ["src/cart.js#discount"] })).released).toEqual(["src/cart.js#discount"]);
+		expect(a.flight(fy.id)).toBe("airborne");
+	});
+
+	it("reports a take-off that Stop ended once, not twice", async () => {
+		const fork = gate();
+		const a = await airspace({ fork: () => fork.wait });
+		await a.tower.addIntents([{ title: "One" }], "operator");
+		const [e1] = (await a.tower.launchEdge({ count: 1, mode: "scripted", limit: 50 })).launched.map((x) => x.id);
+		const taking = a.tower.takeOff(e1).catch((err) => err);
+		await tick();
+		expect(a.rows("SELECT status FROM flights")).toEqual([{ status: "taxiing" }]);
+		await a.tower.stopEdge();
+		fork.open();
+		expect(await taking).toBeInstanceOf(Error);
+		expect(a.rows("SELECT status FROM flights")).toEqual([{ status: "aborted" }]);
+		expect(a.rows("SELECT type FROM events WHERE type = 'flight.aborted'")).toHaveLength(1);
+		expect(a.rows("SELECT status, flight_id FROM intents")).toEqual([{ status: "open", flight_id: null }]);
+	});
+
 	describe("ends a flight whose agent can't fly it any more once the runway has had its say", () => {
 		async function onRunway(status: Status) {
 			const runway = gate();
