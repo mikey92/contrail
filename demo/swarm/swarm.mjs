@@ -164,18 +164,19 @@ function launch({ kind, model, callsign, key }) {
   const child = spawn(cmd, cmdArgs, { cwd: dir, env, stdio: ["ignore", "pipe", "pipe"] });
   let buf = "";
   child.stdout.on("data", (chunk) => {
-    raw.write(chunk);
     buf += chunk.toString();
     let i;
     while ((i = buf.indexOf("\n")) !== -1) {
       const line = buf.slice(0, i);
       buf = buf.slice(i + 1);
+      // The raw log keeps every line, but not the workspace tokens in clone URLs.
+      raw.write(`${redact(line)}\n`);
       const r = readable(kind, line);
       if (r) log.write(`${new Date().toISOString().slice(11, 19)} ${r}\n`);
     }
   });
   child.stderr.on("data", (chunk) => log.write(`stderr: ${redact(chunk.toString())}`));
-  return new Promise((resolve) => child.on("close", (code) => (raw.end(), log.end(), resolve({ callsign, code }))));
+  return new Promise((resolve) => child.on("close", (code) => (raw.end(buf ? redact(buf) : undefined), log.end(), resolve({ callsign, code }))));
 }
 
 const roster = [

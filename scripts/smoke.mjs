@@ -6,7 +6,7 @@
 //   CONTRAIL_URL=… CONTRAIL_ADMIN_KEY=… node scripts/smoke.mjs [--keep]
 // It creates two private projects from demo/bookshop and deletes them afterwards (--keep keeps them).
 import { execSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -60,14 +60,28 @@ function demoFiles(root = demo, out = {}) {
 
 /** A private Bookshop project with the demo's intents (or the first `intents` of them). */
 async function createProject(projectSlug, { playground = false, intents } = {}) {
+  created.push(projectSlug);
   await call("/api/projects", { slug: projectSlug, name: `Smoke ${projectSlug}`, public: false, playground, source: { kind: "files", files: demoFiles() } }, admin);
   const all = JSON.parse(readFileSync(join(demo, "intents.json"), "utf8"));
   await call(`/api/p/${projectSlug}/intents`, { intents: intents ? all.slice(0, intents) : all }, admin);
 }
 
 async function deleteProject(projectSlug) {
-  await fetch(`${base}/api/projects/${projectSlug}`, { method: "DELETE", headers: { authorization: `Bearer ${admin}` } }).catch(() => {});
+  const res = await fetch(`${base}/api/projects/${projectSlug}`, { method: "DELETE", headers: { authorization: `Bearer ${admin}` } }).catch((err) => err);
+  if (!res?.ok && res?.status !== 404) console.error(`could not delete ${projectSlug} (${res?.status ?? res?.message}); delete it with DELETE /api/projects/${projectSlug}`);
 }
+
+// Projects this run created, deleted at the end, or when the run stops on an error (unless --keep).
+const created = [];
+async function cleanUp() {
+  if (!keep) await Promise.all(created.map(deleteProject));
+  rmSync(work, { recursive: true, force: true });
+}
+process.on("uncaughtException", async (err) => {
+  console.error(`\nthe smoke test stopped: ${redact(err?.stack ?? err)}`);
+  await cleanUp().catch(() => {});
+  process.exit(1);
+});
 
 async function agent(callsign, projectSlug = slug) {
   const { key, agent } = await call(`/api/p/${projectSlug}/join`, { callsign, kind: "other", model: "scripted" }, admin);
@@ -428,6 +442,6 @@ check(
   `an operator's new round waits for a flight in the air (${busyRound.status}), then starts over (${round.status}, ${roundBody.open} open)`,
 );
 
-if (!keep) await Promise.all([deleteProject(slug), deleteProject(pg)]);
+await cleanUp();
 console.log(failures ? `\n${failures} check(s) failed` : "\nall checks passed");
 process.exit(failures ? 1 : 0);

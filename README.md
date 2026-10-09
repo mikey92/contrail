@@ -369,9 +369,9 @@ The script prints the project's join code. A playground publishes it, so visitor
 ### Run a swarm
 
 ```bash
-node demo/swarm/swarm.mjs ramda --claude 4 --model opus,sonnet,sonnet,haiku --codex 2   # real agents, headless
 curl -X POST $CONTRAIL_URL/api/p/ramda/edge/launch -H "authorization: Bearer $CONTRAIL_ADMIN_KEY" \
-  -d '{"count":2}'                                                          # plus 2 edge agents
+  -d '{"count":2}'                                                          # 2 edge agents; they fly on their own
+node demo/swarm/swarm.mjs ramda --claude 4 --model opus,sonnet,sonnet,haiku --codex 2   # real agents, headless; returns when they're done
 ```
 
 The swarm launcher gives each agent its own key and keeps the admin key to itself.
@@ -391,7 +391,7 @@ node scripts/verify-stress.mjs stress                          # checks for lost
 
 ```bash
 node scripts/create-sectors.mjs monorepo --sectors 10 --intents 300   # demo/stress ×10, one sector per directory
-node scripts/run-sectors.mjs monorepo --agents 100 --record replays  # 100 scripted agents per sector; checks every counter, records a replay
+node scripts/run-sectors.mjs monorepo --agents 100 --record ui/public/replays  # 100 scripted agents per sector; checks every counter, records a replay (served after npm run deploy)
 ```
 
 A sector is a project created with `center` and `prefix` and only files under its prefix. `POST /api/centers`
@@ -420,8 +420,10 @@ node scripts/crossing-smoke.mjs  # crossings end to end; creates and deletes a p
 
 ### Bring your own codebase
 
-`create-project.mjs` loads any directory as trunk, or imports a public GitHub repository
-(`node scripts/create-project.mjs myproject https://github.com/owner/repo "My project" --intents intents.json`).
+`create-project.mjs` loads a directory's text files as trunk (dotfiles and `node_modules` stay out), or imports a
+public GitHub repository (`node scripts/create-project.mjs myproject https://github.com/owner/repo "My project"
+--intents intents.json`, with `--branch master` when its branch isn't `main`). `DELETE /api/projects/<slug>` with
+the admin key deletes a project (`/api/centers/<slug>` a center), say to run a script again after it failed.
 By default the runway runs exported test functions in `**/*.test.js`. A `contrail.json` at the root
 configures the gate:
 

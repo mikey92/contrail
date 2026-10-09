@@ -2,8 +2,9 @@
 // Creates a Contrail project from a local directory (or a public GitHub repository) and loads its intents.
 //   CONTRAIL_URL=https://… CONTRAIL_ADMIN_KEY=… node scripts/create-project.mjs <slug> <dir | https://github.com/owner/repo> [name]
 //     [--playground] [--private] [--intents file.json] [--branch main]
-// Files in <dir> (except intents.json) become the initial trunk; <dir>/intents.json (or --intents) is loaded as
-// intents. A GitHub URL is imported by Artifacts itself; pass its intents with --intents.
+// Text files in <dir> (except intents.json, dotfiles and node_modules) become the initial trunk; <dir>/intents.json
+// (or --intents) is loaded as intents. A GitHub URL is imported by Artifacts itself, from --branch (main unless
+// you say otherwise); pass its intents with --intents.
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { join, relative } from "node:path";
 
@@ -20,23 +21,37 @@ const [slug, dir, name] = positional;
 const base = process.env.CONTRAIL_URL;
 const admin = process.env.CONTRAIL_ADMIN_KEY;
 if (!slug || !dir || !base || !admin) {
-  console.error("usage: CONTRAIL_URL=… CONTRAIL_ADMIN_KEY=… node scripts/create-project.mjs <slug> <dir | https://github.com/owner/repo> [name] [--playground] [--private] [--intents file.json]");
+  console.error("usage: CONTRAIL_URL=… CONTRAIL_ADMIN_KEY=… node scripts/create-project.mjs <slug> <dir | https://github.com/owner/repo> [name] [--playground] [--private] [--intents file.json] [--branch main]");
+  process.exit(2);
+}
+if (option("--intents") && !existsSync(option("--intents"))) {
+  console.error(`no intents file at ${option("--intents")}`);
   process.exit(2);
 }
 const github = /^https:\/\/github\.com\/[^/]+\/[^/]+/.test(dir);
 
+// Trunk takes text: a file that isn't UTF-8 (an image, say) is left out, and said so, rather than mangled.
+const utf8 = new TextDecoder("utf-8", { fatal: true });
+const skipped = [];
 function walk(root, out = {}) {
   for (const entry of readdirSync(root)) {
     if (entry === "node_modules" || entry.startsWith(".")) continue;
     const full = join(root, entry);
     if (statSync(full).isDirectory()) walk(full, out);
-    else out[relative(dir, full)] = readFileSync(full, "utf8");
+    else {
+      try {
+        out[relative(dir, full)] = utf8.decode(readFileSync(full));
+      } catch {
+        skipped.push(relative(dir, full));
+      }
+    }
   }
   return out;
 }
 
 const files = github ? null : walk(dir);
 if (files) delete files["intents.json"];
+if (skipped.length) console.warn(`left out ${skipped.length} file(s) that aren't UTF-8 text: ${skipped.slice(0, 5).join(", ")}${skipped.length > 5 ? ", …" : ""}`);
 const headers = { "content-type": "application/json", authorization: `Bearer ${admin}` };
 
 const res = await fetch(`${base}/api/projects`, {

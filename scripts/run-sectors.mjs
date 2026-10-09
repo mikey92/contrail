@@ -128,6 +128,7 @@ if (!verifyOnly) {
 
 let snap = first;
 let lastPrint = 0;
+let timedOut = false;
 const history = [];
 while (!verifyOnly) {
   await sleep(record ? 1000 : 3000);
@@ -146,6 +147,7 @@ while (!verifyOnly) {
   if (landed === intents && snap.behind === 0 && snap.composedAt && snap.sectors.every((s) => !s.summary?.lastLanding || snap.composedAt >= s.summary.lastLanding)) break;
   if (Date.now() - t0 > timeoutS * 1000) {
     console.log("timed out");
+    timedOut = true;
     break;
   }
 }
@@ -211,4 +213,5 @@ console.log(`\n${result.landed}/${result.intents} landed by ${result.agents} age
 console.log(`monorepo trunk: ${result.compositions} compositions, caught up ${result.monorepoCaughtUpSeconds} s after the last landing`);
 console.log(lost || mismatched ? `${lost} counter(s) disagree, ${mismatched} monorepo file(s) differ` : "no lost updates: every counter matches its landed increments, in every sector and in the monorepo");
 if (out) writeFileSync(out, JSON.stringify(result, null, 2));
-process.exit(lost || mismatched ? 1 : 0);
+if (timedOut) console.log(`not finished: timed out after ${timeoutS} s`);
+process.exit(lost || mismatched || timedOut ? 1 : 0);

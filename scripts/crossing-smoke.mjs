@@ -7,7 +7,7 @@
 //   CONTRAIL_URL=… CONTRAIL_ADMIN_KEY=… node scripts/crossing-smoke.mjs [--keep]
 // It creates a private center with two sectors and deletes it afterwards (--keep keeps it).
 import { execSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -49,6 +49,25 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Clone URLs carry short-lived repo tokens: keep them out of error messages.
 const redact = (text) => String(text).replace(/:\/\/[^@\s/]+@/g, "://***@");
+
+// What this run created, deleted at the end, or when the run stops on an error (unless --keep).
+const created = { center: false, sectors: [] };
+async function remove(path) {
+  const res = await fetch(`${base}${path}`, { method: "DELETE", headers: { authorization: `Bearer ${admin}` } }).catch((err) => err);
+  if (!res?.ok && res?.status !== 404) console.error(`could not delete ${path} (${res?.status ?? res?.message})`);
+}
+async function cleanUp() {
+  if (!keep) {
+    if (created.center) await remove(`/api/centers/${slug}`);
+    await Promise.all(created.sectors.map((s) => remove(`/api/projects/${s}`)));
+  }
+  rmSync(work, { recursive: true, force: true });
+}
+process.on("uncaughtException", async (err) => {
+  console.error(`\nthe crossing test stopped: ${redact(err?.stack ?? err)}`);
+  await cleanUp().catch(() => {});
+  process.exit(1);
+});
 function sh(cmd, cwd) {
   try {
     return execSync(cmd, { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" });
@@ -82,8 +101,11 @@ const sectors = [
 const [orders, web] = sectors;
 
 console.log(`crossing smoke test on ${base}/c/${slug} (workdir ${work})`);
-for (const s of sectors)
+for (const s of sectors) {
+  created.sectors.push(s.slug);
   await post("/api/projects", { slug: s.slug, name: s.name, description: `Owns ${s.prefix}`, public: false, center: slug, prefix: s.prefix, source: { kind: "files", files: s.files } });
+}
+created.center = true;
 await post("/api/centers", {
   slug,
   name: `Crossing smoke ${slug}`,
@@ -252,9 +274,6 @@ check(after4.flight.status === "aborted" && after4.intent.status === "cancelled"
 const snap = await get(`/api/c/${slug}`);
 check(snap.openIntents === 1 && snap.crossings[0].status === "aborted", "the crossing's intent is open again");
 
-if (!keep) {
-  await request("DELETE", `/api/centers/${slug}`).catch(() => {});
-  await Promise.all(sectors.map((s) => request("DELETE", `/api/projects/${s.slug}`).catch(() => {})));
-}
+await cleanUp();
 console.log(failures ? `\n${failures} check(s) failed` : "\nall checks passed");
 process.exit(failures ? 1 : 0);

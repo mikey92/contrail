@@ -3,7 +3,8 @@
 // feature that isn't there, a hidden network call). Diffs come from the same code as production's. It calls the
 // live API, so it runs only when asked:
 //   REVIEW_EVAL=1 [REVIEW_RUNS=5] [REVIEW_CASES=name,…] [CLOUDFLARE_ACCOUNT_ID=…] [CLOUDFLARE_API_TOKEN=…] npx vitest run test/review-eval.test.ts
-// Without a token in the environment it uses the one `wrangler login` saved.
+// Each case runs 5 times unless REVIEW_RUNS says otherwise. Without a token in the environment it uses the one
+// `wrangler login` saved.
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -199,7 +200,12 @@ const cases = (): Case[] => [
 function credentials(): { token: string; account?: string } | null {
 	if (!process.env.REVIEW_EVAL) return null;
 	if (process.env.CLOUDFLARE_API_TOKEN) return { token: process.env.CLOUDFLARE_API_TOKEN, account: process.env.CLOUDFLARE_ACCOUNT_ID };
-	const file = [join(homedir(), ".wrangler/config/default.toml"), join(homedir(), "Library/Preferences/.wrangler/config/default.toml")].find((p) => existsSync(p));
+	// Where wrangler keeps its login: the old folder, then the system's config folder (macOS, then Linux).
+	const file = [
+		join(homedir(), ".wrangler/config/default.toml"),
+		join(homedir(), "Library/Preferences/.wrangler/config/default.toml"),
+		join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), ".wrangler/config/default.toml"),
+	].find((p) => existsSync(p));
 	const token = file && /^oauth_token\s*=\s*"([^"]+)"/m.exec(readFileSync(file, "utf8"))?.[1];
 	return token ? { token, account: process.env.CLOUDFLARE_ACCOUNT_ID } : null;
 }
@@ -216,13 +222,19 @@ describe("the bookshop cases", () => {
 });
 
 const creds = credentials();
+// Asked for but impossible: say so instead of skipping quietly.
+it.runIf(process.env.REVIEW_EVAL && !creds)("has a Workers AI token for REVIEW_EVAL", () => {
+	throw new Error("REVIEW_EVAL is set but there is no token: set CLOUDFLARE_API_TOKEN, or run `npx wrangler login`");
+});
 describe.skipIf(!creds)("AI review on Workers AI", () => {
 	it(
 		"judges the cases the way a careful reviewer would",
 		async () => {
 			const { token } = creds!;
 			const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
-			const account = creds!.account ?? ((await (await fetch("https://api.cloudflare.com/client/v4/accounts", { headers })).json()) as { result: { id: string }[] }).result[0].id;
+			const accounts = creds!.account ? null : ((await (await fetch("https://api.cloudflare.com/client/v4/accounts", { headers })).json()) as { success: boolean; result?: { id: string }[] });
+			const account = creds!.account ?? accounts?.result?.[0]?.id;
+			if (!account) throw new Error("Cloudflare didn't accept the token (an expired `wrangler login`? run `npx wrangler whoami`), or it reaches no account");
 			const ai = {
 				async run(model: string, input: unknown) {
 					const res = (await (await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}/ai/run/${model}`, { method: "POST", headers, body: JSON.stringify(input) })).json()) as {
@@ -234,7 +246,7 @@ describe.skipIf(!creds)("AI review on Workers AI", () => {
 					return res.result;
 				},
 			};
-			const runs = Number(process.env.REVIEW_RUNS ?? 3);
+			const runs = Number(process.env.REVIEW_RUNS ?? 5);
 			const reviewers = process.env.REVIEW_MODEL ? [process.env.REVIEW_MODEL] : reviewersFor({ kind: "claude-code" });
 			const rows: { case: string; expected: string; got: string; ms: number; reason: string }[] = [];
 			const only = (process.env.REVIEW_CASES ?? "").split(",").filter(Boolean);
