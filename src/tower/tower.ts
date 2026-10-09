@@ -185,6 +185,10 @@ export class Tower extends DurableObject<Env> {
 			// A crossing's leg cannot be replayed on its own: it lands with the other sectors or not at all.
 			for (const r of this.sql.exec("UPDATE landings SET status = 'failed', error = 'interrupted by a restart: request landing again', finished_at = ? WHERE status IN ('merging', 'verifying') AND crossing IS NOT NULL RETURNING flight_id", Date.now()).toArray())
 				this.sql.exec("UPDATE flights SET status = 'diverted' WHERE id = ? AND status = 'approach'", r.flight_id as string);
+			// A take-off the restart interrupted never gave its agent a workspace and can't go on where it was: it
+			// ends, so its intent can fly again and its agent can take off again.
+			for (const r of this.sql.exec("UPDATE flights SET status = 'aborted', updated_at = ? WHERE status = 'taxiing' RETURNING id, intent_id", Date.now()).toArray())
+				this.sql.exec("UPDATE intents SET status = 'open', flight_id = NULL WHERE id = ? AND status = 'assigned' AND flight_id = ?", r.intent_id as string, r.id as string);
 		});
 	}
 
@@ -778,17 +782,22 @@ export class Tower extends DurableObject<Env> {
 
 	// ───────────────────────── flights ─────────────────────────
 
-	async takeOff(agentId: string, opts: { intent?: string | number | null; leg?: boolean } = {}): Promise<TakeOffResult | { idle: true; message: string; radio: RadioMessage[] }> {
-		// A playground starting over takes no new flights until it has.
-		if (this.restarting) await this.restarting.catch(() => false);
-		const agent = this.agentById(agentId);
+	/** An agent takes off only with a key still good and no flight of its own in the air. */
+	private canTakeOff(agentId: string) {
 		if (this.row<{ revoked_at: number | null }>("SELECT revoked_at FROM agents WHERE id = ?", agentId)?.revoked_at) throw new Error("this agent's key was revoked by the operator");
-		this.touchAgent(agentId);
 		const active = this.row(`SELECT * FROM flights WHERE agent_id = ? AND status IN (${ACTIVE.map(() => "?").join(",")})`, agentId, ...ACTIVE);
 		if (active) {
 			const f = this.toFlight(active);
 			throw new Error(`you are already flying ${f.code} (${f.status}); land it or call abort before taking off again`);
 		}
+	}
+
+	async takeOff(agentId: string, opts: { intent?: string | number | null; leg?: boolean } = {}): Promise<TakeOffResult | { idle: true; message: string; radio: RadioMessage[] }> {
+		// A playground starting over takes no new flights until it has.
+		if (this.restarting) await this.restarting.catch(() => false);
+		const agent = this.agentById(agentId);
+		this.canTakeOff(agentId);
+		this.touchAgent(agentId);
 		// Every take-off forks a repository: an agent that takes off and aborts in a loop would pile them up.
 		const recent = this.row<{ c: number }>("SELECT COUNT(*) AS c FROM flights WHERE agent_id = ? AND created_at > ?", agentId, now() - 600_000)?.c ?? 0;
 		if (recent >= TAKEOFFS_PER_10_MIN) throw new Error(`you have taken off ${recent} times in ten minutes; land what you take, or wait a few minutes`);
@@ -798,6 +807,8 @@ export class Tower extends DurableObject<Env> {
 		if (this.meta<number>("testCommandChecked", 0) < TEST_COMMAND_CHECK) await this.readTestCommand().catch(() => {});
 		let next = this.nextIntent(opts.intent, opts.leg);
 		if (!next && (await this.restartPlayground())) next = this.nextIntent(opts.intent, opts.leg);
+		// Awaited above: another take-off by this agent (a retry, say) may have gone first, or its key been revoked.
+		this.canTakeOff(agentId);
 		if (!next || "wait" in next) {
 			const waiting = this.row<{ c: number }>("SELECT COUNT(*) AS c FROM intents WHERE status = 'open'")?.c ?? 0;
 			return {
@@ -1138,7 +1149,8 @@ export class Tower extends DurableObject<Env> {
 	async releaseClearance(agentId: string, input: { targets?: string[]; flight?: string }): Promise<{ released: string[]; radio: RadioMessage[] }> {
 		const flight = this.ownFlight(agentId, input.flight);
 		this.touchAgent(agentId);
-		const targets = input.targets?.map(normalizeTarget);
+		// The same names request_clearance stored: `src/cart.js#add` is `src/cart.js#Cart.add`.
+		const targets = input.targets?.map((t) => this.resolveTarget(normalizeTarget(String(t).slice(0, 300))));
 		const mine = this.rows<{ id: string; target: string }>("SELECT id, target FROM clearances WHERE flight_id = ?", flight.id);
 		const released = mine.filter((c) => !targets || targets.includes(c.target));
 		for (const c of released) this.sql.exec("DELETE FROM clearances WHERE id = ?", c.id);
@@ -1177,6 +1189,11 @@ export class Tower extends DurableObject<Env> {
 				this.setFlightStatus(flight.id, "airborne");
 				this.patch("flight", this.flightById(flight.id));
 			}
+		}
+		// A flight whose last hold went another way (released by its agent, or lapsed) isn't holding either.
+		for (const r of this.rows<{ id: string }>("SELECT id FROM flights f WHERE status = 'holding' AND NOT EXISTS (SELECT 1 FROM clearances c WHERE c.flight_id = f.id AND c.status = 'holding')")) {
+			this.setFlightStatus(r.id, "airborne");
+			this.patch("flight", this.flightById(r.id));
 		}
 	}
 
@@ -1466,6 +1483,7 @@ export class Tower extends DurableObject<Env> {
 		if (flight.status !== "approach") return;
 		this.setFlightStatus(flight.id, "diverted");
 		this.patch("flight", this.flightById(flight.id));
+		this.endIfOrphaned(flight.id);
 	}
 
 	/** Records what a train left on trunk; a sector tells its Center, which folds the new trunk into the monorepo. */
@@ -1558,6 +1576,7 @@ export class Tower extends DurableObject<Env> {
 				{ flightId: flight.id, agentId: agent.id, data: { landingId: landing.id, commit: o.trunkAfter, changes: o.changes, ms: o.ms, ...(l.crossing ? { crossing: l.crossing } : {}) } },
 			);
 			this.notifyTurbulence(flight, agent.callsign, intent, o.changes);
+			this.endIfOrphaned(flight.id);
 			return;
 		}
 
@@ -1590,6 +1609,7 @@ export class Tower extends DurableObject<Env> {
 				agentId: agent.id,
 				data: { landingId: l.id, conflicts },
 			});
+			this.endIfOrphaned(flight.id);
 			return;
 		}
 
@@ -1600,6 +1620,20 @@ export class Tower extends DurableObject<Env> {
 		this.addContrail(flight.id, null, "test", `Landing rejected: ${o.error}${failing.length ? `\n${failing.join("\n")}` : ""}`);
 		this.patch("flight", this.flightById(flight.id));
 		this.emit("landing.failed", `${flight.code} diverted: ${o.error}`, { flightId: flight.id, agentId: agent.id, data: { landingId: l.id, tests: o.tests } });
+		this.endIfOrphaned(flight.id);
+	}
+
+	/**
+	 * A flight sent back (diverted) whose agent can't fly it any more ends, so its intent flies again: its key was
+	 * revoked, or the operator stopped its edge agent, while the runway had its landing.
+	 */
+	private endIfOrphaned(flightId: string) {
+		const orphans = this.meta<string[]>("orphanFlights", []);
+		const flight = this.flightById(flightId);
+		const revoked = this.row<{ revoked_at: number | null }>("SELECT revoked_at FROM agents WHERE id = ?", flight.agentId)?.revoked_at;
+		if (flight.status === "diverted" && (revoked || orphans.includes(flightId)))
+			this.endFlight(flight, null, revoked ? "its agent's key was revoked" : "its edge agent was stopped");
+		if (orphans.includes(flightId)) this.setMeta("orphanFlights", orphans.filter((id) => id !== flightId));
 	}
 
 	/** Which landed flights changed the lines this flight now conflicts with. */
@@ -1895,6 +1929,7 @@ export class Tower extends DurableObject<Env> {
 		this.sendRadio(flight.id, "review", `${reviewer} requested changes${asked ? `: ${sentence(asked)}` : ""}. Fix, push, and request_landing again.`);
 		this.addContrail(flight.id, null, "decision", `Changes requested by ${reviewer}${asked ? `: ${asked}` : ""}`);
 		this.emit("review.rejected", `${reviewer} sent ${flight.code} back${comment ? ` — ${comment}` : ""}`, { flightId: flight.id });
+		this.endIfOrphaned(flight.id);
 		return landing;
 	}
 
@@ -1921,8 +1956,9 @@ export class Tower extends DurableObject<Env> {
 			});
 			launched.push(agent);
 		}
-		// Read again: another launch may have added agents while this one awaited.
-		this.setMeta("edgeFleet", [...new Set([...this.meta<string[]>("edgeFleet", []), ...launched.map((a) => a.id)])]);
+		// Read again: another launch may have added agents while this one awaited. Agents that finished leave the list.
+		const finished = new Set(fleet.filter((_, i) => statuses[i] && (statuses[i].phase === "done" || statuses[i].phase === "stopped")));
+		this.setMeta("edgeFleet", [...new Set([...this.meta<string[]>("edgeFleet", []).filter((id) => !finished.has(id)), ...launched.map((a) => a.id)])]);
 		if (launched.length)
 			this.emit(
 				"edge.launched",
@@ -2003,7 +2039,10 @@ export class Tower extends DurableObject<Env> {
 			this.sql.exec("DELETE FROM intents WHERE created_by != 'operator'");
 			this.sql.exec("UPDATE intents SET status = 'open', flight_id = NULL, landed_commit = NULL");
 			for (const table of ["flights", "clearances", "landings", "contrail", "inbox", "symbol_history", "events"]) this.sql.exec(`DELETE FROM ${table}`);
-			this.setMeta("edgeFleet", []);
+			// The operator's round stopped the edge agents first; a round that starts over by itself keeps them, since
+			// one with flights left flies on into the new round and Stop must still reach it.
+			if (byOperator) this.setMeta("edgeFleet", []);
+			this.setMeta("orphanFlights", []);
 			const open = this.row<{ c: number }>("SELECT COUNT(*) AS c FROM intents")?.c ?? 0;
 			this.emit(
 				"project.reset",
@@ -2040,6 +2079,15 @@ export class Tower extends DurableObject<Env> {
 	async stopEdge(): Promise<{ stopped: number }> {
 		const fleet = this.meta<string[]>("edgeFleet", []);
 		await Promise.all(fleet.map((id) => this.edgeStub(id).stop().catch(() => {})));
+		// A stopped agent aborts its own flight, but not one the runway is landing right then: that one ends when
+		// the runway gives its word (unless it lands), and any other one still up ends now.
+		const stopped = new Set(fleet);
+		for (const f of this.rows(`SELECT * FROM flights WHERE status IN (${ACTIVE.map(() => "?").join(",")})`, ...ACTIVE).map((r) => this.toFlight(r))) {
+			if (!stopped.has(f.agentId)) continue;
+			if (this.row("SELECT id FROM landings WHERE flight_id = ? AND status IN ('merging', 'verifying')", f.id))
+				this.setMeta("orphanFlights", [...new Set([...this.meta<string[]>("orphanFlights", []), f.id])]);
+			else this.endFlight(f, null, "its edge agent was stopped");
+		}
 		this.emit("edge.stopped", `Stopped ${fleet.length} edge agent(s)`);
 		return { stopped: fleet.length };
 	}
