@@ -109,3 +109,34 @@ describe("describeChanges", () => {
 		expect(by["vendor/lib"].binary).toBeUndefined();
 	});
 });
+
+describe("trees both sides changed", () => {
+	async function commitModes(r: Repo, files: Record<string, [string, string]>, parents: string[]) {
+		const flat: FlatTree = new Map();
+		for (const [path, [text, mode]] of Object.entries(files)) flat.set(path, { oid: await writeText(r, text), mode });
+		return commit(r, { tree: await writeFlatTree(r, flat), parents, message: "c", author: who });
+	}
+
+	it("keep trunk's new mode when the flight changed only the text", async () => {
+		const r = newRepo();
+		await git.init({ fs: r.fs, dir: r.dir, defaultBranch: "main" });
+		// Lines apart, so the texts merge (changes on lines next to each other conflict, as in git).
+		const base = await commitModes(r, { "run.sh": ["echo a\n\necho m\n\necho b\n", "100644"] }, []);
+		const trunk = await commitModes(r, { "run.sh": ["echo A\n\necho m\n\necho b\n", "100755"] }, [base]);
+		const flight = await commitModes(r, { "run.sh": ["echo a\n\necho m\n\necho B\n", "100644"] }, [base]);
+		const m = await mergeTrees(r, base, trunk, flight);
+		expect(m.conflicts).toEqual([]);
+		expect(m.files.get("run.sh")?.mode).toBe("100755");
+		expect(await readText(r, m.files.get("run.sh")!.oid)).toBe("echo A\n\necho m\n\necho B\n");
+	});
+
+	it("report a path that is a file on one side and a directory on the other", async () => {
+		const r = newRepo();
+		await git.init({ fs: r.fs, dir: r.dir, defaultBranch: "main" });
+		const base = await commitModes(r, { "README.md": ["# x\n", "100644"] }, []);
+		const trunk = await commitModes(r, { "README.md": ["# x\n", "100644"], docs: ["notes\n", "100644"] }, [base]);
+		const flight = await commitModes(r, { "README.md": ["# x\n", "100644"], "docs/readme.md": ["# docs\n", "100644"] }, [base]);
+		const m = await mergeTrees(r, base, trunk, flight);
+		expect(m.conflicts).toMatchObject([{ path: "docs", kind: "file/directory" }]);
+	});
+});

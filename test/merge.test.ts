@@ -205,3 +205,74 @@ describe("contextChanges", () => {
 		expect(hunks[0].symbols).toEqual(["(top)"]);
 	});
 });
+
+describe("big files", () => {
+	// A long file of near-identical lines: the worst case for a line diff (a lockfile, a generated file).
+	const long = (n: number, tag = "") => Array.from({ length: n }, (_, i) => `  "pkg-${i % 7}": "^1.${i % 3}.0",${tag}`).join("\n");
+
+	it("diffs one edit to a long file by its few lines, fast", () => {
+		const before = long(18_000);
+		const lines = before.split("\n");
+		lines[9_000] = '  "left-pad": "^1.3.0",';
+		const t0 = Date.now();
+		const symbols = touchedSymbols("package-lock.json", before, lines.join("\n"));
+		const hunks = contextChanges("src/big.js", before, lines.join("\n"));
+		expect(Date.now() - t0).toBeLessThan(1000);
+		expect(symbols).toEqual(["(top)"]);
+		expect(hunks).toHaveLength(1);
+		expect(hunks[0].start).toBe(9_001);
+		expect(hunks[0].added).toEqual(['  "left-pad": "^1.3.0",']);
+	});
+
+	it("counts a span too long to diff as one change, without stalling", () => {
+		const t0 = Date.now();
+		const hunks = contextChanges("src/big.js", `first\n${long(4_000)}\nlast`, `first\n${long(4_000, " ")}\nlast`);
+		expect(Date.now() - t0).toBeLessThan(1000);
+		expect(hunks).toHaveLength(1);
+		expect(hunks[0].start).toBe(2);
+		expect(hunks[0].removed).toHaveLength(4_000);
+		expect(hunks[0].added).toHaveLength(4_000);
+	});
+
+	it("merges edits to a long file at either end, and calls a long span both sides rewrote a conflict", () => {
+		const base = long(18_000);
+		const ours = `// trunk\n${base}`;
+		const theirs = `${base}\n// flight`;
+		const t0 = Date.now();
+		const merged = mergeText("package-lock.json", base, ours, theirs);
+		expect(merged.clean).toBe(true);
+		expect(merged.text).toBe(`// trunk\n${base}\n// flight`);
+		const both = mergeText("package-lock.json", `a\n${long(4_000)}\nz`, `a\n${long(4_000, " ")}\nz`, `a\n${long(4_000, "  ")}\nz`);
+		expect(Date.now() - t0).toBeLessThan(2000);
+		expect(both.clean).toBe(false);
+		expect(both.conflicts[0].baseStart).toBe(2);
+		expect(both.text.startsWith("a\n<<<<<<< trunk\n")).toBe(true);
+		expect(both.text.endsWith("\n>>>>>>> flight\nz")).toBe(true);
+	});
+});
+
+describe("two flights add a method of the same name", () => {
+	it("is a conflict, not two definitions side by side, in every language", () => {
+		const cases: [string, string, string, string][] = [
+			["src/cart.js", "export class Cart {\n  add(x) {\n    this.items.push(x);\n  }\n}\n", "  validate() {\n    return true;\n  }\n", "  validate() {\n    return this.items.length > 0;\n  }\n"],
+			["cart.py", "class Cart:\n    def add(self, x):\n        self.items.append(x)\n", "\n    def validate(self):\n        return True\n", "\n    def validate(self):\n        return len(self.items) > 0\n"],
+			["cart.go", "package cart\n\nfunc (c *Cart) Add(x int) {\n\tc.items = append(c.items, x)\n}\n", "\nfunc (c *Cart) Validate() bool {\n\treturn true\n}\n", "\nfunc (c *Cart) Validate() bool {\n\treturn len(c.items) > 0\n}\n"],
+		];
+		for (const [path, base, a, b] of cases) {
+			// Each side inserts its method at the same point: the end of the class (or of the file, for Go).
+			const at = path.endsWith(".js") ? base.lastIndexOf("}\n") : base.length;
+			const merged = mergeText(path, base, base.slice(0, at) + a + base.slice(at), base.slice(0, at) + b + base.slice(at));
+			expect(merged.clean, path).toBe(false);
+			expect(merged.conflicts[0].symbols.join(), path).toMatch(/[Vv]alidate/);
+		}
+	});
+
+	it("still keeps two different methods added at the same point", () => {
+		const base = "export class Cart {\n  add(x) {\n    this.items.push(x);\n  }\n}\n";
+		const at = base.lastIndexOf("}\n");
+		const merged = mergeText("src/cart.js", base, `${base.slice(0, at)}  size() {\n    return this.items.length;\n  }\n${base.slice(at)}`, `${base.slice(0, at)}  clear() {\n    this.items = [];\n  }\n${base.slice(at)}`);
+		expect(merged.clean).toBe(true);
+		expect(merged.text).toContain("size()");
+		expect(merged.text).toContain("clear()");
+	});
+});

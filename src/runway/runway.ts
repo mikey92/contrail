@@ -462,7 +462,9 @@ export class Runway extends DurableObject<Env> {
 				(err): TestReport => ({ passed: 0, failed: 1, results: [], error: errorMessage(err), ms: 0 }),
 			);
 			if (report.failed > 0) {
-				if (boarded.length > 1) return this.landTrain(trunk, jobs, { ...opts, oneByOne: true });
+				// Several aboard, or landings after the one aboard judged on top of it (a conflict with lines that
+				// won't land, say): every landing again, each on its own.
+				if (boarded.length > 1 || outcomes.at(-1) !== boarded[0].outcome) return this.landTrain(trunk, jobs, { ...opts, oneByOne: true });
 				// A train of one: that landing is the culprit.
 				failTests(boarded[0].outcome, report);
 				boarded[0].outcome.trunkAfter = null;

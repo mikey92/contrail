@@ -67,3 +67,21 @@ describe("extractSymbols (py)", () => {
 		]);
 	});
 });
+
+describe("functions stay whole around text that looks like code", () => {
+	it("Python: a docstring or comment at column 0 inside a function doesn't end it", () => {
+		const src = 'def render(cart):\n    """Renders a cart.\n\nTotals at the bottom.\ndef fake():\n"""\n# a note at column 0\n    return "cart"\n\n\ndef other():\n    pass\n';
+		const syms = extractSymbols("r.py", src);
+		expect(syms.map((s) => s.name)).toEqual(["render", "other"]);
+		expect(symbolAt(syms, 8)).toBe("render");
+		expect(symbolAt(syms, 11)).toBe("other");
+	});
+
+	it("JavaScript: a template literal with blank lines and code-like lines stays in its const", () => {
+		const src = "export const HARNESS = `\nfunction runSuite() {\n\n  register();\n}\nexport function register() {}\n`;\n\nexport function after() {\n  return 1;\n}\n";
+		const syms = extractSymbols("h.js", src);
+		expect(syms.map((s) => s.name)).toEqual(["HARNESS", "after"]);
+		expect(syms[0]).toMatchObject({ start: 1, end: 7 });
+		expect(symbolAt(syms, 4)).toBe("HARNESS");
+	});
+});

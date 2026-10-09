@@ -117,9 +117,13 @@ function regexEnd(line: string, i: number): number {
 	return -1;
 }
 
-/** Brace depth after each line, ignoring braces inside strings and comments (approximate). */
-function braceDepths(lines: string[], lang: Lang): number[] {
+/**
+ * Brace depth after each line, ignoring braces inside strings and comments (approximate), and which lines end
+ * inside a string that runs on (a template literal), whose next line is the string's, not code.
+ */
+function braceDepths(lines: string[], lang: Lang): { depths: number[]; open: boolean[] } {
 	const depths: number[] = [];
+	const open: boolean[] = [];
 	let depth = 0;
 	let inBlockComment = false;
 	let quote: string | null = null; // ', ", or ` (template literals may span lines)
@@ -210,8 +214,9 @@ function braceDepths(lines: string[], lang: Lang): number[] {
 		// Single-quoted and double-quoted strings never span lines.
 		if (quote === '"' || quote === "'") quote = null;
 		depths.push(depth);
+		open.push(quote === "`");
 	}
-	return depths;
+	return { depths, open };
 }
 
 /** Decorators and annotations stacked on a declaration, by language: they belong to it, not to `(top)`. */
@@ -240,9 +245,11 @@ function decoratedFrom(lines: string[], i: number, lang: Lang): number {
 }
 
 function extractBraces(lines: string[], lang: Lang, decls: Decl[], member: RegExp | null): SymbolSpan[] {
-	const depths = braceDepths(lines, lang);
+	const { depths, open } = braceDepths(lines, lang);
 	const out: SymbolSpan[] = [];
 	const depthBefore = (i: number) => (i === 0 ? 0 : depths[i - 1]);
+	// A line that starts inside a template literal is text: no declaration starts there.
+	const inString = (i: number) => i > 0 && open[i - 1];
 	const isDecl = (line: string) => decls.some(({ re }) => re.test(line));
 
 	/** Line index where the declaration starting at line `i` (at brace depth d) ends. */
@@ -253,8 +260,10 @@ function extractBraces(lines: string[], lang: Lang, decls: Decl[], member: RegEx
 			if (opened && depths[j] <= d) return j;
 			if (!opened) {
 				// A block-less declaration (`const x = 1;`) ends at its statement terminator, a blank
-				// line, or the next declaration (semicolon-free style).
+				// line, or the next declaration (semicolon-free style), none of them inside a template literal.
+				if (open[j]) continue;
 				if (/;\s*$/.test(lines[j])) return j;
+				if (inString(j)) continue;
 				if (j > i && lines[j].trim() === "") return j - 1;
 				if (j > i && isDecl(lines[j])) return j - 1;
 			}
@@ -263,7 +272,7 @@ function extractBraces(lines: string[], lang: Lang, decls: Decl[], member: RegEx
 	};
 
 	for (let i = 0; i < lines.length; i++) {
-		if (depthBefore(i) !== 0) continue;
+		if (depthBefore(i) !== 0 || inString(i)) continue;
 		for (const decl of decls) {
 			const m = lines[i].match(decl.re);
 			if (!m) continue;
@@ -272,7 +281,7 @@ function extractBraces(lines: string[], lang: Lang, decls: Decl[], member: RegEx
 			out.push({ name, kind: decl.kind, start: decoratedFrom(lines, i, lang) + 1, end: end + 1 });
 			if (decl.container && member) {
 				for (let j = i + 1; j < end; j++) {
-					if (depthBefore(j) !== 1) continue;
+					if (depthBefore(j) !== 1 || inString(j)) continue;
 					const mm = lines[j].match(member);
 					const memberName = mm && (mm[1] ?? mm[2] ?? mm[3]);
 					// Keyword-introduced members (Rust `fn new`, Kotlin `fun when`) can't be statements.
@@ -290,13 +299,46 @@ function extractBraces(lines: string[], lang: Lang, decls: Decl[], member: RegEx
 	return out;
 }
 
+/** Python: which lines start inside a triple-quoted string (a docstring or text over several lines). */
+function inTripleQuotes(lines: string[]): boolean[] {
+	const inside: boolean[] = [];
+	let open: string | null = null;
+	for (const line of lines) {
+		inside.push(open !== null);
+		for (let i = 0; ; ) {
+			if (open) {
+				const close = line.indexOf(open, i);
+				if (close === -1) break;
+				open = null;
+				i = close + 3;
+			} else {
+				// The next triple quote of either kind, outside a comment, opens one.
+				const hash = line.indexOf("#", i);
+				const quotes = ['"""', "'''"].map((q) => [line.indexOf(q, i), q] as const).filter(([at]) => at !== -1 && (hash === -1 || at < hash));
+				if (!quotes.length) break;
+				const [at, q] = quotes.sort((a, b) => a[0] - b[0])[0];
+				open = q;
+				i = at + 3;
+			}
+		}
+	}
+	return inside;
+}
+
 function extractIndented(lines: string[], lang: "py" | "ruby"): SymbolSpan[] {
 	const out: SymbolSpan[] = [];
 	const indentOf = (l: string) => l.length - l.trimStart().length;
+	// Python: a line inside a triple-quoted string, or a comment, says nothing about where a block ends.
+	const text = lang === "py" ? inTripleQuotes(lines) : lines.map(() => false);
 	const endOf = (i: number, indent: number) => {
 		let last = i;
 		for (let j = i + 1; j < lines.length; j++) {
 			if (lines[j].trim() === "") continue;
+			if (text[j]) {
+				last = j;
+				continue;
+			}
+			if (lang === "py" && /^\s*#/.test(lines[j])) continue;
 			if (indentOf(lines[j]) <= indent) {
 				// Ruby blocks close with an `end` at the declaration's indentation.
 				if (lang === "ruby" && indentOf(lines[j]) === indent && /^\s*end\b/.test(lines[j])) last = j;
@@ -323,14 +365,14 @@ function extractIndented(lines: string[], lang: "py" | "ruby"): SymbolSpan[] {
 	const top = lang === "py" ? /^(?:async\s+)?(def|class)\s+([A-Za-z_]\w*)/ : /^(def|class|module)\s+(?:self\.)?([A-Za-z_][\w:]*[?!=]?)/;
 	const inner = lang === "py" ? /^(\s+)(?:async\s+)?def\s+([A-Za-z_]\w*)/ : /^(\s+)def\s+(?:self\.)?([A-Za-z_]\w*[?!=]?)/;
 	for (let i = 0; i < lines.length; i++) {
-		const m = lines[i].match(top);
+		const m = !text[i] && lines[i].match(top);
 		if (!m) continue;
 		const end = endOf(headerEnd(i), 0);
 		const container = m[1] !== "def";
 		out.push({ name: m[2], kind: container ? "class" : "function", start: decoratedFrom(lines, i, lang) + 1, end: end + 1 });
 		if (container) {
 			for (let j = i + 1; j <= end; j++) {
-				const mm = lines[j].match(inner);
+				const mm = !text[j] && lines[j].match(inner);
 				if (!mm) continue;
 				const mEnd = endOf(headerEnd(j), mm[1].length);
 				out.push({ name: `${m[2]}.${mm[2]}`, kind: "method", start: decoratedFrom(lines, j, lang) + 1, end: mEnd + 1 });

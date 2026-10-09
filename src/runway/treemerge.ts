@@ -118,7 +118,17 @@ export async function mergeTrees(repo: Repo, baseOid: string, oursOid: string, t
 			conflictTexts.set(path, merged.text);
 			continue;
 		}
-		files.set(path, { oid: await writeText(repo, merged.text), mode: t.mode });
+		// The mode the flight gave it, or else trunk's (trunk may have made it executable meanwhile).
+		files.set(path, { oid: await writeText(repo, merged.text), mode: t.mode !== b?.mode ? t.mode : o.mode });
+	}
+
+	// A path that is a file on one side and a directory on the other (trunk added `docs`, the flight
+	// `docs/readme.md`): a tree can't hold both.
+	for (const path of files.keys()) {
+		for (let i = path.indexOf("/"); i !== -1; i = path.indexOf("/", i + 1)) {
+			const dir = path.slice(0, i);
+			if (files.has(dir) && !conflicts.some((c) => c.path === dir)) conflicts.push({ path: dir, kind: "file/directory", hunks: [], causedBy: [] });
+		}
 	}
 
 	return { files, changes: await describeChanges(repo, B, T), conflicts, conflictTexts, unioned };

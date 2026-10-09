@@ -99,7 +99,7 @@ export interface AiReview {
 
 export interface ConflictReport {
 	path: string;
-	kind: "content" | "modify/delete" | "binary";
+	kind: "content" | "modify/delete" | "binary" | "file/directory";
 	hunks: {
 		baseStart: number;
 		baseLines: string[];
