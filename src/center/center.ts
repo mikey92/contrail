@@ -777,6 +777,8 @@ export class Center extends DurableObject<Env> {
 	private async abortCrossing(cx: Crossing, reason?: string) {
 		const why = `crossing ${cx.code} aborted${reason ? `: ${reason}` : ""}`;
 		await Promise.all(cx.legs.map((l) => this.tower(l.sector).closeLeg(l.agentId, why).catch(() => {})));
+		// Its legs' flights are over too: they don't show as flying under an aborted crossing.
+		for (const l of cx.legs) l.closed = true;
 		cx.status = "aborted";
 		if (reason) cx.contrail = [...cx.contrail, { kind: "note" as ContrailKind, text: `Aborted: ${reason}`, at: now() }].slice(-50);
 		await this.saveCrossing(cx);

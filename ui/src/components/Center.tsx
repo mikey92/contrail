@@ -357,8 +357,10 @@ function crossingState(cx: Crossing): { label: string; tone: string } {
 	return { label: "In the air", tone: "airborne" };
 }
 
-function legState(leg: CrossingLeg): { label: string; tone: string } {
+function legState(leg: CrossingLeg, crossing: Crossing["status"]): { label: string; tone: string } {
 	const l = leg.landing;
+	// A leg with no landing is flying, unless its flight is over: the crossing landed without a change here, or ended.
+	if (!l && leg.closed) return crossing === "landed" ? { label: "no change", tone: "landed" } : { label: "closed", tone: "aborted" };
 	if (!l) return { label: "flying", tone: "airborne" };
 	if (l.status === "landed") return { label: `landed ${l.commit?.slice(0, 8) ?? ""}`, tone: "landed" };
 	if (l.status === "verifying") return { label: "ready, held", tone: "approach" };
@@ -404,7 +406,7 @@ function Crossings({ snap, now }: { snap: CenterSnapshot; now: number }) {
 							{cx.legs.length > 0 && (
 								<div class="crossing-legs">
 									{[...cx.legs].sort((a, b) => order(a) - order(b)).map((leg) => {
-										const ls = legState(leg);
+										const ls = legState(leg, cx.status);
 										return (
 											<a key={leg.sector} class="crossing-leg" href={`/p/${leg.sector}`} title={leg.landing?.error ? tidy(leg.landing.error) : `Open the ${leg.name} radar`}>
 												<span class="crossing-leg-name">{leg.name}</span>

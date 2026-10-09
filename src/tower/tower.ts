@@ -72,6 +72,8 @@ const RETIRE_BATCH = 50;
 /** A crossing's leg that is ready this long without word from its Center is let go (the Center restarted). */
 const LEG_TIMEOUT_MS = 2 * 60_000;
 const ACTIVE: FlightStatus[] = ["taxiing", "airborne", "holding", "approach", "diverted"];
+/** A flight that ended gives its intent back, unless it was a crossing's leg: only that crossing flies it, so it is cancelled. */
+const REOPEN_INTENT = "UPDATE intents SET status = CASE WHEN created_by LIKE 'center:%' THEN 'cancelled' ELSE 'open' END, flight_id = NULL WHERE id = ? AND status = 'assigned' AND flight_id = ?";
 
 const claimOf = (c: Clearance): Claim => ({ id: c.id, flightId: c.flightId, target: c.target, status: c.status, createdAt: c.createdAt });
 
@@ -187,8 +189,10 @@ export class Tower extends DurableObject<Env> {
 				this.sql.exec("UPDATE flights SET status = 'diverted' WHERE id = ? AND status = 'approach'", r.flight_id as string);
 			// A take-off the restart interrupted never gave its agent a workspace and can't go on where it was: it
 			// ends, so its intent can fly again and its agent can take off again.
-			for (const r of this.sql.exec("UPDATE flights SET status = 'aborted', updated_at = ? WHERE status = 'taxiing' RETURNING id, intent_id", Date.now()).toArray())
-				this.sql.exec("UPDATE intents SET status = 'open', flight_id = NULL WHERE id = ? AND status = 'assigned' AND flight_id = ?", r.intent_id as string, r.id as string);
+			for (const r of this.sql.exec("UPDATE flights SET status = 'aborted', updated_at = ? WHERE status = 'taxiing' RETURNING id, intent_id", Date.now()).toArray()) {
+				this.sql.exec(REOPEN_INTENT, r.intent_id as string, r.id as string);
+				this.sql.exec("DELETE FROM clearances WHERE flight_id = ?", r.id as string);
+			}
 		});
 	}
 
@@ -810,7 +814,8 @@ export class Tower extends DurableObject<Env> {
 		// Awaited above: another take-off by this agent (a retry, say) may have gone first, or its key been revoked.
 		this.canTakeOff(agentId);
 		if (!next || "wait" in next) {
-			const waiting = this.row<{ c: number }>("SELECT COUNT(*) AS c FROM intents WHERE status = 'open'")?.c ?? 0;
+			// Not a crossing's legs: only their crossing flies them.
+			const waiting = this.row<{ c: number }>("SELECT COUNT(*) AS c FROM intents WHERE status = 'open' AND created_by NOT LIKE 'center:%'")?.c ?? 0;
 			return {
 				idle: true,
 				message: next
@@ -968,7 +973,7 @@ export class Tower extends DurableObject<Env> {
 			this.finishLanding(l, { status: "failed", error: reason ? `${ABORTED}: ${reason.slice(0, 300)}` : ABORTED });
 		// Ended by the tower, not by its agent: the agent hears why on its next call.
 		if (!agentId) this.sendRadio(flight.id, "abort", `${flight.code} was ended${reason ? `: ${reason.slice(0, 300)}` : ""}. Call take_off to fly again.`);
-		this.sql.exec("UPDATE intents SET status = 'open', flight_id = NULL WHERE id = ? AND status = 'assigned' AND flight_id = ?", flight.intentId, flight.id);
+		this.sql.exec(REOPEN_INTENT, flight.intentId, flight.id);
 		this.releaseAll(flight.id);
 		if (reason) this.addContrail(flight.id, agentId, "note", `Aborted: ${reason}`);
 		this.patch("flight", this.flightById(flight.id));
@@ -1480,9 +1485,10 @@ export class Tower extends DurableObject<Env> {
 	private failOnRunway(l: Landing, err: unknown) {
 		this.finishLanding(l, { status: "failed", error: `runway error: ${errorMessage(err)}` });
 		const flight = this.flightById(l.flightId);
-		if (flight.status !== "approach") return;
-		this.setFlightStatus(flight.id, "diverted");
-		this.patch("flight", this.flightById(flight.id));
+		if (flight.status === "approach") {
+			this.setFlightStatus(flight.id, "diverted");
+			this.patch("flight", this.flightById(flight.id));
+		}
 		this.endIfOrphaned(flight.id);
 	}
 
@@ -1631,9 +1637,11 @@ export class Tower extends DurableObject<Env> {
 		const orphans = this.meta<string[]>("orphanFlights", []);
 		const flight = this.flightById(flightId);
 		const revoked = this.row<{ revoked_at: number | null }>("SELECT revoked_at FROM agents WHERE id = ?", flight.agentId)?.revoked_at;
-		if (flight.status === "diverted" && (revoked || orphans.includes(flightId)))
+		// Still up (diverted, or holding for code it asked for meanwhile), with no landing left for the runway or a reviewer.
+		const waiting = this.row("SELECT id FROM landings WHERE flight_id = ? AND status IN ('queued', 'merging', 'verifying', 'review')", flightId);
+		if (ACTIVE.includes(flight.status) && !waiting && (revoked || orphans.includes(flightId)))
 			this.endFlight(flight, null, revoked ? "its agent's key was revoked" : "its edge agent was stopped");
-		if (orphans.includes(flightId)) this.setMeta("orphanFlights", orphans.filter((id) => id !== flightId));
+		if (orphans.includes(flightId) && !waiting) this.setMeta("orphanFlights", orphans.filter((id) => id !== flightId));
 	}
 
 	/** Which landed flights changed the lines this flight now conflicts with. */
