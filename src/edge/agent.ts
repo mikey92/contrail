@@ -460,7 +460,13 @@ export class EdgeAgent extends DurableObject<Env> {
 					const fails = l.tests?.results.filter((x) => !x.ok).map((x) => `${x.file} › ${x.name}: ${x.error}`) ?? [];
 					return `NOT LANDED: ${l.error}\n${fails.join("\n")}\nCall sync_with_trunk (trunk may have moved), fix, run_tests, land again.${radio(r)}`;
 				}
-				if (l.status === "review") return `Awaiting human review (policy covers ${l.review?.required.join(", ")}). Call land again later to check.${radio(r)}`;
+				if (l.status === "review") {
+					const why = [
+						...(l.review?.required.length ? [`policy covers ${l.review.required.join(", ")}`] : []),
+						...(l.aiReview?.verdict === "flag" ? [`the AI reviewer flagged it: ${l.aiReview.reason}`] : []),
+					];
+					return `Awaiting human review (${why.join("; ") || "a person decides"}). Call land again later to check.${radio(r)}`;
+				}
 				if (l.status === "rejected") return `Reviewer requested changes: ${l.review?.comment ?? ""}. Fix it, run_tests, land again.${radio(r)}`;
 				return `Still on approach (${l.status}). Call land again shortly.${radio(r)}`;
 			}

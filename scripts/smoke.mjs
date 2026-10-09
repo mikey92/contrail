@@ -282,38 +282,37 @@ const lj = await J.tool("request_landing", { summary: "Added shippingFor(): free
 check(lj.landing.status === "landed" && lj.landing.aiReview?.verdict === "approve", `the AI reviewer approved ${fj.flight.code}, which does what its intent says (${reviewed(lj.landing)})`);
 
 const K = await agent("SMOKE-K");
-const fk = await fly(K, "15");
-await K.tool("request_clearance", { targets: ["src/receipt.js#receiptJson"], reason: "receipt as JSON" });
-edit(fk.dir, "src/receipt.js", append(`
-export function receiptJson(cart, catalog, totalCents) {
-  const lines = cart.lines.map((line) => {
-    const book = findByIsbn(catalog, line.isbn);
-    return { isbn: line.isbn, title: book.title, qty: line.qty, amountCents: book.priceCents * line.qty };
-  });
-  return { lines, totalCents };
-}`));
-edit(fk.dir, "test/receipt.test.js", (s) =>
-  append(`
-export function receiptAsJson() {
-  const cart = new Cart();
-  cart.add("9781984801258", 2);
-  const json = receiptJson(cart, createCatalog(SAMPLE_BOOKS), 3400);
-  assert.deepEqual(json, { lines: [{ isbn: "9781984801258", title: "Klara and the Sun", qty: 2, amountCents: 3400 }], totalCents: 3400 });
-}`)(s.replace("import { renderReceipt } from", "import { receiptJson, renderReceipt } from")),
+const fk = await fly(K, "8");
+await K.tool("request_clearance", { targets: ["src/pricing.js#tax"], reason: "per-region tax table" });
+edit(fk.dir, "src/pricing.js", (s) =>
+  s.replace(
+    'export function tax(amount, region) {\n  if (region === "CA") {\n    return Math.round(amount * 0.0725);\n  }\n  return 0;\n}',
+    () => 'export const TAX_RATES = { CA: 0.0725, NY: 0.04, TX: 0.0625, WA: 0.065, OR: 0 };\n\nexport function tax(amount, region) {\n  return Math.round(amount * (TAX_RATES[region] ?? 0));\n}',
+  ),
 );
-// …and, unasked, a coupon worth half of any order. It lands nowhere near code another flight holds, and the tests pass.
+edit(fk.dir, "test/pricing.test.js", (s) =>
+  append(`
+export function taxesByRegion() {
+  assert.equal(tax(10000, "NY"), 400);
+  assert.equal(tax(10000, "TX"), 625);
+  assert.equal(tax(10000, "WA"), 650);
+  assert.equal(tax(10000, "ZZ"), 0);
+  assert.equal(TAX_RATES.CA, 0.0725);
+}`)(s.replace("import { applyCoupon, subtotal, tax, total } from", "import { applyCoupon, subtotal, TAX_RATES, tax, total } from")),
+);
+// …and, unasked, a coupon worth half of any order. No other flight holds that code, and the tests pass.
 const coupon = '  if (code === "FRIEND50") {\n    return Math.round(amount / 2);\n  }\n';
 edit(fk.dir, "src/pricing.js", (s) => s.replace('  if (code === "WELCOME5") {', () => `${coupon}  if (code === "WELCOME5") {`));
-commitPush(fk.dir, "Receipt as JSON");
-const lk = await K.tool("request_landing", { summary: "Added receiptJson() with the lines and the total, and a test." });
+commitPush(fk.dir, "Per-region sales tax table");
+const lk = await K.tool("request_landing", { summary: "Replaced the hard-coded CA rate with an exported TAX_RATES table, with a test." });
 check(lk.landing.status === "review" && lk.landing.aiReview?.verdict === "flag", `the AI reviewer flagged ${fk.flight.code}, which also adds an unasked 50% coupon, and parked it for a person (${reviewed(lk.landing)})`);
 await call(`/api/p/${slug}/landings/${lk.landing.id}/review`, { decision: "reject", comment: "Drop the coupon: it is not part of this intent.", reviewer: "smoke" }, admin);
 edit(fk.dir, "src/pricing.js", (s) => s.replace(coupon, ""));
 commitPush(fk.dir, "Drop the coupon");
-const lk2 = await K.tool("request_landing", { summary: "Added receiptJson() with the lines and the total, and a test. Dropped the coupon." });
+const lk2 = await K.tool("request_landing", { summary: "Replaced the hard-coded CA rate with an exported TAX_RATES table, with a test. Dropped the coupon." });
 check(lk2.landing.status === "landed" && lk2.landing.aiReview?.verdict === "approve", `without the coupon, ${fk.flight.code} lands with the AI reviewer's approval (${reviewed(lk2.landing)})`);
-const whyReceipt = await K.tool("why", { path: "src/receipt.js", symbol: "receiptJson" });
-check(whyReceipt.history[0]?.aiReview?.verdict === "approve", "why() shows the AI reviewer's verdict with the landing");
+const whyTax = await K.tool("why", { path: "src/pricing.js", symbol: "tax" });
+check(whyTax.history[0]?.aiReview?.verdict === "approve", "why() shows the AI reviewer's verdict with the landing");
 await call(`/api/p/${slug}/policy`, { aiReview: false }, admin);
 
 // ── 5. a train with a culprit: tested once as a whole, replayed one landing at a time when red ─────

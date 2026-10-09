@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { diffText, modelFamily, parseVerdict, REVIEWERS, reviewChange, reviewerFor, reviewMessages, type ReviewInput } from "../src/runway/review";
+import { diffText, EFFORT, modelFamily, parseVerdict, REVIEWERS, reviewChange, reviewerFor, reviewMessages, type ReviewInput } from "../src/runway/review";
 import type { FileChange } from "../src/shared/types";
 
 const change = (path: string, added: string[], removed: string[] = [], symbols: string[] = []): FileChange => ({
@@ -10,6 +10,8 @@ const change = (path: string, added: string[], removed: string[] = [], symbols: 
 	deletions: removed.length,
 	hunks: [{ start: 10, removed, added }],
 });
+
+const DEEPSEEK = "@cf/deepseek-ai/deepseek-v4-flash-0731";
 
 const input = (changes: FileChange[], extra: Partial<ReviewInput> = {}): ReviewInput => ({
 	intent: { seq: 4, title: "Add Cart.count()", body: "Return the total quantity of all lines." },
@@ -108,6 +110,29 @@ describe("reviewChange", () => {
 		const slow = await reviewChange({ run: () => new Promise(() => {}) }, "@cf/m", input([]), 20);
 		expect(slow).toMatchObject({ verdict: "skipped" });
 		expect(slow.reason).toContain("no answer");
+	});
+
+	it("asks again without thinking when the reviewer thought past the limit", async () => {
+		const efforts: unknown[] = [];
+		const ai = {
+			run: async (_m: string, i: any) => {
+				efforts.push(i.reasoning_effort);
+				return efforts.length === 1
+					? { choices: [{ finish_reason: "length", message: { content: "", reasoning_content: "We need to inspect the diff…" } }] }
+					: { choices: [{ finish_reason: "stop", message: { content: '{"verdict":"approve","reason":"Does what the intent asks."}' } }] };
+			},
+		};
+		const r = await reviewChange(ai, DEEPSEEK, input([]));
+		expect(r.verdict).toBe("approve");
+		expect(efforts).toEqual([EFFORT, "none"]);
+	});
+
+	it("passes a reasoning effort only to reviewers that take one", async () => {
+		let sent: any;
+		await reviewChange({ run: async (_m, i) => ((sent = i), { response: '{"verdict":"approve"}' }) }, "@cf/moonshotai/kimi-k2.7-code", input([]));
+		expect(sent.reasoning_effort).toBeUndefined();
+		await reviewChange({ run: async (_m, i) => ((sent = i), { response: '{"verdict":"approve"}' }) }, DEEPSEEK, input([]));
+		expect(sent.reasoning_effort).toBe(EFFORT);
 	});
 
 	it("sends the intent, plan, summary and diff", async () => {
