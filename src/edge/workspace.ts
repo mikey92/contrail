@@ -23,7 +23,12 @@ export interface SyncResult {
 	fastForward: boolean;
 	changed: string[];
 	conflicts: string[];
+	/** Conflicts that are a file on one side and a directory on the other: trunk's side is at `<path>~trunk`. */
+	clashes: string[];
 }
+
+/** Where sync() puts trunk's side of a file/directory clash: beside the workspace's, as git does. */
+const TRUNK_SIDE = "~trunk";
 
 export class Workspace {
 	readonly repo: Repo = { fs: new MemoryFS(), dir: DIR, cache: {} };
@@ -143,26 +148,42 @@ export class Workspace {
 		// Commit local edits first so the merge sees them.
 		const head = (await this.commitLocal("WIP before syncing with trunk")) ?? (await git.resolveRef({ fs, dir, ref: "HEAD" }));
 		const base = await mergeBase(this.repo, head, upstream);
-		if (base === upstream) return { upstream, fastForward: false, changed: [], conflicts: [] };
+		if (base === upstream) return { upstream, fastForward: false, changed: [], conflicts: [], clashes: [] };
 		if (base === head) {
 			await git.writeRef({ fs, dir, ref: "refs/heads/main", value: upstream, force: true });
 			await git.checkout({ fs, dir, ref: "main", force: true, cache });
-			return { upstream, fastForward: true, changed: [], conflicts: [] };
+			return { upstream, fastForward: true, changed: [], conflicts: [], clashes: [] };
 		}
 		const merged = await mergeTrees(this.repo, base!, head, upstream);
 		const beforeTree = await this.flat(head);
+		// A path that is a file on one side and a directory on the other can't be both in a working tree: what
+		// trunk has there goes beside it, at <path>~trunk, for the agent to keep one of them.
+		const clashes = merged.conflicts.filter((c) => c.kind === "file/directory").map((c) => c.path);
+		const placed = (path: string) => {
+			const clash = clashes.find((c) => path === c || path.startsWith(`${c}/`));
+			return clash ? `${clash}${TRUNK_SIDE}${path.slice(clash.length)}` : path;
+		};
 		const changed: string[] = [];
 		for (const [path, item] of merged.files) {
 			if (beforeTree.get(path)?.oid === item.oid || item.mode === GITLINK) continue;
 			const { blob } = await git.readBlob({ fs, dir, oid: item.oid, cache });
-			await this.write(path, new TextDecoder().decode(blob));
-			changed.push(path);
+			await this.write(placed(path), new TextDecoder().decode(blob));
+			changed.push(placed(path));
 		}
 		for (const path of beforeTree.keys()) if (!merged.files.has(path)) await this.remove(path).catch(() => {});
 		for (const [path, text] of merged.conflictTexts) await this.write(path, text);
 		this.pendingMerge = upstream;
 		if (merged.conflicts.length === 0) await this.commitAndPushMerge(merged.files, head, upstream);
-		return { upstream, fastForward: false, changed, conflicts: merged.conflicts.map((c) => c.path) };
+		return { upstream, fastForward: false, changed, conflicts: merged.conflicts.map((c) => c.path), clashes };
+	}
+
+	/** Trunk's sides of file/directory clashes (`<path>~trunk`) still in the working tree: not settled yet. */
+	async unsettledClashes(): Promise<string[]> {
+		const roots = (await this.listFiles()).flatMap((f) => {
+			const at = f.path.split("/").findIndex((part) => part.endsWith(TRUNK_SIDE));
+			return at === -1 ? [] : [f.path.split("/").slice(0, at + 1).join("/")];
+		});
+		return [...new Set(roots)];
 	}
 
 	private async flat(commit: string): Promise<FlatTree> {

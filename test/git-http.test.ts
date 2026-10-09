@@ -108,6 +108,56 @@ describe("Workspace", () => {
 	}, 30_000);
 });
 
+describe("Workspace sync", () => {
+	/** A trunk and a workspace fork of it, both served. */
+	function trunkAndFork(name: string, files: Record<string, string>) {
+		const trunk = makeRepo(`${name}-trunk`, files);
+		const fork = join(root, `${name}-fork.git`);
+		git(root, "clone", "-q", "--bare", trunk.bare, fork);
+		git(fork, "config", "http.receivepack", "true");
+		return { trunk, forkUrl: `http://x:token@${base.slice("http://".length)}/${name}-fork.git`, work: join(root, `${name}-trunk-work`) };
+	}
+
+	it("puts trunk's side of a file/directory clash beside the workspace's, at path~trunk", async () => {
+		// The flight adds docs/readme.md; trunk meanwhile adds a file named docs.
+		const { trunk, forkUrl, work } = trunkAndFork("fd", { "a.js": "export const a = 1;\n" });
+		const ws = await Workspace.open(forkUrl, trunk.url, author);
+		await ws.write("docs/readme.md", "# Docs\n");
+		await ws.commitAndPush("Add docs");
+		writeFileSync(join(work, "docs"), "see the wiki\n");
+		git(work, "add", "docs");
+		git(work, "commit", "-qm", "docs file");
+		git(work, "push", "-q", trunk.bare, "main");
+		const sync = await ws.sync();
+		expect(sync.conflicts).toEqual(["docs"]);
+		expect(sync.clashes).toEqual(["docs"]);
+		expect(await ws.read("docs/readme.md")).toBe("# Docs\n");
+		expect(await ws.read("docs~trunk")).toBe("see the wiki\n");
+		expect(await ws.unsettledClashes()).toEqual(["docs~trunk"]);
+		// The agent keeps both under other names: settled.
+		await ws.write("WIKI.md", await ws.read("docs~trunk"));
+		await ws.remove("docs~trunk");
+		expect(await ws.unsettledClashes()).toEqual([]);
+	}, 30_000);
+
+	it("and the other way round: trunk's directory beside the workspace's file", async () => {
+		const { trunk, forkUrl, work } = trunkAndFork("df", { "a.js": "export const a = 1;\n" });
+		const ws = await Workspace.open(forkUrl, trunk.url, author);
+		await ws.write("docs", "see the wiki\n");
+		await ws.commitAndPush("docs file");
+		mkdirSync(join(work, "docs"));
+		writeFileSync(join(work, "docs", "readme.md"), "# Docs\n");
+		git(work, "add", "docs");
+		git(work, "commit", "-qm", "docs dir");
+		git(work, "push", "-q", trunk.bare, "main");
+		const sync = await ws.sync();
+		expect(sync.clashes).toEqual(["docs"]);
+		expect(await ws.read("docs")).toBe("see the wiki\n");
+		expect(await ws.read("docs~trunk/readme.md")).toBe("# Docs\n");
+		expect(await ws.unsettledClashes()).toEqual(["docs~trunk"]);
+	}, 30_000);
+});
+
 describe("landing notes", () => {
 	it("survive a fresh clone: notes are added to trunk's, never replace them", async () => {
 		const { url, bare } = makeRepo("notes", { "a.js": "export const a = 1;\n" });

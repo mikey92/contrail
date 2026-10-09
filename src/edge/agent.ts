@@ -85,6 +85,7 @@ const TOOLS = [
 		{ path: s("Path."), old_text: s("Exact text to replace."), new_text: s("Replacement text.") },
 		["path", "old_text", "new_text"],
 	),
+	fn("delete_file", "Delete a file from your workspace.", { path: s("Path.") }, ["path"]),
 	fn("run_tests", "Run the test suite (test/*.test.js) against your workspace in an isolated Worker."),
 	fn(
 		"request_clearance",
@@ -410,6 +411,9 @@ export class EdgeAgent extends DurableObject<Env> {
 			case "edit_file":
 				await ws.edit(String(args.path), String(args.old_text ?? ""), String(args.new_text ?? ""));
 				return `Edited ${args.path}.`;
+			case "delete_file":
+				await ws.remove(String(args.path));
+				return `Deleted ${args.path}.`;
 			case "run_tests": {
 				const files = await ws.snapshot();
 				const id = await sha256([...files.entries()].map(([p, c]) => `${p}\0${c}`).join("\0"));
@@ -435,12 +439,17 @@ export class EdgeAgent extends DurableObject<Env> {
 			}
 			case "sync_with_trunk": {
 				const r = await ws.sync();
-				if (r.conflicts.length) return `Merged trunk. CONFLICTS in ${r.conflicts.join(", ")}: resolve the <<<<<<< / >>>>>>> markers (keep both intents working), run_tests, then land.`;
+				const markers = r.conflicts.filter((p) => !r.clashes.includes(p));
+				const clashes = r.clashes.map((p) => `${p} is a file on one side and a directory on the other: trunk's is at ${p}~trunk. Keep both under other names, or one of them (write_file and delete_file)`);
+				if (r.conflicts.length)
+					return `Merged trunk. ${markers.length ? `CONFLICTS in ${markers.join(", ")}: resolve the <<<<<<< / >>>>>>> markers (keep both intents working). ` : ""}${clashes.map((c) => `${c}. `).join("")}Then run_tests and land.`;
 				return `Merged trunk cleanly${r.fastForward ? " (fast-forward)" : ""}. Changed: ${r.changed.join(", ") || "nothing"}. Run tests, then land.`;
 			}
 			case "land": {
 				const markers = await ws.hasConflictMarkers();
 				if (markers.length) return `Not landed: unresolved conflict markers in ${markers.join(", ")}.`;
+				const clashes = await ws.unsettledClashes();
+				if (clashes.length) return `Not landed: trunk's side of a file/directory clash is still at ${clashes.join(", ")}. Keep it under another name, or delete it (write_file and delete_file), then land.`;
 				await ws.commitAndPush(`${state.flight?.intent ?? "work"}\n\n${String(args.summary ?? "")}`);
 				const r = await tower.requestLanding(config.agentId, { summary: String(args.summary ?? "") });
 				const l = r.landing;
