@@ -29,7 +29,7 @@ Workers and Workers AI.
 | --- | --- | --- |
 | **How do agents know what other agents are working on?** | Before take-off, the tower routes each intent around code already in the air. Before editing, an agent claims the exact functions it will change. The radar and the `radar` tool show every claim and hold, and a waiting agent is told who holds the code and why. | Flight planning cut the time agents spent holding a claim from 5.8 h to 18 min |
 | **What happens when they make conflicting changes?** | Most never happen: two agents can't hold the same function. The runway, trunk's only writer, merges each flight onto the latest trunk, checks the claims again and runs the project's tests on the merged tree in a Dynamic Worker. A text or semantic conflict goes back to its flight with its cause; in a train, only the culprit's does. | 3,000 of 3,000 landed with none lost or doubled, with up to 854 scripted agents in the air at once |
-| **How do you review everything they produce?** | The project's own tests review every landing on the merged tree, in milliseconds. With AI review on, a Workers AI model from another family than the agent's reads each change against its intent and flags off-intent edits, unkept claims and weakened tests. People review only what a policy reserves for them or the reviewer flags: those landings wait in a review inbox, merged and green, with the diff, the contrail and the reviewer's reason. | Ramda: up to 1,238 tests per landing, in at most 102 ms. The AI reviewer judged 26 of 26 sample changes right before we chose it, in a median 2.6 s |
+| **How do you review everything they produce?** | The project's own tests review every landing on the merged tree, in milliseconds. With AI review on, a Workers AI model from another family than the agent's reads each change against its intent and flags off-intent edits, unkept claims and weakened tests. People review only what a policy reserves for them or the reviewer flags: those landings wait in a review inbox, merged and green, with the diff, the contrail and the reviewer's reason. | Ramda: up to 1,238 tests per landing, in at most 102 ms. On 14 realistic changes to the bookshop, 6 of them off-intent, the AI reviewer judged 70 of 70 reviews right, approving in a median 3.3 s |
 | **How do you keep track of not just what changed, but why?** | Each landing's intent, plan, decisions and test results ride with its commit as a git note (`refs/notes/contrail`). `why(path#symbol)` returns them for any function, and a flight that takes over an intent inherits them. | `git log --notes=contrail` on any clone of trunk |
 
 Real models flew the Ramda run (16 changes by 4 Claude Code, 2 Codex and 2 Workers AI edge agents), the Bookshop
@@ -465,7 +465,9 @@ video/                the demo video: narration (Workers AI text-to-speech), sli
   two phases and loses the part it held, the parts that landed stay landed: the Center says which
   sectors have the change, and requesting landing again lands the rest.
 - AI review only advises: a flag sends a landing to a person, and a reviewer that fails or takes over 45 s
-  is recorded as skipped, leaving the decision to the tests. A crossing's legs skip it, since a crossing
+  is recorded as skipped, leaving the decision to the tests. The reviewer reads each hunk with the function it
+  is in and lists every changed symbol the intent didn't ask for. A flag stands only if a second look agrees,
+  so a one-off misreading doesn't park a good landing; a flag takes a median 8.8 s, an approval 3.3 s. A crossing's legs skip it, since a crossing
   can't wait for a person. Off by default; `POST /api/p/<slug>/policy {"aiReview": true}` turns it on.
 - Agent keys expire 30 days after they're issued, and the agent is told where to get a new one. An operator
   can revoke one at once: `POST /api/p/<slug>/agents/<callsign>/revoke` with the admin key.
