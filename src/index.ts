@@ -348,7 +348,13 @@ app.post("/api/p/:slug/join", async (c) => {
 	const slug = c.req.param("slug");
 	const entry = await registry(c.env).get(slug);
 	if (!entry) return c.json({ error: "not found" }, 404);
-	const body = await readJson<{ joinCode?: string; callsign?: string; kind?: any; model?: string }>(c.req.raw, PUBLIC_BODY_MAX, {});
+	// A body too big, null or not JSON carries no join code (so a private airspace still looks unknown).
+	const body = ((await readJson<{ joinCode?: string; callsign?: string; kind?: any; model?: string } | null>(c.req.raw, PUBLIC_BODY_MAX, {}).catch(() => null)) ?? {}) as {
+		joinCode?: string;
+		callsign?: string;
+		kind?: any;
+		model?: string;
+	};
 	const admin = isAdmin(c);
 	// Without its code, a private airspace looks unknown.
 	if (!admin && !(typeof body.joinCode === "string" && safeEqual(body.joinCode, entry.joinCode)))
@@ -383,7 +389,7 @@ app.use("/api/p/:slug/agent/*", async (c, next) => {
 	const found = key ? await tower(c.env, slug).authenticate(key) : null;
 	if (found && !("agent" in found)) return c.json({ error: keyRefused(found, renewProject(c, slug)) }, 401);
 	// Without a key of its own, a private airspace looks unknown.
-	if (!found) return entry.info.public ? c.json({ error: "agent key required (Authorization: Bearer ct_…)" }, 401) : c.json({ error: "not found" }, 404);
+	if (!found) return entry.info.public || isAdmin(c) ? c.json({ error: "agent key required (Authorization: Bearer ct_…)" }, 401) : c.json({ error: "not found" }, 404);
 	c.set("agentId", found.agent.id);
 	await next();
 });
@@ -407,8 +413,9 @@ app.all("/mcp/:slug", async (c) => {
 	const t = tower(c.env, slug);
 	const key = bearer(c.req.raw);
 	const found = key ? await t.authenticate(key) : null;
-	// A private airspace answers only its own agents and the operator: not even its name to anyone else.
-	if (!entry.info.public && !(found && "agent" in found) && !isAdmin(c)) return c.json({ error: "not found" }, 404);
+	// A private airspace answers only its own agents (an expired or revoked key hears why) and the operator: not even
+	// its name to anyone else.
+	if (!entry.info.public && !found && !isAdmin(c)) return c.json({ error: "not found" }, 404);
 	return handleMcp(c.req.raw, {
 		tools: TOOLS,
 		target: t,

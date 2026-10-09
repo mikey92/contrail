@@ -9,6 +9,7 @@
 import { execSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { inspect } from "node:util";
 import { join } from "node:path";
 
 const base = process.env.CONTRAIL_URL?.replace(/\/$/, "");
@@ -61,10 +62,11 @@ async function cleanUp() {
     if (created.center) await remove(`/api/centers/${slug}`);
     await Promise.all(created.sectors.map((s) => remove(`/api/projects/${s}`)));
   }
-  rmSync(work, { recursive: true, force: true });
+  // --keep keeps the clones that go with the projects it keeps.
+  if (!keep) rmSync(work, { recursive: true, force: true });
 }
 process.on("uncaughtException", async (err) => {
-  console.error(`\nthe crossing test stopped: ${redact(err?.stack ?? err)}`);
+  console.error(`\nthe crossing test stopped: ${redact(inspect(err))}`);
   await cleanUp().catch(() => {});
   process.exit(1);
 });

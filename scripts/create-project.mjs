@@ -24,14 +24,25 @@ if (!slug || !dir || !base || !admin) {
   console.error("usage: CONTRAIL_URL=… CONTRAIL_ADMIN_KEY=… node scripts/create-project.mjs <slug> <dir | https://github.com/owner/repo> [name] [--playground] [--private] [--intents file.json] [--branch main]");
   process.exit(2);
 }
+// The intents are read before anything is created, so a bad file leaves no half-made project behind.
+const intentsPath = option("--intents") ?? (dir && !/^https:\/\/github\.com\//.test(dir) ? join(dir, "intents.json") : "");
 if (option("--intents") && !existsSync(option("--intents"))) {
   console.error(`no intents file at ${option("--intents")}`);
   process.exit(2);
 }
+let intents = null;
+if (intentsPath && existsSync(intentsPath)) {
+  try {
+    intents = JSON.parse(readFileSync(intentsPath, "utf8").replace(/^\uFEFF/, ""));
+  } catch (err) {
+    console.error(`${intentsPath} isn't JSON: ${err.message}`);
+    process.exit(2);
+  }
+}
 const github = /^https:\/\/github\.com\/[^/]+\/[^/]+/.test(dir);
 
 // Trunk takes text: a file that isn't UTF-8 (an image, say) is left out, and said so, rather than mangled.
-const utf8 = new TextDecoder("utf-8", { fatal: true });
+const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 const skipped = [];
 function walk(root, out = {}) {
   for (const entry of readdirSync(root)) {
@@ -74,9 +85,7 @@ if (!res.ok) {
 console.log(`project ${slug} created; trunk repo ${created.project.trunkRepo}`);
 console.log(`join code: ${created.joinCode}`);
 
-const intentsPath = option("--intents") ?? (github ? "" : join(dir, "intents.json"));
-if (intentsPath && existsSync(intentsPath)) {
-  const intents = JSON.parse(readFileSync(intentsPath, "utf8"));
+if (intents) {
   const r = await fetch(`${base}/api/p/${slug}/intents`, { method: "POST", headers, body: JSON.stringify({ intents }) });
   const body = await r.json();
   if (!r.ok) {

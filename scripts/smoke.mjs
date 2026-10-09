@@ -8,6 +8,7 @@
 import { execSync } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { inspect } from "node:util";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -75,10 +76,11 @@ async function deleteProject(projectSlug) {
 const created = [];
 async function cleanUp() {
   if (!keep) await Promise.all(created.map(deleteProject));
-  rmSync(work, { recursive: true, force: true });
+  // --keep keeps the clones that go with the projects it keeps.
+  if (!keep) rmSync(work, { recursive: true, force: true });
 }
 process.on("uncaughtException", async (err) => {
-  console.error(`\nthe smoke test stopped: ${redact(err?.stack ?? err)}`);
+  console.error(`\nthe smoke test stopped: ${redact(inspect(err))}`);
   await cleanUp().catch(() => {});
   process.exit(1);
 });

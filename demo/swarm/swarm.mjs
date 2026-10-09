@@ -162,6 +162,9 @@ function launch({ kind, model, callsign, key }) {
   const raw = createWriteStream(join(dir, "..", `${callsign}.jsonl`));
   const log = createWriteStream(join(dir, "..", `${callsign}.log`));
   const child = spawn(cmd, cmdArgs, { cwd: dir, env, stdio: ["ignore", "pipe", "pipe"] });
+  // As text, so a character split between two reads stays whole.
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
   let buf = "";
   child.stdout.on("data", (chunk) => {
     buf += chunk.toString();
