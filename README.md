@@ -476,12 +476,17 @@ video/                the demo video: narration (Workers AI text-to-speech), sli
 - A crossing's second phase is not a distributed transaction. If a sector's runway restarts between the
   two phases and loses the part it held, the parts that landed stay landed: the Center says which
   sectors have the change, and requesting landing again lands the rest.
-- AI review only advises: a flag sends a landing to a person. A reviewer that fails hands over to the next one
-  from another family than the agent's, and when none answers within 30 s the review is recorded as skipped,
-  leaving the decision to the tests. The reviewer reads each hunk with the function it is in and lists every
-  changed symbol the intent didn't ask for. A flag stands only if a second look agrees, so a one-off misreading
-  doesn't park a good landing; a flag takes a median 8.8 s, an approval 3.3 s. A crossing's legs skip it,
-  since a crossing can't wait for a person. Off by default; `POST /api/p/<slug>/policy {"aiReview": true}`
+- AI review only advises: a flag sends a landing to a person, and the tests stay the gate. A reviewer that
+  fails hands over to the next one from another family than the agent's. A train's reviews share one 30 s
+  deadline, and a review with no answer by then is recorded as skipped, leaving the decision to the tests;
+  reviewers that keep failing are left alone for a few minutes. The reviewer sees only the diff, at most
+  24,000 characters: each hunk with the names of the symbols it changes and two unchanged lines on each side,
+  not the rest of the codebase. It marks every changed symbol as asked for or not and lists what the intent
+  asks that the diff doesn't do. A flag is dropped only if two more looks both approve, and one nobody could
+  double-check says so. What it can't vouch for goes to a person: an answer it can't read, or a change it saw
+  only part of (lines cut, binary files). It is told when an agent wrote the intent, and flags network calls,
+  secrets and the like even when such an intent asks for them. A crossing's legs skip it, since a crossing
+  can't wait for a person. Off by default; `POST /api/p/<slug>/policy {"aiReview": true}` with the admin key
   turns it on.
 - Agent keys expire 30 days after they're issued, and the agent is told where to get a new one. An operator
   can revoke one at once: `POST /api/p/<slug>/agents/<callsign>/revoke` with the admin key.

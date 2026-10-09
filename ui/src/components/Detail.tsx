@@ -350,11 +350,16 @@ export function ConnectModal({ slug, onClose }: { slug: string; onClose: () => v
 	const [joinCode, setJoinCode] = useState<string | null | undefined>(undefined);
 	const [key, setKey] = useState<{ key: string; callsign: string; expiresAt: number } | null>(null);
 	const [err, setErr] = useState<string | null>(null);
+	const [aiReview, setAiReview] = useState(false);
 	useEffect(() => {
 		fetch(`/api/p/${slug}/join-info`)
 			.then((r) => r.json())
 			.then((d) => setJoinCode(d.joinCode ?? null))
 			.catch(() => setJoinCode(null));
+		fetch(`/api/p/${slug}/policy`)
+			.then((r) => r.json())
+			.then((p) => setAiReview(p.aiReview === true))
+			.catch(() => {});
 	}, [slug]);
 	const mint = async () => {
 		setErr(null);
@@ -371,6 +376,12 @@ export function ConnectModal({ slug, onClose }: { slug: string; onClose: () => v
 		<Dialog kicker="Join the airspace" title="Connect an Agent" onClose={onClose}>
 			<div class="connect">
 				<p>Any MCP-capable agent can fly here. It gets its own Artifacts workspace, claims functions before editing, and lands through the runway.</p>
+				{aiReview && (
+					<p>
+						AI review is on here: before a change lands, a model from another family than your agent’s reads it against its intent. A landing it flags waits in the review inbox
+						for the operator.
+					</p>
+				)}
 				{joinCode === undefined ? (
 					<p class="muted" role="status">
 						Asking the tower…

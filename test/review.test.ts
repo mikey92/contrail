@@ -206,14 +206,15 @@ describe("reviewChange", () => {
 			};
 			return ai;
 		};
-		const agree = looks("flag", "flag", "approve");
+		const agree = looks("flag", "flag");
 		expect(await reviewChange(agree, "@cf/m", input([]))).toMatchObject({ verdict: "flag", reason: "flag #1", concerns: [] });
-		expect(agree.calls).toBe(3);
+		expect(agree.calls).toBe(2);
 		const overruled = looks("flag", "approve", "approve");
 		expect(await reviewChange(overruled, "@cf/m", input([]))).toMatchObject({ verdict: "approve", reason: "approve #2" });
 		const tie = looks("flag", "approve", "flag");
 		expect((await reviewChange(tie, "@cf/m", input([]))).verdict).toBe("flag");
-		expect(await reviewChange(looks("flag", "error", "error"), "@cf/m", input([]))).toMatchObject({ verdict: "flag", concerns: ["Not double-checked: a second look gave no answer."] });
+		expect(await reviewChange(looks("flag", "error"), "@cf/m", input([]))).toMatchObject({ verdict: "flag", concerns: ["Not double-checked: a second look gave no answer."] });
+		expect((await reviewChange(looks("flag", "approve", "error"), "@cf/m", input([]))).concerns).toEqual(["Not double-checked: a second look gave no answer."]);
 		const approved = looks("approve");
 		expect((await reviewChange(approved, "@cf/m", input([]))).verdict).toBe("approve");
 		expect(approved.calls).toBe(1);
@@ -245,9 +246,8 @@ describe("reviewChange", () => {
 			},
 		};
 		expect((await reviewChange(ai, REVIEWERS[0], input([]))).verdict).toBe("flag");
-		expect(sent).toHaveLength(4);
+		expect(sent).toHaveLength(3);
 		expect(sent[2]).toMatch(/\/no_think$/);
-		expect(sent[3]).toMatch(/\/no_think$/);
 	});
 
 	it("passes a reasoning effort only to reviewers that take one", async () => {
@@ -342,11 +342,11 @@ describe("reading an answer", () => {
 });
 
 describe("asking", () => {
-	it("asks a second look with some temperature, and the first with none", async () => {
+	it("asks every look at temperature 0", async () => {
 		const temps: unknown[] = [];
 		const ai = { run: async (_m: string, i: any) => (temps.push(i.temperature), { response: '{"verdict":"flag","reason":"x"}' }) };
 		await reviewChange(ai, "@cf/m", input([]));
-		expect(temps).toEqual([0, 0.6, 0.6]);
+		expect(temps).toEqual([0, 0]);
 	});
 
 	it("doesn't start a reviewer to fall back on with too little time left, and stops when called off", async () => {

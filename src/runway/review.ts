@@ -305,8 +305,6 @@ interface AiRunner {
 	run(model: string, input: unknown, options?: { signal?: AbortSignal }): Promise<unknown>;
 }
 
-/** A second look at a flag is asked with some temperature, so it isn't a copy of the first. */
-const SECOND_LOOK = { temperature: 0.6, top_p: 0.95 };
 /** A reviewer to fall back on isn't asked with less time than this left. */
 const MIN_FALLBACK_MS = 5_000;
 
@@ -357,12 +355,12 @@ async function askReviewers(
 		});
 	});
 	timeout.catch(() => {});
-	const ask = async (model: string, reasoning: string, again: boolean, sampling: Record<string, number> = { temperature: 0 }) => {
+	const ask = async (model: string, reasoning: string, again: boolean) => {
 		if (expired) throw late();
 		const effortParam = REASONING_EFFORT.has(model);
 		// Asked again after thinking past the limit: a model without an effort setting is told not to think (Qwen3 reads /no_think).
 		const said = again && !effortParam ? [...messages.slice(0, -1), { ...messages[messages.length - 1], content: `${messages[messages.length - 1].content}\n\nAnswer now with the JSON object alone. /no_think` }] : messages;
-		const params = { messages: said, max_completion_tokens: 2000, ...sampling, ...(effortParam ? { reasoning_effort: reasoning } : {}) };
+		const params = { messages: said, max_completion_tokens: 2000, temperature: 0, ...(effortParam ? { reasoning_effort: reasoning } : {}) };
 		const out = (await Promise.race([ai.run(model, params, { signal: calls.signal }), timeout])) as {
 			choices?: { message?: { content?: unknown }; finish_reason?: string }[];
 			response?: unknown;
@@ -383,13 +381,29 @@ async function askReviewers(
 			unreadable = true;
 			return { model, verdict: "skipped", reason: "The reviewer's answer had no verdict.", concerns: [], ms: Date.now() - t0 };
 		}
-		// A flag sends the landing to a person, so two more looks, asked the same way side by side, check it: the flag
-		// is dropped only if both approve. A look that fails or runs out of time leaves it standing, and says so.
+		// A flag sends the landing to a person, so a second look, asked the same way, checks it, and a third breaks a
+		// tie: the flag is dropped only if two more looks both approve. (Warmer looks side by side did worse in the
+		// evaluation: one overturned a right flag, and flags took longer.) A look that fails or runs out of time
+		// leaves the flag standing, and says so.
 		if (answer.verdict.verdict === "flag") {
-			const looks = await Promise.all([0, 1].map(() => ask(model, again ? "none" : effort, again, SECOND_LOOK).catch(() => null)));
-			const approvals = looks.filter((l) => l?.verdict?.verdict === "approve");
-			if (approvals.length === 2) return { model, ...approvals[0]!.verdict!, ms: Date.now() - t0 };
-			if (!looks.some((l) => l?.verdict?.verdict === "flag"))
+			let flags = 1;
+			let approval: ReturnType<typeof parseVerdict> = null;
+			let approvals = 0;
+			let unanswered = false;
+			while (flags < 2 && approvals < 2) {
+				const look = await ask(model, again ? "none" : effort, again).catch(() => null);
+				if (!look?.verdict) {
+					unanswered = true;
+					break;
+				}
+				if (look.verdict.verdict === "flag") flags++;
+				else {
+					approvals++;
+					approval ??= look.verdict;
+				}
+			}
+			if (approvals === 2 && approval) return { model, ...approval, ms: Date.now() - t0 };
+			if (flags < 2 && unanswered)
 				return { model, ...answer.verdict, concerns: [...answer.verdict.concerns, "Not double-checked: a second look gave no answer."].slice(0, 5), ms: Date.now() - t0 };
 		}
 		return { model, ...answer.verdict, ms: Date.now() - t0 };
