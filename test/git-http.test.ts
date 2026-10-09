@@ -133,7 +133,7 @@ describe("Workspace sync", () => {
 
 	for (const toFile of [false, true]) {
 		it(`follows trunk turning a file into a directory or back (${toFile ? "to a file" : "to a directory"}), merged or fast-forward`, async () => {
-			const start = toFile ? { "a.js": "1\n", "docs/readme.md": "# Docs\n" } : { "a.js": "1\n", docs: "old docs\n" };
+			const start: Record<string, string> = toFile ? { "a.js": "1\n", "docs/readme.md": "# Docs\n" } : { "a.js": "1\n", docs: "old docs\n" };
 			// Merged: the flight has a commit of its own.
 			const merged = trunkAndFork(`swap-merge-${toFile}`, start);
 			const ws = await Workspace.open(merged.forkUrl, merged.trunk.url, author);
