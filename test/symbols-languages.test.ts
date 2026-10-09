@@ -129,6 +129,75 @@ void Cart::add(int x) {
 		expect(names("parse.c", c)).toEqual(["parse", "point", "Cart.add"]);
 	});
 
+	it("what namespace blocks hold, in C#, TypeScript, PHP and C++", () => {
+		const cs = ["using System;", "", "namespace Shop.Billing", "{", "    public class Invoice", "    {", "        public void Pay(decimal amount)", "        {", "            Total -= amount;", "        }", "    }", "}", ""].join("\n");
+		expect(names("Invoice.cs", cs)).toEqual(["Invoice", "Invoice.Pay"]);
+		const ts = [
+			"export namespace Geometry {",
+			"  export function area(r: number) {",
+			"    return r * r;",
+			"  }",
+			"  export class Shape {",
+			"    draw() {",
+			"      return 1;",
+			"    }",
+			"  }",
+			"}",
+			"declare global {",
+			"  function helper(): void;",
+			"}",
+			"export function top() {",
+			"  return 0;",
+			"}",
+		].join("\n");
+		expect(names("geo.ts", ts)).toEqual(["area", "Shape", "Shape.draw", "helper", "top"]);
+		// Not a namespace: `module.exports = {`.
+		expect(names("index.js", "module.exports = {\n  add() {\n    return 1;\n  },\n};\nfunction other() {\n  return 2;\n}\n")).toEqual(["other"]);
+		const php = ["<?php", "namespace App\\Http {", "    class Controller {", "        public function index() {", "            return 1;", "        }", "    }", "}"].join("\n");
+		expect(names("ctl.php", php)).toEqual(["Controller", "Controller.index"]);
+		// C++: unindented, nested, `a::b`, anonymous, `extern "C"`, and a name on a line of its own.
+		const cpp = [
+			"namespace util {",
+			"",
+			"int add(int a, int b) {",
+			"  return a + b;",
+			"}",
+			"",
+			"class Stack {",
+			" public:",
+			"  void push(int x) {",
+			"    v.push_back(x);",
+			"  }",
+			"};",
+			"",
+			"namespace detail {",
+			"template <typename T>",
+			"inline T",
+			"clamp(T x)",
+			"{",
+			"  return x;",
+			"}",
+			"}  // namespace detail",
+			"}  // namespace util",
+			"",
+			"namespace a::b {",
+			"  void f() {",
+			"  }",
+			"}",
+			"namespace {",
+			"void hidden() {",
+			"}",
+			"}",
+			'extern "C" {',
+			"int c_api(void) {",
+			"  return 0;",
+			"}",
+			"}",
+		].join("\n");
+		expect(names("util.cpp", cpp)).toEqual(["util.add", "util.Stack", "util.Stack.push", "util.detail.clamp", "a.b.f", "hidden", "c_api"]);
+		expect(symbolAt(extractSymbols("util.cpp", cpp), 10)).toBe("util.Stack.push");
+	});
+
 	it("Ruby classes and methods", () => {
 		const rb = `class Cart
   def initialize

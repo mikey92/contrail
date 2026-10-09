@@ -170,6 +170,11 @@ describe("mergeText inserts across languages", () => {
 		];
 		for (const [path, a, b] of cases) expect(insert(path, "// top\n", a, b).clean, path).toBe(false);
 	});
+	it("keeps names a file may declare more than once", () => {
+		expect(insert("main.go", "package main\n", 'func init() {\n\tregister("a")\n}\n', 'func init() {\n\tregister("b")\n}\n').clean).toBe(true);
+		expect(insert("shapes.go", "package shapes\n", "var _ Shape = (*Box)(nil)\n", "var _ Shape = (*Circle)(nil)\n").clean).toBe(true);
+		expect(insert("fmt.py", "import functools\n", "@show.register\ndef _(x: int):\n    return str(x)\n", "@show.register\ndef _(x: list):\n    return ', '.join(x)\n").clean).toBe(true);
+	});
 	it("does not take a type or a merged interface for a name declared twice", () => {
 		expect(insert("src/x.c", "int main(void);\n", "const int MAX_A = 1;\n", "const int MAX_B = 2;\n").clean).toBe(true);
 		expect(insert("src/x.kt", "package x\n", "const val A = 1\n", "const val B = 2\n").clean).toBe(true);
@@ -247,8 +252,7 @@ describe("big files", () => {
 		expect(both.clean).toBe(false);
 		expect(both.conflicts[0].baseStart).toBe(2);
 		expect(both.text.startsWith("a\n<<<<<<< trunk\n")).toBe(true);
-		// Given up on, a merge's diff runs to the end of the file (see "one change both sides made" below).
-		expect(both.text.endsWith("\nz\n>>>>>>> flight")).toBe(true);
+		expect(both.text.endsWith("\n>>>>>>> flight\nz")).toBe(true);
 	});
 
 	it("names only the functions a change to a long file touches", () => {
@@ -256,6 +260,26 @@ describe("big files", () => {
 		const before = ["// header", ...fns, ""].join("\n");
 		const after = ["// header, edited", ...fns, "", "function g() {", "  return -1;", "}", ""].join("\n");
 		expect(touchedSymbols("src/fns.js", before, after)).toEqual(["(top)", "g"]);
+	});
+
+	it("keeps edits far apart in a long file one side rewrote much of", () => {
+		// Trunk rewrites 501 lines at both ends of 1,100: more than Myers' diff takes on, so it splits at the
+		// lines both keep; the flight's edit in the middle stays its own.
+		const base = Array.from({ length: 1_100 }, (_, i) => `const v${i} = ${i};`);
+		const ours = base.map((l, i) => (i < 251 || i >= 850 ? l.replace("const", "let") : l));
+		const theirs = base.map((l, i) => (i === 600 ? "const v600 = 'six hundred';" : l));
+		const merged = mergeText("src/values.js", base.join("\n"), ours.join("\n"), theirs.join("\n"));
+		expect(merged.clean).toBe(true);
+		expect(merged.text).toBe(ours.map((l, i) => (i === 600 ? theirs[600] : l)).join("\n"));
+	});
+
+	it("stays fast when every line of a long file changed", () => {
+		const base = Array.from({ length: 100_000 }, (_, i) => `const v${i} = ${i};`);
+		const t0 = Date.now();
+		const merged = mergeText("src/values.js", base.join("\n"), base.map((l) => l.replace("const", "let")).join("\n"), base.map((l, i) => (i === 50_000 ? "const v = 0;" : l)).join("\n"));
+		expect(Date.now() - t0).toBeLessThan(5000);
+		expect(merged.conflicts).toHaveLength(1);
+		expect(merged.conflicts[0].symbols.length).toBeGreaterThan(1);
 	});
 
 	it("merges a file too long to spread into one call", () => {
@@ -309,6 +333,32 @@ describe("one change both sides made, in a long file", () => {
 		const merged = mergeText("x.txt", base.join("\n"), ours.join("\n"), theirs.join("\n"));
 		expect(merged.clean).toBe(true);
 		expect(merged.text).toBe(theirs.join("\n"));
+	});
+
+	it("applies both sides' changes when a side rewrote too much for one diff", () => {
+		// Over 1,000 changed lines: a side's diff splits at the lines both keep. A change both made, and each side's
+		// rewrite far from it, still merge clean.
+		let seed = 5;
+		const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+		const vocab = ["}", "", "  }", "  await tick();", "},", "    return x;"];
+		const line = () => (rnd() < 0.5 ? vocab[Math.floor(rnd() * vocab.length)] : `line ${Math.floor(rnd() * 1e9)}`);
+		const block = (n: number) => Array.from({ length: n }, line);
+		// New lines all different from the old: 1,200 changes.
+		const rewrite = (lines: string[], at: number, n: number) => [...lines.slice(0, at), ...Array.from({ length: n }, () => `new ${Math.floor(rnd() * 1e9)}`), ...lines.slice(at + n)];
+		const wrong: string[] = [];
+		for (let t = 0; t < 40; t++) {
+			const base = block(3_000);
+			const at = 1_400 + Math.floor(rnd() * 200);
+			// The change both made: a line deleted, or a copy of the four above it added.
+			const theirs = rnd() < 0.5 ? [...base.slice(0, at), ...base.slice(at + 1)] : [...base.slice(0, at), ...base.slice(at - 4, at), ...base.slice(at)];
+			const before = rnd() < 0.5;
+			const ours = rewrite(theirs, before ? 200 : 2_000, 600);
+			const both = t % 2 ? rewrite(theirs, before ? 2_000 : 200, 600) : theirs;
+			const expected = t % 2 ? (before ? [...ours.slice(0, 1_700), ...both.slice(1_700)] : [...both.slice(0, 1_700), ...ours.slice(1_700)]) : ours;
+			const merged = mergeText("x.txt", base.join("\n"), ours.join("\n"), both.join("\n"));
+			if (!merged.clean || merged.text !== expected.join("\n")) wrong.push(`${t}: ${merged.clean ? "wrong text" : "conflict"}`);
+		}
+		expect(wrong).toEqual([]);
 	});
 
 	it("applies both sides' changes whatever else one side changed far from them", () => {

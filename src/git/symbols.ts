@@ -81,12 +81,27 @@ const JAVA_MEMBER = new RegExp(
 const CONTROL = new Set(["if", "for", "while", "switch", "catch", "return", "function", "new", "await", "typeof", "else", "do", "try", "throw", "case", "when", "match", "loop", "sizeof", "synchronized", "using", "lock", "foreach", "fixed", "yield", "super", "this"]);
 
 const C_DECLS: Decl[] = [
-	{ re: /^\s*(?:template\s*<[^>]*>\s*)?(?:class|struct|union|namespace)\s+(\w+)(?:\s*:[^{;]*)?\s*\{?\s*$/, kind: "class", container: true },
+	{ re: /^\s*(?:template\s*<[^>]*>\s*)?(?:class|struct|union)\s+(\w+)(?:\s*:[^{;]*)?\s*\{?\s*$/, kind: "class", container: true },
 	{ re: /^\s*(?:typedef\s+)?enum\s+(?:class\s+)?(\w+)/, kind: "const" },
 	// `static int parse_header(const char *s) {`, `Cart::Add(...)` → definitions only (no trailing `;`).
 	{ re: /^(?!\s*(?:return|else|if|for|while|switch|case|do)\b)[A-Za-z_][\w\s*&:<>,~]*?\b((?:\w+::)*~?\w+)\s*\([^;]*$/, kind: "function", name: (m) => m[1].replace(/::/g, ".") },
 ];
 const C_MEMBER = /^\s+(?:(?:virtual|static|inline|explicit|constexpr|friend|override)\s+)*(?:[\w<>:,*&~]+\s+)*?(~?\w+)\s*\([^;]*$/;
+/** In a C++ namespace, a function's name may start its line (its return type above it), as a member's may. */
+const C_NAMESPACE_FUNCTION = /^\s*(?:(?:virtual|static|inline|explicit|constexpr|friend|override)\s+)*(?:[\w<>:,*&~]+\s+)*?(~?\w+)\s*\([^;]*$/;
+/** C++ words followed by `(` that start no function. */
+const C_NOT_NAMES = new Set(["decltype", "static_assert", "alignas", "alignof", "noexcept", "requires", "typeid", "sizeof", "defined"]);
+
+/**
+ * Blocks that only name what they hold (namespaces; C's `extern "C"`): it is read as if it were at the top. In
+ * C++ the namespace's name comes first in its symbols' (`util.add`, as `util::add` defined outside it reads);
+ * C# and PHP namespaces are folders, and TypeScript's are rare.
+ */
+const NAMESPACES: Partial<Record<Lang, { re: RegExp; qualify: boolean }>> = {
+	js: { re: /^\s*(?:declare\s+global|(?:export\s+)?(?:declare\s+)?(?:namespace|module)\s+(?:[\w$.]+|"[^"]*"|'[^']*'))\s*\{\s*$/, qualify: false },
+	java: { re: /^\s*namespace(?:\s+[\w.\\]+)?\s*\{?\s*$/, qualify: false },
+	c: { re: /^\s*(?:(?:inline\s+)?namespace(?:\s+([\w:]+))?|extern\s+"C(?:\+\+)?")\s*\{?\s*$/, qualify: true },
+};
 
 export function languageOf(path: string): Lang {
 	const ext = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
@@ -275,31 +290,47 @@ function extractBraces(lines: string[], lang: Lang, decls: Decl[], member: RegEx
 		return lines.length - 1;
 	};
 
-	for (let i = 0; i < lines.length; i++) {
-		if (depthBefore(i) !== 0) continue;
-		for (const decl of decls) {
-			const m = lines[i].match(decl.re);
-			if (!m) continue;
-			const name = decl.name ? decl.name(m) : m[m.length - 1];
-			const end = blockEnd(i, 0);
-			out.push({ name, kind: decl.kind, start: decoratedFrom(lines, i, lang) + 1, end: end + 1 });
-			if (decl.container && member) {
-				for (let j = i + 1; j < end; j++) {
-					if (depthBefore(j) !== 1) continue;
-					const mm = lines[j].match(member);
-					const memberName = mm && (mm[1] ?? mm[2] ?? mm[3]);
-					// Keyword-introduced members (Rust `fn new`, Kotlin `fun when`) can't be statements.
-					const keyword = lang === "rust" || (lang === "java" && mm?.[1] !== undefined);
-					if (!memberName || (!keyword && CONTROL.has(memberName)) || /;\s*$/.test(lines[j])) continue;
-					const mEnd = blockEnd(j, 1);
-					out.push({ name: `${name}.${memberName}`, kind: "method", start: decoratedFrom(lines, j, lang) + 1, end: mEnd + 1 });
-					j = mEnd;
-				}
+	const namespace = NAMESPACES[lang];
+	/** The declarations from line `from` to `to` at brace depth `depth`, their names after `prefix`. */
+	const scan = (from: number, to: number, depth: number, prefix: string) => {
+		for (let i = from; i < to; i++) {
+			if (depthBefore(i) !== depth) continue;
+			const ns = namespace?.re.exec(lines[i]);
+			if (ns) {
+				const end = blockEnd(i, depth);
+				scan(i + 1, end, depth + 1, namespace!.qualify && ns[1] ? `${prefix}${ns[1].replace(/::/g, ".")}.` : prefix);
+				i = end;
+				continue;
 			}
-			i = end;
-			break;
+			// A namespace's declarations may be indented (C's are matched at the start of a line).
+			const text = depth ? lines[i].trimStart() : lines[i];
+			const fn = lang === "c" && depth ? C_NAMESPACE_FUNCTION.exec(text) : null;
+			const nsDecl: Decl[] = fn && !CONTROL.has(fn[1]) && !C_NOT_NAMES.has(fn[1]) ? [{ re: C_NAMESPACE_FUNCTION, kind: "function" }] : [];
+			for (const decl of [...decls, ...nsDecl]) {
+				const m = text.match(decl.re);
+				if (!m) continue;
+				const name = prefix + (decl.name ? decl.name(m) : m[m.length - 1]);
+				const end = blockEnd(i, depth);
+				out.push({ name, kind: decl.kind, start: decoratedFrom(lines, i, lang) + 1, end: end + 1 });
+				if (decl.container && member) {
+					for (let j = i + 1; j < end; j++) {
+						if (depthBefore(j) !== depth + 1) continue;
+						const mm = lines[j].match(member);
+						const memberName = mm && (mm[1] ?? mm[2] ?? mm[3]);
+						// Keyword-introduced members (Rust `fn new`, Kotlin `fun when`) can't be statements.
+						const keyword = lang === "rust" || (lang === "java" && mm?.[1] !== undefined);
+						if (!memberName || (!keyword && CONTROL.has(memberName)) || /;\s*$/.test(lines[j])) continue;
+						const mEnd = blockEnd(j, depth + 1);
+						out.push({ name: `${name}.${memberName}`, kind: "method", start: decoratedFrom(lines, j, lang) + 1, end: mEnd + 1 });
+						j = mEnd;
+					}
+				}
+				i = end;
+				break;
+			}
 		}
-	}
+	};
+	scan(0, lines.length, 0, "");
 	return out;
 }
 
@@ -429,9 +460,22 @@ export function symbolAt(symbols: SymbolSpan[], line: number): string {
 	return best ? best.name : TOP;
 }
 
+/**
+ * symbolAt of every line from `start` to `end` (1-based, inclusive), as an array from `start` on. A span at a
+ * time, widest first (a narrower one, nested in it, then takes its lines): line by line, a long file with many
+ * functions would take its lines times its functions.
+ */
+export function symbolsByLine(symbols: SymbolSpan[], start: number, end: number): string[] {
+	const names: string[] = new Array(Math.max(0, end - start + 1)).fill(TOP);
+	const width = (s: SymbolSpan) => s.end - s.start;
+	// Of two as wide, the later one, as symbolAt picks it.
+	const spans = symbols.map((s, i) => [s, i] as const).filter(([s]) => s.end >= start && s.start <= end);
+	spans.sort(([x, i], [y, j]) => width(y) - width(x) || i - j);
+	for (const [s] of spans) for (let l = Math.max(start, s.start); l <= Math.min(end, s.end); l++) names[l - start] = s.name;
+	return names;
+}
+
 /** All symbols overlapping a 1-based inclusive line range (innermost spans only), or `(top)`. */
 export function symbolsInRange(symbols: SymbolSpan[], start: number, end: number): string[] {
-	const hits = new Set<string>();
-	for (let line = start; line <= end; line++) hits.add(symbolAt(symbols, line));
-	return [...hits];
+	return [...new Set(symbolsByLine(symbols, start, end))];
 }

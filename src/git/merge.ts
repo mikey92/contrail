@@ -7,7 +7,7 @@
 // landing flight) — together with the symbols it touches, so the agent that has to resolve it
 // gets the exact functions and the context of whoever changed them.
 import { diffIndices } from "node-diff3";
-import { extractSymbols, languageOf, symbolAt, symbolsInRange, TOP, type SymbolSpan } from "./symbols";
+import { extractSymbols, languageOf, symbolsByLine, symbolsInRange, TOP, type SymbolSpan } from "./symbols";
 
 export interface ConflictHunk {
 	/** 1-based first base line of the conflicting region (insertion point when baseLines is empty). */
@@ -33,7 +33,7 @@ const sameLines = (a: string[], b: string[]) => a.length === b.length && a.every
 /**
  * A line diff takes time growing with the square of the lines, or worse (a lockfile's near-identical lines):
  * texts up to this many lines in all are diffed as they always were; longer ones with Myers' algorithm, quick
- * when little changed.
+ * when little changed, and patience diff's anchors where much did.
  */
 export const MAX_DIFF_LINES = 2000;
 
@@ -44,8 +44,10 @@ interface LineDiff {
 	buffer2Content: string[];
 }
 
-/** Most lines a long text's diff may change before it gives up and counts them all as one change. */
+/** Most lines Myers' diff of a stretch may change before the stretch is split at anchors (or is one change). */
 const MAX_EDITS = 1000;
+/** How many times a stretch is split at anchors, and its parts at their own anchors, at most. */
+const MAX_SPLITS = 8;
 
 /**
  * The shortest edit script from `a` to `b` (Myers, as git diffs), as hunks: time grows with the length times the
@@ -115,33 +117,87 @@ function myers(a: string[], b: string[], maxEdits: number): LineDiff[] | null {
 
 /**
  * diffIndices, bounded: texts too long for it are diffed with Myers' algorithm, which is quick when little
- * changed, and past MAX_EDITS the stretch between the lines both share at their ends is one hunk.
+ * changed, and split where much did (see stretchDiff).
  */
 export function diffLines(a: string[], b: string[]): LineDiff[] {
-	return lineDiff(a, b, a.length + b.length > MAX_DIFF_LINES, true);
+	return lineDiff(a, b, a.length + b.length > MAX_DIFF_LINES);
 }
 
 /**
- * diffLines with the algorithm chosen: diffIndices, or for `long` texts Myers'. A merge diffs both its sides with
- * the same one and never trims the lines they share at the end (`trimEnd`): one change made on both sides has to
- * line up the same in both diffs (in a run of `}` or blank lines, say), or the merge keeps it twice or drops a
- * line, and matching lines from the end lines it up differently than from the start.
+ * diffLines with the algorithm chosen: diffIndices, or for `long` texts Myers' (from their first different line).
+ * A merge diffs both its sides with the same one: one change made on both sides has to line up the same in both
+ * diffs (in a run of `}` or blank lines, say), or the merge keeps it twice or drops a line.
  */
-function lineDiff(a: string[], b: string[], long: boolean, trimEnd: boolean): LineDiff[] {
+function lineDiff(a: string[], b: string[], long: boolean): LineDiff[] {
 	// Short texts as they always were (another algorithm can line up a run of blank lines or `}` differently).
 	if (!long)
 		return diffIndices<string>(a, b).map((d) => ({ buffer1: d.buffer1, buffer1Content: d.buffer1Content, buffer2: d.buffer2, buffer2Content: d.buffer2Content }));
 	let head = 0;
 	while (head < a.length && head < b.length && a[head] === b[head]) head++;
-	if (head === a.length && head === b.length) return [];
-	const hunks = myers(a.slice(head), b.slice(head), MAX_EDITS);
-	if (hunks) return hunks.map((d) => ({ ...d, buffer1: [d.buffer1[0] + head, d.buffer1[1]], buffer2: [d.buffer2[0] + head, d.buffer2[1]] }));
-	// Too many changes: one hunk from the first changed line to the last (in a merge, to the end).
-	let tail = 0;
-	if (trimEnd) while (tail < Math.min(a.length, b.length) - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
-	const am = a.slice(head, a.length - tail);
-	const bm = b.slice(head, b.length - tail);
-	return [{ buffer1: [head, am.length], buffer1Content: am, buffer2: [head, bm.length], buffer2Content: bm }];
+	const out: LineDiff[] = [];
+	stretchDiff(a.slice(head), b.slice(head), head, head, out, 0);
+	return out;
+}
+
+/**
+ * Myers' diff of a stretch (at `aAt` and `bAt` in the whole texts), into `out`. Past MAX_EDITS, patience diff's
+ * anchors split it: the lines each side has exactly once, in an order both keep. The parts between them are
+ * diffed the same way, and a part with too many changes and no anchor is one hunk. A change both sides of a merge
+ * made still lines up as Myers' lines it up: no anchor lies among the lines it could slide over (with the change
+ * in, such a line would be there twice).
+ */
+function stretchDiff(a: string[], b: string[], aAt: number, bAt: number, out: LineDiff[], splits: number): void {
+	if (!a.length && !b.length) return;
+	const hunks = myers(a, b, MAX_EDITS);
+	if (hunks) {
+		for (const h of hunks) out.push({ ...h, buffer1: [h.buffer1[0] + aAt, h.buffer1[1]], buffer2: [h.buffer2[0] + bAt, h.buffer2[1]] });
+		return;
+	}
+	const anchors = splits < MAX_SPLITS ? increasing(uniquePairs(a, b)) : [];
+	if (!anchors.length) {
+		out.push({ buffer1: [aAt, a.length], buffer1Content: a, buffer2: [bAt, b.length], buffer2Content: b });
+		return;
+	}
+	let i = 0;
+	let j = 0;
+	for (const [ai, bj] of [...anchors, [a.length, b.length]]) {
+		stretchDiff(a.slice(i, ai), b.slice(j, bj), aAt + i, bAt + j, out, splits + 1);
+		i = ai + 1;
+		j = bj + 1;
+	}
+}
+
+/** The lines `a` and `b` each have exactly once, as [index in a, index in b], in a's order. */
+function uniquePairs(a: string[], b: string[]): [number, number][] {
+	// Index in a, or -1 for a line a has twice.
+	const inA = new Map<string, number>();
+	for (let i = 0; i < a.length; i++) inA.set(a[i], inA.has(a[i]) ? -1 : i);
+	const inB = new Map<string, number>();
+	for (let j = 0; j < b.length; j++) if ((inA.get(b[j]) ?? -1) >= 0) inB.set(b[j], inB.has(b[j]) ? -1 : j);
+	const pairs: [number, number][] = [];
+	for (const [line, j] of inB) if (j >= 0) pairs.push([inA.get(line)!, j]);
+	return pairs.sort((x, y) => x[0] - y[0]);
+}
+
+/** The longest run of `pairs` (in a's order) whose indices in b go up too (patience sorting). */
+function increasing(pairs: [number, number][]): [number, number][] {
+	// tails[n]: the pair ending the best run of n + 1 found so far (the one with the lowest index in b).
+	const tails: number[] = [];
+	const before = new Int32Array(pairs.length).fill(-1);
+	for (let k = 0; k < pairs.length; k++) {
+		let lo = 0;
+		let hi = tails.length;
+		while (lo < hi) {
+			const mid = (lo + hi) >> 1;
+			if (pairs[tails[mid]][1] < pairs[k][1]) lo = mid + 1;
+			else hi = mid;
+		}
+		if (lo > 0) before[k] = tails[lo - 1];
+		tails[lo] = k;
+	}
+	const run: [number, number][] = [];
+	for (let k = tails.length ? tails[tails.length - 1] : -1; k >= 0; k = before[k]) run.push(pairs[k]);
+	return run.reverse();
 }
 
 /** Appends `lines` one by one: spread into one call, a long file's lines overflow the stack. */
@@ -158,8 +214,8 @@ type Merged = { ok: string[]; conflict?: undefined } | { conflict: { a: string[]
 function diff3(a: string[], o: string[], b: string[]): Merged[] {
 	const long = o.length + Math.max(a.length, b.length) > MAX_DIFF_LINES;
 	const hunks = [
-		...lineDiff(o, a, long, false).map((h) => ({ side: "a" as const, oStart: h.buffer1[0], oLength: h.buffer1[1], start: h.buffer2[0], length: h.buffer2[1] })),
-		...lineDiff(o, b, long, false).map((h) => ({ side: "b" as const, oStart: h.buffer1[0], oLength: h.buffer1[1], start: h.buffer2[0], length: h.buffer2[1] })),
+		...lineDiff(o, a, long).map((h) => ({ side: "a" as const, oStart: h.buffer1[0], oLength: h.buffer1[1], start: h.buffer2[0], length: h.buffer2[1] })),
+		...lineDiff(o, b, long).map((h) => ({ side: "b" as const, oStart: h.buffer1[0], oLength: h.buffer1[1], start: h.buffer2[0], length: h.buffer2[1] })),
 	].sort((x, y) => x.oStart - y.oStart);
 	const out: Merged[] = [];
 	let ok: string[] = [];
@@ -286,11 +342,14 @@ const PROSE = /\.(?:md|markdown|txt|rst|adoc|org|json|ya?ml|toml|csv|tsv|lock|in
 
 /** Names both inserts declare at the top level: kept side by side, the file would declare them twice. */
 function declaredTwice(path: string, a: string[], b: string[]): string[] {
-	const re = DECLARATIONS[languageOf(path)] ?? (PROSE.test(path) ? null : ANY_DECLARATION);
+	const lang = languageOf(path);
+	const re = DECLARATIONS[lang] ?? (PROSE.test(path) ? null : ANY_DECLARATION);
 	if (!re) return [];
 	const names = (lines: string[]) => new Set(lines.flatMap((l) => re.exec(l)?.[1] ?? []));
 	const ours = names(a);
-	return [...names(b)].filter((n) => ours.has(n));
+	// `_` names nothing (Go's `var _ Shape = (*Box)(nil)`, Python's `def _` registered for one type), and a Go
+	// file may have any number of `init` functions.
+	return [...names(b)].filter((n) => ours.has(n) && n !== "_" && !(lang === "go" && n === "init"));
 }
 
 /**
@@ -395,12 +454,12 @@ export function touchedSymbols(path: string, before: string | null, after: strin
 	if (before === null || after === null) return [...new Set([TOP, ...extractSymbols(path, before ?? after ?? "").map((s) => s.name)])].sort();
 	const beforeLines = before.split("\n");
 	const afterLines = after.split("\n");
-	const beforeSyms = extractSymbols(path, before);
-	const afterSyms = extractSymbols(path, after);
+	const beforeSyms = symbolsByLine(extractSymbols(path, before), 1, beforeLines.length);
+	const afterSyms = symbolsByLine(extractSymbols(path, after), 1, afterLines.length);
 	const touched = new Set<string>();
 	// Blank lines are layout, not code: they never make a change touch `(top)` on their own.
-	const mark = (syms: SymbolSpan[], lines: string[], start: number, len: number) => {
-		for (let i = start; i < start + len; i++) if (lines[i]?.trim()) touched.add(symbolAt(syms, i + 1));
+	const mark = (syms: string[], lines: string[], start: number, len: number) => {
+		for (let i = start; i < start + len; i++) if (lines[i]?.trim()) touched.add(syms[i]);
 	};
 	for (const d of diffLines(beforeLines, afterLines)) {
 		mark(beforeSyms, beforeLines, d.buffer1[0], d.buffer1[1]);
@@ -425,15 +484,15 @@ export function lineChanges(before: string, after: string) {
 export function contextChanges(path: string, before: string, after: string, context = 2) {
 	const beforeLines = before.split("\n");
 	const afterLines = after.split("\n");
-	const beforeSyms = extractSymbols(path, before);
-	const afterSyms = extractSymbols(path, after);
+	const beforeSyms = symbolsByLine(extractSymbols(path, before), 1, beforeLines.length);
+	const afterSyms = symbolsByLine(extractSymbols(path, after), 1, afterLines.length);
 	const diffs = diffLines(beforeLines, afterLines);
 	return diffs.map((d, i) => {
 		const [bStart, bLen] = d.buffer1;
 		const [aStart, aLen] = d.buffer2;
 		const symbols = new Set<string>();
-		for (let l = bStart; l < bStart + bLen; l++) if (beforeLines[l]?.trim()) symbols.add(symbolAt(beforeSyms, l + 1));
-		for (let l = aStart; l < aStart + aLen; l++) if (afterLines[l]?.trim()) symbols.add(symbolAt(afterSyms, l + 1));
+		for (let l = bStart; l < bStart + bLen; l++) if (beforeLines[l]?.trim()) symbols.add(beforeSyms[l]);
+		for (let l = aStart; l < aStart + aLen; l++) if (afterLines[l]?.trim()) symbols.add(afterSyms[l]);
 		const prevEnd = i > 0 ? diffs[i - 1].buffer2[0] + diffs[i - 1].buffer2[1] : 0;
 		const nextStart = i + 1 < diffs.length ? diffs[i + 1].buffer2[0] : afterLines.length;
 		return {
