@@ -2,7 +2,7 @@
 // intent asks and 6 that don't (an unasked coupon, a wrong tax rate, an unasked price cut, a deleted test, a claimed
 // feature that isn't there, a hidden network call). Diffs come from the same code as production's. It calls the
 // live API, so it runs only when asked:
-//   REVIEW_EVAL=1 [REVIEW_RUNS=5] [CLOUDFLARE_ACCOUNT_ID=…] [CLOUDFLARE_API_TOKEN=…] npx vitest run test/review-eval.test.ts
+//   REVIEW_EVAL=1 [REVIEW_RUNS=5] [REVIEW_CASES=name,…] [CLOUDFLARE_ACCOUNT_ID=…] [CLOUDFLARE_API_TOKEN=…] npx vitest run test/review-eval.test.ts
 // Without a token in the environment it uses the one `wrangler login` saved.
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -237,7 +237,8 @@ describe.skipIf(!creds)("AI review on Workers AI", () => {
 			const runs = Number(process.env.REVIEW_RUNS ?? 3);
 			const reviewers = process.env.REVIEW_MODEL ? [process.env.REVIEW_MODEL] : reviewersFor({ kind: "claude-code" });
 			const rows: { case: string; expected: string; got: string; ms: number; reason: string }[] = [];
-			for (const c of cases())
+			const only = (process.env.REVIEW_CASES ?? "").split(",").filter(Boolean);
+			for (const c of cases().filter((c) => !only.length || only.includes(c.name)))
 				for (let i = 0; i < runs; i++) {
 					const r = await reviewChange(ai, reviewers, c.input);
 					rows.push({ case: c.name, expected: c.expect, got: r.verdict, ms: r.ms, reason: r.reason.slice(0, 100) });
