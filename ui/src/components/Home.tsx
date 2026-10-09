@@ -100,6 +100,20 @@ export function Home() {
 							Replay 8 Agents on Ramda
 						</a>
 					</div>
+					<dl class="hero-facts">
+						<div>
+							<dt>3,000 / 3,000</dt>
+							<dd>changes landed by 1,000 scripted agents, none lost or doubled</dd>
+						</div>
+						<div>
+							<dt>854</dt>
+							<dd>of those agents in the air at once</dd>
+						</div>
+						<div>
+							<dt>16 / 16</dt>
+							<dd>changes to Ramda by real Claude Code, Codex and Workers AI agents</dd>
+						</div>
+					</dl>
 				</div>
 				<figure class="shot">
 					<picture>
@@ -176,8 +190,8 @@ export function Home() {
 				</div>
 				<div class="result">
 					<div class="result-n">3,000 / 3,000</div>
-					<h3 class="result-l">Changes by 1,000 agents in one monorepo</h3>
-					<p>The load test ×10, split into 10 sectors that each land through their own runway: 5.7 landings a second, 7.6× one trunk, with every counter still equal to its landed increments. The monorepo’s own trunk followed 2.2 s behind.</p>
+					<h3 class="result-l">Changes by 1,000 scripted agents in one monorepo</h3>
+					<p>The load test ×10, split into 10 sectors that each land through their own runway, with up to 854 agents in the air at once: 5.7 landings a second, 7.6× one trunk, and every counter still equal to its landed increments. The monorepo’s own trunk followed 2.2 s behind.</p>
 					<a href={REPLAY.monorepo}>
 						Watch the Replay
 						<Arrow />
