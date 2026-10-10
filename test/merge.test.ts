@@ -599,6 +599,13 @@ describe("merges where the two diffs could line up either way", () => {
 		expect(mergeText("src/f.js", js, `${js}}\n`, `${js}}\n\nfunction g() {\n  return 2;\n}\n`).clean).toBe(false);
 	});
 
+	it("calls a bracket added at one point a conflict when the other side adds lines there", () => {
+		// Trunk closes the list; the flight adds an item. Side by side, the item lands after the bracket.
+		const base = "const list = [\n  1,\n  2,\n\nexport { list };\n";
+		const merged = mergeText("src/list.js", base, base.replace("  2,\n", "  2,\n];\n"), base.replace("  2,\n", "  2,\n  3,\n"));
+		expect(merged.clean).toBe(false);
+	});
+
 	it("calls an insert a conflict when its diff split it around a line of code and the other side's insert is part of it", () => {
 		// The flight added `check(); run(); log("start");` before `run();`, and its diff took the added `run();` for
 		// base's: `log("start");` lands after it, while trunk added that line before `run();`.
@@ -656,35 +663,35 @@ describe("merges where the two diffs could line up either way", () => {
 
 	it("merges one change both sides made below a rewrite into the right text or a conflict", () => {
 		// Trunk rewrites a block of lines that repeat; below it, among more such lines, both sides make one change, or
-		// the flight made the same rewrite and only trunk the change. A clean merge is trunk's text (blank lines aside:
-		// one added or taken next to a change is layout).
-		const rnd = random(1);
-		const pick = <T>(xs: T[]) => xs[Math.floor(rnd() * xs.length)];
+		// the flight made the same rewrite and only trunk the change. A clean merge is trunk's text.
 		const vocab = ["", "- done", "}", "  }", "---", "    return;"];
-		const wrong: number[] = [];
-		const words = (lines: string[]) => lines.filter((l) => l.trim()).join("\n");
-		for (let t = 0; t < 300; t++) {
-			const size = pick([30, 60, 120]);
-			const header = Array.from({ length: 10 }, (_, i) => `intro ${i}`);
-			const oldBlock = Array.from({ length: size }, (_, i) => (rnd() < 0.3 ? pick(vocab) : `old ${i}`));
-			const newBlock = Array.from({ length: size }, (_, i) => (rnd() < 0.45 ? pick(vocab) : `new ${i}`));
-			const gap = Array.from({ length: Math.floor(rnd() * 12) }, () => pick(vocab));
-			const tail = Array.from({ length: 40 }, (_, i) => `tail ${i}`);
-			const at = Math.floor(rnd() * (gap.length + 1));
-			const kind = pick(["note", "ins-rep", "del", "rep"]);
-			const changed = gap.slice();
-			if (kind === "note") changed.splice(at, 0, "- note");
-			else if (kind === "ins-rep") changed.splice(at, 0, pick(["- done", "}", "  }", "---", "    return;"]));
-			else if (kind === "del") {
-				if (changed.length) changed.splice(Math.min(at, changed.length - 1), 1);
-				else changed.push("- added");
-			} else if (changed.length) changed.splice(Math.min(at, changed.length - 1), 1, "- changed");
-			else changed.push("- changed");
-			const base = [...header, ...oldBlock, ...gap, "## End", ...tail];
-			const ours = [...header, ...newBlock, ...changed, "## End", ...tail];
-			const theirs = rnd() < 0.5 ? [...header, ...oldBlock, ...changed, "## End", ...tail] : [...header, ...newBlock, ...gap, "## End", ...tail];
-			const merged = mergeText("NOTES.md", base.join("\n"), ours.join("\n"), theirs.join("\n"));
-			if (merged.clean && words(merged.text.split("\n")) !== words(ours)) wrong.push(t);
+		const wrong: string[] = [];
+		for (const seed of [1, 19]) {
+			const rnd = random(seed);
+			const pick = <T>(xs: T[]) => xs[Math.floor(rnd() * xs.length)];
+			for (let t = 0; t < 300; t++) {
+				const size = pick([30, 60, 120]);
+				const header = Array.from({ length: 10 }, (_, i) => `intro ${i}`);
+				const oldBlock = Array.from({ length: size }, (_, i) => (rnd() < 0.3 ? pick(vocab) : `old ${i}`));
+				const newBlock = Array.from({ length: size }, (_, i) => (rnd() < 0.45 ? pick(vocab) : `new ${i}`));
+				const gap = Array.from({ length: Math.floor(rnd() * 12) }, () => pick(vocab));
+				const tail = Array.from({ length: 40 }, (_, i) => `tail ${i}`);
+				const at = Math.floor(rnd() * (gap.length + 1));
+				const kind = pick(["note", "ins-rep", "del", "rep"]);
+				const changed = gap.slice();
+				if (kind === "note") changed.splice(at, 0, "- note");
+				else if (kind === "ins-rep") changed.splice(at, 0, pick(["- done", "}", "  }", "---", "    return;"]));
+				else if (kind === "del") {
+					if (changed.length) changed.splice(Math.min(at, changed.length - 1), 1);
+					else changed.push("- added");
+				} else if (changed.length) changed.splice(Math.min(at, changed.length - 1), 1, "- changed");
+				else changed.push("- changed");
+				const base = [...header, ...oldBlock, ...gap, "## End", ...tail];
+				const ours = [...header, ...newBlock, ...changed, "## End", ...tail];
+				const theirs = rnd() < 0.5 ? [...header, ...oldBlock, ...changed, "## End", ...tail] : [...header, ...newBlock, ...gap, "## End", ...tail];
+				const merged = mergeText("NOTES.md", base.join("\n"), ours.join("\n"), theirs.join("\n"));
+				if (merged.clean && merged.text !== ours.join("\n")) wrong.push(`${seed}:${t}`);
+			}
 		}
 		expect(wrong).toEqual([]);
 	});
