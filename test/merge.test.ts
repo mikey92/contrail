@@ -502,3 +502,82 @@ describe("two flights add a method of the same name", () => {
 		expect(merged.text).toContain("clear()");
 	});
 });
+
+describe("changes at one point or a few lines apart", () => {
+	it("keeps two functions added at one point whole when one has a blank line in it", () => {
+		// The diff can split such an insert around a base blank line; the other function must not land in between.
+		const base = "def a():\n    return 1\n\n\ndef b():\n    return 2\n";
+		const at = base.indexOf("\n\n\ndef b");
+		const load = "\n\ndef load(path):\n    text = open(path).read()\n\n    return text.strip()";
+		const save = "\n\ndef save(path, text):\n    open(path, 'w').write(text)";
+		const merged = mergeText("io.py", base, base.slice(0, at) + load + base.slice(at), base.slice(0, at) + save + base.slice(at));
+		expect(merged.clean).toBe(true);
+		expect(merged.text).toBe(base.slice(0, at) + load + save + base.slice(at));
+	});
+
+	it("keeps edits to nearby lines that read the same", () => {
+		const cases: [string, string, (t: string) => string, (t: string) => string][] = [
+			['stubs.ts', 'export function parse(s: string) {\n  throw new Error("not implemented");\n}\n\nexport function format(x: Node) {\n  throw new Error("not implemented");\n}\n', (t) => t.replace('throw new Error("not implemented");\n}\n\nexport function format', 'return JSON.parse(s);\n}\n\nexport function format'), (t) => t.replace(/throw new Error\("not implemented"\);\n\}\n$/, "return JSON.stringify(x);\n}\n")],
+			["stubs.py", "def load(path):\n    pass\n\n\ndef save(path, data):\n    pass\n", (t) => t.replace("    pass\n\n\ndef save", "    with open(path) as f:\n        return f.read()\n\n\ndef save"), (t) => t.replace(/    pass\n$/, "    with open(path, 'w') as f:\n        f.write(data)\n")],
+			["flags.yml", "search:\n  enabled: false\nexport:\n  enabled: false\n", (t) => t.replace("search:\n  enabled: false", "search:\n  enabled: true"), (t) => t.replace("export:\n  enabled: false", "export:\n  enabled: true")],
+			["theme.css", ".btn {\n  color: red;\n}\n.link {\n  color: red;\n}\n", (t) => t.replace(".btn {\n  color: red;", ".btn {\n  color: blue;"), (t) => t.replace(".link {\n  color: red;", ".link {\n  color: green;")],
+			["route.js", 'switch (kind) {\n  case "a":\n    return null;\n  case "b":\n    return null;\n}\n', (t) => t.replace('"a":\n    return null;', '"a":\n    return makeA();'), (t) => t.replace('"b":\n    return null;', '"b":\n    return makeB();')],
+		];
+		for (const [path, base, ours, theirs] of cases) {
+			const merged = mergeText(path, base, ours(base), theirs(base));
+			expect(merged.clean, path).toBe(true);
+			expect(merged.text, path).toBe(theirs(ours(base)));
+		}
+	});
+
+	it("keeps two inserts at one point that only end alike", () => {
+		// Go's error handling, a try/catch, a lockfile entry's last fields.
+		const go = 'package store\n\n\nfunc Open(dsn string) (*sql.DB, error) {\n\treturn sql.Open("postgres", dsn)\n}\n';
+		const goFn = (name: string, sql: string) => `\nfunc (s *Store) ${name}(id int) error {\n\t_, err := s.db.Exec("${sql}", id)\n\tif err != nil {\n\t\treturn err\n\t}\n\treturn nil\n}\n`;
+		expect(mergeText("store.go", go, go + goFn("SaveUser", "INSERT"), go + goFn("DeleteOrder", "DELETE")).text).toBe(go + goFn("SaveUser", "INSERT") + goFn("DeleteOrder", "DELETE"));
+		const ts = 'import { api } from "./api";\n';
+		const tsFn = (name: string, call: string) => `\nexport async function ${name}(id: string) {\n  try {\n    return await ${call}(id);\n  } catch (error) {\n    console.error(error);\n    throw error;\n  }\n}\n`;
+		expect(mergeText("src/load.ts", ts, ts + tsFn("loadUser", "api.getUser"), ts + tsFn("loadOrder", "api.getOrder")).text).toBe(ts + tsFn("loadUser", "api.getUser") + tsFn("loadOrder", "api.getOrder"));
+		const entry = (name: string, v: string) => [`    "node_modules/${name}": {`, `      "version": "${v}",`, `      "resolved": "https://registry.npmjs.org/${name}/-/${name}-${v}.tgz",`, '      "dev": true,', '      "license": "MIT",', '      "engines": {', '        "node": ">=18"', "      }", "    },"];
+		const lock = ["{", '  "lockfileVersion": 3,', '  "packages": {', ...entry("acorn", "8.12.0"), ...entry("zod", "3.23.8").map((l) => l.replace("    },", "    }")), "  }", "}", ""];
+		const at = 12;
+		const merged = mergeText("package-lock.json", lock.join("\n"), [...lock.slice(0, at), ...entry("left-pad", "1.3.0"), ...lock.slice(at)].join("\n"), [...lock.slice(0, at), ...entry("mime", "4.0.4"), ...lock.slice(at)].join("\n"));
+		expect(merged.text).toBe([...lock.slice(0, at), ...entry("left-pad", "1.3.0"), ...entry("mime", "4.0.4"), ...lock.slice(at)].join("\n"));
+	});
+
+	it("calls one side's insert plus more at the same point a conflict, never two copies", () => {
+		const base = 'const app = new Hono();\napp.get("/health", health);\n\nexport default app;\n';
+		const routes = 'app.get("/users", listUsers);\napp.post("/users", createUser);\n';
+		const merged = mergeText("src/app.ts", base, base.replace("\nexport", `${routes}\nexport`), base.replace("\nexport", `${routes}app.delete("/users/:id", deleteUser);\n\nexport`));
+		expect(merged.clean).toBe(false);
+	});
+
+	it("calls a note both added a few lines below a rewrite a conflict", () => {
+		const header = Array.from({ length: 20 }, (_, i) => `intro line ${i}`);
+		const oldBlock = Array.from({ length: 40 }, (_, i) => (i === 30 ? "kept line" : `old line ${i}`));
+		const newBlock = Array.from({ length: 10 }, (_, i) => [`## Section ${i}`, `- item ${i}`, "- done", ""]).flat();
+		newBlock.splice(20, 0, "kept line");
+		const tail = Array.from({ length: 900 }, (_, i) => `tail line ${i}`);
+		const gap = Array.from({ length: 6 }, () => "- done");
+		const base = [...header, ...oldBlock, "- done", ...gap, "", "## End", ...tail];
+		const ours = [...header, ...newBlock, "- done", ...gap, "- note", "", "## End", ...tail];
+		const theirs = [...header, ...oldBlock, "- done", ...gap, "- note", "", "## End", ...tail];
+		expect(mergeText("NOTES.md", base.join("\n"), ours.join("\n"), theirs.join("\n")).clean).toBe(false);
+	});
+
+	it("stays fast when every change sits next to the other side's", () => {
+		// Blocks [k, p, K, q]: trunk changes every p, the flight every q, each change a line from the next.
+		const base: string[] = [];
+		const ours: string[] = [];
+		const theirs: string[] = [];
+		for (let i = 0; i < 40_000; i++) {
+			base.push(`k${i}`, `p${i}`, `K${i}`, `q${i}`);
+			ours.push(`k${i}`, `Z${i}`, `K${i}`, `q${i}`);
+			theirs.push(`k${i}`, `p${i}`, `K${i}`, `Z${i + 1}`);
+		}
+		const t0 = Date.now();
+		const merged = mergeText("x.txt", base.join("\n"), ours.join("\n"), theirs.join("\n"));
+		expect(Date.now() - t0).toBeLessThan(5000);
+		expect(merged.clean).toBe(true);
+	});
+});

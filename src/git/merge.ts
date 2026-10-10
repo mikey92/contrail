@@ -235,15 +235,53 @@ function append(out: string[], lines: string[]): void {
 	for (const line of lines) out.push(line);
 }
 
-/** How far apart two hunks of a merge's sides may be and still be read as one change (see diff3). */
-const ECHO_LINES = 3;
+/** A line with a letter or digit in it: code, not a blank line or brackets. */
+const hasCode = (line: string) => /[A-Za-z0-9]/.test(line);
 
-/** Whether one of two runs of lines (one with code in it, at most 200 lines) is in the other, in a row. */
-function repeats(x: string[], y: string[]): boolean {
-	const [small, big] = x.length <= y.length ? [x, y] : [y, x];
-	if (!small.length || small.length > 200 || !small.some((l) => /[A-Za-z0-9]/.test(l))) return false;
-	for (let k = big.indexOf(small[0]); k !== -1 && k + small.length <= big.length; k = big.indexOf(small[0], k + 1))
-		if (small.every((l, n) => big[k + n] === l)) return true;
+/** One side's change to `o`: lines `oStart`…+`oLength` of base became lines `start`…+`length` of the side. */
+interface SideHunk {
+	oStart: number;
+	oLength: number;
+	start: number;
+	length: number;
+}
+
+/**
+ * A side's inserts that its diff split around a few blank or bracket lines (a function with a blank line in it,
+ * inserted before a blank line), put back together where the insert can slide over those lines: its end (or start)
+ * is the same lines. Split, another side's insert at the same point lands between the halves (a function inside a
+ * function).
+ */
+function compact(hunks: SideHunk[], o: string[], text: string[]): SideHunk[] {
+	const out: SideHunk[] = [];
+	for (const h of hunks) {
+		const prev = out[out.length - 1];
+		const gap = prev ? h.oStart - prev.oStart : 0;
+		if (prev && !prev.oLength && !h.oLength && gap >= 1 && gap <= 3) {
+			const between = o.slice(prev.oStart, h.oStart);
+			if (!between.some(hasCode)) {
+				if (sameLines(text.slice(h.start + h.length - gap, h.start + h.length), between)) {
+					out[out.length - 1] = { oStart: prev.oStart, oLength: 0, start: prev.start, length: prev.length + h.length };
+					continue;
+				}
+				if (sameLines(text.slice(prev.start, prev.start + gap), between)) {
+					out[out.length - 1] = { oStart: h.oStart, oLength: 0, start: prev.start + gap, length: prev.length + h.length };
+					continue;
+				}
+			}
+		}
+		out.push(h);
+	}
+	return out;
+}
+
+/** Whether lines `small`…+`n` of one text are, in a row, somewhere in lines `big`…+`m` of another. */
+function within(sText: string[], small: number, n: number, bText: string[], big: number, m: number): boolean {
+	for (let k = big; k + n <= big + m; k++) {
+		let n2 = 0;
+		while (n2 < n && bText[k + n2] === sText[small + n2]) n2++;
+		if (n2 === n) return true;
+	}
 	return false;
 }
 
@@ -256,33 +294,51 @@ type Merged = { ok: string[]; conflict?: undefined } | { conflict: { a: string[]
 function diff3(a: string[], o: string[], b: string[]): Merged[] {
 	const long = o.length + Math.max(a.length, b.length) > MAX_DIFF_LINES;
 	const head = long ? Math.min(sharedHead(o, a), sharedHead(o, b)) : 0;
-	const hunks = [
-		...lineDiff(o, a, long, true, head).map((h) => ({ side: "a" as const, oStart: h.buffer1[0], oLength: h.buffer1[1], start: h.buffer2[0], length: h.buffer2[1] })),
-		...lineDiff(o, b, long, true, head).map((h) => ({ side: "b" as const, oStart: h.buffer1[0], oLength: h.buffer1[1], start: h.buffer2[0], length: h.buffer2[1] })),
-	].sort((x, y) => x.oStart - y.oStart);
+	const side = (text: string[]) => compact(lineDiff(o, text, long, true, head).map((h) => ({ oStart: h.buffer1[0], oLength: h.buffer1[1], start: h.buffer2[0], length: h.buffer2[1] })), o, text);
+	const hunks = [...side(a).map((h) => ({ ...h, side: "a" as const })), ...side(b).map((h) => ({ ...h, side: "b" as const }))].sort((x, y) => x.oStart - y.oStart);
 	const out: Merged[] = [];
 	let ok: string[] = [];
 	const flush = () => {
 		if (ok.length) out.push({ ok });
 		ok = [];
 	};
-	// Two hunks of different sides a few lines apart that add (or remove) the same lines of code: one change both
-	// sides made, which their diffs placed apart (in a run of lines that repeat, next to a rewrite). Applied apart,
-	// it would come out twice (or take two lines): they make one region, a conflict unless both read the same.
+	// Two hunks of different sides that add (and remove) the same lines of code, with only lines between them the
+	// change could slide over: one change both sides made, which their diffs placed apart (next to a rewrite, in
+	// lines that repeat). Applied apart, it would come out twice (or take two lines): they make one region, a
+	// conflict unless both read the same.
 	type Hunk = (typeof hunks)[number];
-	const added = (h: Hunk) => (h.side === "a" ? a : b).slice(h.start, h.start + h.length);
-	const removed = (h: Hunk) => o.slice(h.oStart, h.oStart + h.oLength);
-	const echoes = (x: Hunk, y: Hunk) => x.side !== y.side && (repeats(added(x), added(y)) || repeats(removed(x), removed(y)));
+	const textOf = (h: Hunk) => (h.side === "a" ? a : b);
+	const echoes = (x: Hunk, y: Hunk) => {
+		const adds = x.length > 0 && y.length > 0;
+		const dels = x.oLength > 0 && y.oLength > 0;
+		if (!adds && !dels) return false;
+		// The smaller of each pair, with code in it and at most 200 lines, in the larger.
+		const [sa, ba] = x.length <= y.length ? [x, y] : [y, x];
+		const [sd, bd] = x.oLength <= y.oLength ? [x, y] : [y, x];
+		if (adds && (sa.length > 200 || !textOf(sa).slice(sa.start, sa.start + sa.length).some(hasCode) || !within(textOf(sa), sa.start, sa.length, textOf(ba), ba.start, ba.length))) return false;
+		if (dels && (sd.oLength > 200 || !o.slice(sd.oStart, sd.oStart + sd.oLength).some(hasCode) || !within(o, sd.oStart, sd.oLength, o, bd.oStart, bd.oLength))) return false;
+		const from = x.oStart + x.oLength;
+		if (y.oStart - from > 50) return false;
+		const moved = new Set([...(adds ? textOf(sa).slice(sa.start, sa.start + sa.length) : []), ...(dels ? o.slice(sd.oStart, sd.oStart + sd.oLength) : [])]);
+		for (let k = from; k < y.oStart; k++) if (hasCode(o[k]) && !moved.has(o[k])) return false;
+		return true;
+	};
 	let at = 0;
 	for (let i = 0; i < hunks.length; ) {
 		const first = hunks[i];
 		const regionStart = first.oStart;
 		let regionEnd = first.oStart + first.oLength;
 		const region = [hunks[i++]];
-		// Hunks of either side that overlap (or touch) this region join it, and ones that echo a hunk of it.
-		while (i < hunks.length && (hunks[i].oStart <= regionEnd || (hunks[i].oStart - regionEnd <= ECHO_LINES && region.some((h) => echoes(h, hunks[i]))))) {
-			regionEnd = Math.max(regionEnd, hunks[i].oStart + hunks[i].oLength);
-			region.push(hunks[i++]);
+		// Each side's last hunk in the region: one of the other side's echoes it, or not.
+		const last: Partial<Record<"a" | "b", Hunk>> = { [first.side]: first };
+		// Hunks of either side that overlap (or touch) this region join it, and ones that echo the other side's.
+		for (; i < hunks.length; i++) {
+			const h = hunks[i];
+			const other = last[h.side === "a" ? "b" : "a"];
+			if (h.oStart > regionEnd && !(other && echoes(other, h))) break;
+			regionEnd = Math.max(regionEnd, h.oStart + h.oLength);
+			region.push(h);
+			last[h.side] = h;
 		}
 		append(ok, o.slice(at, regionStart));
 		if (region.length === 1) {
@@ -367,8 +423,10 @@ function importStatements(lines: string[]): { from: number; to: number; key: str
 }
 
 /**
- * Whether two inserts at one point start or end with the same three lines of code or more (imports aside) and
- * differ in between: two versions of one change, whose shared lines side by side would come out twice.
+ * Whether two inserts at one point are two versions of one change, whose shared lines side by side would come out
+ * twice: one is all of the other's start or end and more (a flight that built on the other's change), or they start
+ * with the same three lines of code or more (imports aside). Ends alike are no sign: `return nil }`, a lockfile
+ * entry's last fields.
  */
 function shareCode(a: string[], b: string[]): boolean {
 	let head = 0;
@@ -376,8 +434,10 @@ function shareCode(a: string[], b: string[]): boolean {
 	let tail = 0;
 	while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
 	const imports = new Set(importStatements(a).flatMap((st) => Array.from({ length: st.to - st.from + 1 }, (_, k) => st.from + k)));
-	const code = (from: number, to: number) => a.slice(from, to).filter((l, k) => /[A-Za-z0-9]/.test(l) && !imports.has(from + k)).length;
-	return code(0, head) >= 3 || code(a.length - tail, a.length) >= 3;
+	const code = (from: number, to: number) => a.slice(from, to).filter((l, k) => hasCode(l) && !imports.has(from + k)).length;
+	const shorter = Math.min(a.length, b.length);
+	if ((head === shorter && code(0, head) >= 1) || (tail === shorter && code(a.length - tail, a.length) >= 1)) return true;
+	return code(0, head) >= 3;
 }
 
 /** `b` without the import statements `a` has too. */
