@@ -581,3 +581,111 @@ describe("changes at one point or a few lines apart", () => {
 		expect(merged.clean).toBe(true);
 	});
 });
+
+describe("merges where the two diffs could line up either way", () => {
+	/** A seeded random number generator (mulberry32): the same cases every run. */
+	const random = (seed: number) => () => {
+		seed = (seed + 0x6d2b79f5) >>> 0;
+		let t = seed;
+		t = Math.imul(t ^ (t >>> 15), t | 1);
+		t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+	};
+
+	it("calls inserts at one point that share only a bracket or a blank line a conflict, never two copies", () => {
+		// One side's insert is the other's and more: side by side, the `}` (or blank line) both added comes out twice.
+		expect(mergeText("NOTES.md", "# Title\nintro\n## End\n", "# Title\nintro\n\n## End\n", "# Title\nintro\n\n## Notes\n## End\n").clean).toBe(false);
+		const js = "function f() {\n  return 1;\n";
+		expect(mergeText("src/f.js", js, `${js}}\n`, `${js}}\n\nfunction g() {\n  return 2;\n}\n`).clean).toBe(false);
+	});
+
+	it("calls an insert a conflict when its diff split it around a line of code and the other side's insert is part of it", () => {
+		// The flight added `check(); run(); log("start");` before `run();`, and its diff took the added `run();` for
+		// base's: `log("start");` lands after it, while trunk added that line before `run();`.
+		const merged = mergeText("src/job.js", "setup();\nrun();\nteardown();\n", 'setup();\nlog("start");\nrun();\nteardown();\n', 'setup();\ncheck();\nrun();\nlog("start");\nrun();\nteardown();\n');
+		expect(merged.clean).toBe(false);
+	});
+
+	it("calls two inserts a line apart a conflict when one slides onto the other's point and is it and more", () => {
+		const merged = mergeText("src/list.js", "a\nreturn x;\n  },\nb\n", "a\nreturn x;\n]\n{\n\n  },\nb\n", "a\nreturn x;\n  },\n]\n{\n\n  },\nb\n");
+		expect(merged.clean).toBe(false);
+	});
+
+	it("keeps clean what lines up only one way", () => {
+		const cases: [string, string, string, string, string][] = [];
+		// Both fix G's return the same way, and trunk adds F after G.
+		const go = (ret: string, extra: string[] = []) => ["package x", "", "func G() int {", "\tx := 1", `\treturn ${ret}`, "}", "", ...extra, "func K() {", "}", ""].join("\n");
+		cases.push(["x.go", go("x"), go("x + 1", ["func F() {", "}", ""]), go("x + 1"), go("x + 1", ["func F() {", "}", ""])]);
+		// The flight's insert is trunk's and more, its diff splitting it where its first half is trunk's insert.
+		const list = (...extra: string[]) => ["a", "},", "x: 1,", ...extra, '  "a": 1,', "  ];", "z"].join("\n");
+		cases.push(["x.js", list(), list("foo();"), list("foo();", '  "a": 1,', "return x;", "extra"), list("foo();", '  "a": 1,', "return x;", "extra")]);
+		// Two functions added at one point, one with a blank line in it.
+		const py = (...fns: string[][]) => ["def a():", "    return 1", ...fns.flat(), "", "", "def b():", "    return 2", ""].join("\n");
+		const load = ["", "", "def load():", "    x = 1", "", "    return x"];
+		const save = ["", "", "def save():", "    pass"];
+		cases.push(["io.py", py(), py(load), py(save), py(load, save)]);
+		// A blank line added right after the other side's edit (blank lines are layout).
+		cases.push(["notes.md", "# A\none\n\ntwo\n", "# A\nONE\n\ntwo\n", "# A\none\n\n\ntwo\n", "# A\nONE\n\n\ntwo\n"]);
+		const fn = "def a():\n    x = 1\n    return x\n\ndef b():\n    return 2\n";
+		cases.push(["m.py", fn, fn.replace("    x = 1\n    return x\n", "    x = 2\n    return x * 2\n"), fn.replace("    return x\n\n", "    return x\n\n\n"), fn.replace("    x = 1\n    return x\n\n", "    x = 2\n    return x * 2\n\n\n")]);
+		for (const [path, base, ours, theirs, want] of cases) {
+			const merged = mergeText(path, base, ours, theirs);
+			expect(merged.clean, path).toBe(true);
+			expect(merged.text, path).toBe(want);
+		}
+	});
+
+	it("never merges one side's insert and the same insert and more at that point into two copies", () => {
+		// Inserts of lines that repeat (`},`, blank lines, `return x;`) and of new lines, in files full of the same.
+		const rnd = random(2);
+		const pick = <T>(xs: T[]) => xs[Math.floor(rnd() * xs.length)];
+		const vocab = ["},", "{", "}", "]", "  },", "", "  ];", "x: 1,", '  "a": 1,', "return x;", "foo();"];
+		const wrong: number[] = [];
+		for (let t = 0; t < 400; t++) {
+			const o = Array.from({ length: 20 + Math.floor(rnd() * 30) }, (_, i) => (rnd() < 0.4 ? pick(vocab) : `line ${i}`));
+			const at = 1 + Math.floor(rnd() * (o.length - 2));
+			const x = Array.from({ length: 1 + Math.floor(rnd() * 3) }, () => pick(vocab));
+			const y = Array.from({ length: 1 + Math.floor(rnd() * 3) }, (_, i) => (rnd() < 0.5 ? pick(vocab) : `extra ${t} ${i}`));
+			const xy = rnd() < 0.5 ? [...x, ...y] : [...y, ...x];
+			const theirs = [...o.slice(0, at), ...xy, ...o.slice(at)].join("\n");
+			const merged = mergeText("x.txt", o.join("\n"), [...o.slice(0, at), ...x, ...o.slice(at)].join("\n"), theirs);
+			if (merged.clean && merged.text !== theirs) wrong.push(t);
+		}
+		expect(wrong).toEqual([]);
+	});
+
+	it("merges one change both sides made below a rewrite into the right text or a conflict", () => {
+		// Trunk rewrites a block of lines that repeat; below it, among more such lines, both sides make one change, or
+		// the flight made the same rewrite and only trunk the change. A clean merge is trunk's text (blank lines aside:
+		// one added or taken next to a change is layout).
+		const rnd = random(1);
+		const pick = <T>(xs: T[]) => xs[Math.floor(rnd() * xs.length)];
+		const vocab = ["", "- done", "}", "  }", "---", "    return;"];
+		const wrong: number[] = [];
+		const words = (lines: string[]) => lines.filter((l) => l.trim()).join("\n");
+		for (let t = 0; t < 300; t++) {
+			const size = pick([30, 60, 120]);
+			const header = Array.from({ length: 10 }, (_, i) => `intro ${i}`);
+			const oldBlock = Array.from({ length: size }, (_, i) => (rnd() < 0.3 ? pick(vocab) : `old ${i}`));
+			const newBlock = Array.from({ length: size }, (_, i) => (rnd() < 0.45 ? pick(vocab) : `new ${i}`));
+			const gap = Array.from({ length: Math.floor(rnd() * 12) }, () => pick(vocab));
+			const tail = Array.from({ length: 40 }, (_, i) => `tail ${i}`);
+			const at = Math.floor(rnd() * (gap.length + 1));
+			const kind = pick(["note", "ins-rep", "del", "rep"]);
+			const changed = gap.slice();
+			if (kind === "note") changed.splice(at, 0, "- note");
+			else if (kind === "ins-rep") changed.splice(at, 0, pick(["- done", "}", "  }", "---", "    return;"]));
+			else if (kind === "del") {
+				if (changed.length) changed.splice(Math.min(at, changed.length - 1), 1);
+				else changed.push("- added");
+			} else if (changed.length) changed.splice(Math.min(at, changed.length - 1), 1, "- changed");
+			else changed.push("- changed");
+			const base = [...header, ...oldBlock, ...gap, "## End", ...tail];
+			const ours = [...header, ...newBlock, ...changed, "## End", ...tail];
+			const theirs = rnd() < 0.5 ? [...header, ...oldBlock, ...changed, "## End", ...tail] : [...header, ...newBlock, ...gap, "## End", ...tail];
+			const merged = mergeText("NOTES.md", base.join("\n"), ours.join("\n"), theirs.join("\n"));
+			if (merged.clean && words(merged.text.split("\n")) !== words(ours)) wrong.push(t);
+		}
+		expect(wrong).toEqual([]);
+	});
+});

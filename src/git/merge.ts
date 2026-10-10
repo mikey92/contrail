@@ -36,6 +36,8 @@ const sameLines = (a: string[], b: string[]) => a.length === b.length && a.every
  * when little changed, and patience diff's anchors where much did.
  */
 export const MAX_DIFF_LINES = 2000;
+/** How far from a change a merge looks for what makes it a guess: the same change made nearby, lines it slides over. */
+const NEAR = 50;
 
 interface LineDiff {
 	buffer1: [number, number];
@@ -247,24 +249,36 @@ interface SideHunk {
 }
 
 /**
- * A side's inserts that its diff split around a few blank or bracket lines (a function with a blank line in it,
- * inserted before a blank line), put back together where the insert can slide over those lines: its end (or start)
- * is the same lines. Split, another side's insert at the same point lands between the halves (a function inside a
- * function).
+ * A side's inserts that its diff split around a few lines, put back together where the insert can slide over those
+ * lines: its end (or start) is the same lines. A function with a blank line in it, inserted before a blank line;
+ * `foo();` inserted before `foo();`, its diff taking the inserted one for base's. Split, the other side's insert at
+ * one of the points lands between the halves (a function inside a function), or meets only half of the same change.
+ * A half that is the other side's insert at its point, or part of it, stays: there both sides made that insert.
+ * (`others`: the other side's inserts by point.)
  */
-function compact(hunks: SideHunk[], o: string[], text: string[]): SideHunk[] {
+function compact(hunks: SideHunk[], o: string[], text: string[], others: Map<number, string[]>): SideHunk[] {
 	const out: SideHunk[] = [];
+	const made = (point: number, half: string[]) => {
+		const there = others.get(point);
+		return !!there && (sameLines(there, half) || shareCode(there, half, false));
+	};
 	for (const h of hunks) {
 		const prev = out[out.length - 1];
 		const gap = prev ? h.oStart - prev.oStart : 0;
 		if (prev && !prev.oLength && !h.oLength && gap >= 1 && gap <= 3) {
-			const between = o.slice(prev.oStart, h.oStart);
-			if (!between.some(hasCode)) {
-				if (sameLines(text.slice(h.start + h.length - gap, h.start + h.length), between)) {
+			const [first, second] = [text.slice(prev.start, prev.start + prev.length), text.slice(h.start, h.start + h.length)];
+			if (!made(prev.oStart, first) && !made(h.oStart, second)) {
+				// The second half slides up over the lines between (each the line `length` below it), or the first
+				// half down.
+				let up = 0;
+				while (up < gap && text[h.start - 1 - up] === text[h.start + h.length - 1 - up]) up++;
+				if (up === gap) {
 					out[out.length - 1] = { oStart: prev.oStart, oLength: 0, start: prev.start, length: prev.length + h.length };
 					continue;
 				}
-				if (sameLines(text.slice(prev.start, prev.start + gap), between)) {
+				let down = 0;
+				while (down < gap && text[prev.start + down] === text[prev.start + prev.length + down]) down++;
+				if (down === gap) {
 					out[out.length - 1] = { oStart: h.oStart, oLength: 0, start: prev.start + gap, length: prev.length + h.length };
 					continue;
 				}
@@ -285,7 +299,8 @@ function within(sText: string[], small: number, n: number, bText: string[], big:
 	return false;
 }
 
-type Merged = { ok: string[]; conflict?: undefined } | { conflict: { a: string[]; o: string[]; b: string[]; oIndex: number; aIndex: number; bIndex: number }; ok?: undefined };
+/** A run of merged lines, or a conflict; `unsure` when both sides inserted there and one insert may be part of a change nearby. */
+type Merged = { ok: string[]; conflict?: undefined } | { conflict: { a: string[]; o: string[]; b: string[]; oIndex: number; aIndex: number; bIndex: number; unsure?: boolean }; ok?: undefined };
 
 /**
  * A diff3 merge (node-diff3's, MIT) over lineDiff: alternating runs of merged lines and conflicts between what
@@ -294,8 +309,10 @@ type Merged = { ok: string[]; conflict?: undefined } | { conflict: { a: string[]
 function diff3(a: string[], o: string[], b: string[]): Merged[] {
 	const long = o.length + Math.max(a.length, b.length) > MAX_DIFF_LINES;
 	const head = long ? Math.min(sharedHead(o, a), sharedHead(o, b)) : 0;
-	const side = (text: string[]) => compact(lineDiff(o, text, long, true, head).map((h) => ({ oStart: h.buffer1[0], oLength: h.buffer1[1], start: h.buffer2[0], length: h.buffer2[1] })), o, text);
-	const hunks = [...side(a).map((h) => ({ ...h, side: "a" as const })), ...side(b).map((h) => ({ ...h, side: "b" as const }))].sort((x, y) => x.oStart - y.oStart);
+	const diffOf = (text: string[]): SideHunk[] => lineDiff(o, text, long, true, head).map((h) => ({ oStart: h.buffer1[0], oLength: h.buffer1[1], start: h.buffer2[0], length: h.buffer2[1] }));
+	const [da, db] = [diffOf(a), diffOf(b)];
+	const inserts = (hs: SideHunk[], text: string[]) => new Map(hs.filter((h) => !h.oLength).map((h) => [h.oStart, text.slice(h.start, h.start + h.length)]));
+	const hunks = [...compact(da, o, a, inserts(db, b)).map((h) => ({ ...h, side: "a" as const })), ...compact(db, o, b, inserts(da, a)).map((h) => ({ ...h, side: "b" as const }))].sort((x, y) => x.oStart - y.oStart);
 	const out: Merged[] = [];
 	let ok: string[] = [];
 	const flush = () => {
@@ -323,38 +340,126 @@ function diff3(a: string[], o: string[], b: string[]): Merged[] {
 		for (let k = from; k < y.oStart; k++) if (hasCode(o[k]) && !moved.has(o[k])) return false;
 		return true;
 	};
-	let at = 0;
+	/** How many times `text` has the lines of `run` in a row starting within lines `from`…`to`. */
+	const count = (text: string[], run: string[], from: number, to: number) => {
+		let n = 0;
+		for (let k = Math.max(0, from); k <= to && k + run.length <= text.length; k++) {
+			let j = 0;
+			while (j < run.length && text[k + j] === run[j]) j++;
+			if (j === run.length) n++;
+		}
+		return n;
+	};
+	// A change only one side's diff has here may still be the other side's too, placed elsewhere by its diff (in
+	// lines that repeat, next to a rewrite): the other side's text has the change's lines, with the lines around
+	// them, more often near here than base (or, for lines removed, less often). Applied here as well, it would come
+	// out twice: a conflict instead.
+	/**
+	 * `h` made twice, near where the other side has it (`at`: base's line `h.oStart` in the other side's text). With
+	 * `either`, the lines around on one side are enough: an insert both sides made at one point, where one side's
+	 * diff took it apart.
+	 */
+	const madeTwice = (h: Hunk, at: number, either = false) => {
+		// (A change of hundreds of lines is no small change a diff places one way or the other.)
+		if (h.length > 200 || h.oLength > 200) return false;
+		const other = h.side === "a" ? b : a;
+		const before = h.oStart > 0 ? [o[h.oStart - 1]] : [];
+		const after = h.oStart + h.oLength < o.length ? [o[h.oStart + h.oLength]] : [];
+		const runs = (middle: string[]) => (either ? [[...before, ...middle, ...after], [...before, ...middle], [...middle, ...after]] : [[...before, ...middle, ...after]]);
+		// How many more times the other side has `run` near here than base has.
+		const gained = (run: string[]) => count(other, run, at - NEAR - 1, at + h.oLength + NEAR) - count(o, run, h.oStart - NEAR - 1, h.oStart + h.oLength + NEAR);
+		const added = textOf(h).slice(h.start, h.start + h.length);
+		if (added.some(hasCode)) return runs(added).some((run) => gained(run) > 0);
+		const removed = o.slice(h.oStart, h.oStart + h.oLength);
+		return removed.some(hasCode) && runs(removed).some((run) => gained(run) < 0);
+	};
+	/** How many lines insert or delete `h` can slide up (-1) or down (1), up to `limit`: lines that repeat it. */
+	const slide = (h: Hunk, dir: -1 | 1, limit: number) => {
+		const [text, s, n] = h.oLength ? [o, h.oStart, h.oLength] : [textOf(h), h.start, h.length];
+		let k = 0;
+		if (dir < 0) while (k < limit && s - k - 1 >= 0 && text[s - k - 1] === text[s + n - k - 1]) k++;
+		else while (k < limit && s + n + k < text.length && text[s + k] === text[s + n + k]) k++;
+		return k;
+	};
+	// Two inserts of different sides a few lines apart, where one can slide over the lines between onto the other's
+	// point (its end, or the other's start, is those lines): there they are one change and more, which applied
+	// apart comes out twice. They make one region.
+	const meets = (x: Hunk, y: Hunk) => {
+		const k = y.oStart - x.oStart;
+		if (x.oLength || y.oLength || !x.length || !y.length || k < 1 || k > 3) return false;
+		const [xt, yt] = [textOf(x), textOf(y)];
+		const between = o.slice(x.oStart, y.oStart);
+		if (sameLines(yt.slice(y.start - k, y.start), between) && slide(y, -1, k) === k && shareCode(xt.slice(x.start, x.start + x.length), yt.slice(y.start - k, y.start - k + y.length))) return true;
+		return sameLines(xt.slice(x.start + x.length, x.start + x.length + k), between) && slide(x, 1, k) === k && shareCode(xt.slice(x.start + k, x.start + k + x.length), yt.slice(y.start, y.start + y.length));
+	};
+	type Region = { hunks: Hunk[]; start: number; end: number };
+	const regions: Region[] = [];
 	for (let i = 0; i < hunks.length; ) {
 		const first = hunks[i];
-		const regionStart = first.oStart;
-		let regionEnd = first.oStart + first.oLength;
-		const region = [hunks[i++]];
+		const region: Region = { hunks: [hunks[i++]], start: first.oStart, end: first.oStart + first.oLength };
 		// Each side's last hunk in the region: one of the other side's echoes it, or not.
 		const last: Partial<Record<"a" | "b", Hunk>> = { [first.side]: first };
-		// Hunks of either side that overlap (or touch) this region join it, and ones that echo the other side's.
+		// Hunks of either side that overlap (or touch) this region join it, and ones that echo or meet the other side's.
 		for (; i < hunks.length; i++) {
 			const h = hunks[i];
 			const other = last[h.side === "a" ? "b" : "a"];
-			if (h.oStart > regionEnd && !(other && echoes(other, h))) break;
-			regionEnd = Math.max(regionEnd, h.oStart + h.oLength);
-			region.push(h);
+			if (h.oStart > region.end && !(other && (echoes(other, h) || meets(other, h)))) break;
+			region.end = Math.max(region.end, h.oStart + h.oLength);
+			region.hunks.push(h);
 			last[h.side] = h;
 		}
-		append(ok, o.slice(at, regionStart));
-		if (region.length === 1) {
+		regions.push(region);
+	}
+	// An insert or delete that can slide over the lines between it and a stretch the other side changed (its end is
+	// those lines) may be part of that change: where the diffs end the other side's change among those lines is a
+	// guess. Two inserts there are no union, and one side's copies of a line added to (or taken from) a run of it
+	// there a conflict: `}` added after a rewrite that ends in `}`, with the rewrite taking one more `}`, is the
+	// other side's change too, and a line taken from the run may be one the other side's diff put in its rewrite.
+	// Blank lines aside: they are layout, and one added or taken next to the other side's edit is common.
+	const changes = (r: Region | undefined, side: "a" | "b") => !!r && r.hunks.some((x) => x.side === side);
+	/** The lines an insert adds, or a delete (or replacement) takes. */
+	const linesOf = (h: Hunk) => (h.oLength ? o.slice(h.oStart, h.oStart + h.oLength) : textOf(h).slice(h.start, h.start + h.length));
+	const blank = (h: Hunk) => (h.oLength === 0 || h.length === 0) && linesOf(h).every((l) => l.trim() === "");
+	const repeats = (h: Hunk) => (h.oLength === 0 || h.length === 0) && !blank(h) && linesOf(h).every((l, _, all) => l === all[0]);
+	const nextTo = (r: number, h: Hunk) => {
+		const other = h.side === "a" ? "b" : "a";
+		const [before, after] = [regions[r - 1], regions[r + 1]];
+		const up = before ? h.oStart - before.end : 0;
+		const down = after ? after.start - h.oStart - h.oLength : 0;
+		return (changes(before, other) && up <= NEAR && slide(h, -1, up) === up) || (changes(after, other) && down <= NEAR && slide(h, 1, down) === down);
+	};
+	// A change between two of the other side's, a line or two off each way with only lines that repeat between (`}`,
+	// blank lines): there the other side's diff is a rewrite in pieces, and which of its lines are base's a guess. A
+	// conflict, blank lines aside.
+	const among = (r: number, h: Hunk) => {
+		const other = h.side === "a" ? "b" : "a";
+		const [before, after] = [regions[r - 1], regions[r + 1]];
+		if (blank(h) || !changes(before, other) || !changes(after, other) || h.oStart - before!.end > 2 || after!.start - h.oStart - h.oLength > 2) return false;
+		// Lines that repeat: base has each again near here.
+		return [...o.slice(before!.end, h.oStart), ...o.slice(h.oStart + h.oLength, after!.start)].every((l) => count(o, [l], h.oStart - NEAR, h.oStart + h.oLength + NEAR) > 1);
+	};
+	let at = 0;
+	// Lines each side's changes so far added (or removed, below 0): base's line k is the side's line k + shift.
+	const shift = { a: 0, b: 0 };
+	regions.forEach((region, r) => {
+		const first = region.hunks[0];
+		append(ok, o.slice(at, region.start));
+		// Base's line `h.oStart` in the other side's text.
+		const mapped = (h: Hunk) => h.oStart + shift[h.side === "a" ? "b" : "a"];
+		if (region.hunks.length === 1 && !madeTwice(first, mapped(first)) && !(repeats(first) && nextTo(r, first)) && !among(r, first)) {
 			// One side changed this stretch and the other left it alone.
-			append(ok, (first.side === "a" ? a : b).slice(first.start, first.start + first.length));
+			append(ok, textOf(first).slice(first.start, first.start + first.length));
 		} else {
 			// Each side's span over the region, corrected for the stretch of `o` its hunks cover. (A side with no
 			// hunk here left the region as `o` has it, shifted by what it changed before.)
 			const span = (side: "a" | "b", text: string[]) => {
-				const mine = region.filter((h) => h.side === side);
+				const mine = region.hunks.filter((h) => h.side === side);
 				if (!mine.length) {
-					const shift = hunks.filter((h) => h.side === side && h.oStart + h.oLength <= regionStart).reduce((n, h) => n + h.length - h.oLength, 0);
-					return { start: regionStart + shift, content: o.slice(regionStart, regionEnd) };
+					const shift = hunks.filter((h) => h.side === side && h.oStart + h.oLength <= region.start).reduce((n, h) => n + h.length - h.oLength, 0);
+					return { start: region.start + shift, content: o.slice(region.start, region.end) };
 				}
-				const start = mine[0].start + (regionStart - mine[0].oStart);
-				const end = mine.reduce((n, h) => Math.max(n, h.start + h.length), 0) + (regionEnd - mine.reduce((n, h) => Math.max(n, h.oStart + h.oLength), 0));
+				const start = mine[0].start + (region.start - mine[0].oStart);
+				const end = mine.reduce((n, h) => Math.max(n, h.start + h.length), 0) + (region.end - mine.reduce((n, h) => Math.max(n, h.oStart + h.oLength), 0));
 				return { start, content: text.slice(start, end) };
 			};
 			const as = span("a", a);
@@ -362,11 +467,17 @@ function diff3(a: string[], o: string[], b: string[]): Merged[] {
 			if (sameLines(as.content, bs.content)) append(ok, as.content);
 			else {
 				flush();
-				out.push({ conflict: { a: as.content, aIndex: as.start, o: o.slice(regionStart, regionEnd), oIndex: regionStart, b: bs.content, bIndex: bs.start } });
+				// Both sides inserted here: no union a few lines from a stretch both changed (where both diffs end the
+				// same rewrite is a guess), with an insert that slides onto the other side's change, or with one the
+				// other side has nearby.
+				const close = (n: Region | undefined) => changes(n, "a") && changes(n, "b") && Math.max(n!.start - region.end, region.start - n!.end) <= 3;
+				const unsure = region.start === region.end && (close(regions[r - 1]) || close(regions[r + 1]) || region.hunks.some((h) => nextTo(r, h) || madeTwice(h, mapped(h), true)));
+				out.push({ conflict: { a: as.content, aIndex: as.start, o: o.slice(region.start, region.end), oIndex: region.start, b: bs.content, bIndex: bs.start, unsure } });
 			}
 		}
-		at = regionEnd;
-	}
+		at = region.end;
+		for (const h of region.hunks) shift[h.side] += h.length - h.oLength;
+	});
 	append(ok, o.slice(at));
 	flush();
 	return out;
@@ -424,19 +535,22 @@ function importStatements(lines: string[]): { from: number; to: number; key: str
 
 /**
  * Whether two inserts at one point are two versions of one change, whose shared lines side by side would come out
- * twice: one is all of the other's start or end and more (a flight that built on the other's change), or they start
- * with the same three lines of code or more (imports aside). Ends alike are no sign: `return nil }`, a lockfile
- * entry's last fields.
+ * twice: one is the other and more (a flight that built on the other's change), or they start with the same three
+ * lines of code or more (imports aside). Ends alike are no sign: `return nil }`, a lockfile entry's last fields.
  */
-function shareCode(a: string[], b: string[]): boolean {
+function shareCode(a: string[], b: string[], blanks = true): boolean {
 	let head = 0;
 	while (head < a.length && head < b.length && a[head] === b[head]) head++;
 	let tail = 0;
 	while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
 	const imports = new Set(importStatements(a).flatMap((st) => Array.from({ length: st.to - st.from + 1 }, (_, k) => st.from + k)));
 	const code = (from: number, to: number) => a.slice(from, to).filter((l, k) => hasCode(l) && !imports.has(from + k)).length;
-	const shorter = Math.min(a.length, b.length);
-	if ((head === shorter && code(0, head) >= 1) || (tail === shorter && code(a.length - tail, a.length) >= 1)) return true;
+	// The shorter all of the longer's start and end, the longer only more lines between (or at an end): even `},`
+	// or a blank line (unless `blanks` is false) would come out twice side by side. Imports aside, which are kept
+	// once anyway.
+	const shorter = a.length <= b.length ? a : b;
+	const kept = new Set(importStatements(shorter).flatMap((st) => Array.from({ length: st.to - st.from + 1 }, (_, k) => st.from + k)));
+	if (head + tail >= shorter.length && shorter.some((l, k) => !kept.has(k) && (blanks || l.trim() !== ""))) return true;
 	return code(0, head) >= 3;
 }
 
@@ -545,7 +659,8 @@ export function mergeText(path: string, base: string, ours: string, theirs: stri
 			const clash = declaredIn(sides[1], b, c.bIndex, c.b.length).filter((t) => mine.some((m) => m.key === t.key && !(m.accessor && t.accessor && m.accessor !== t.accessor)));
 			twice = [...new Set([...twice, ...clash.map((t) => t.name)])];
 		}
-		if (c.o.length === 0 && twice.length === 0 && !shareCode(c.a, c.b)) {
+		// (One side's insert alone is a conflict only where the other side may have made it too: no union.)
+		if (c.o.length === 0 && c.a.length > 0 && c.b.length > 0 && !c.unsure && twice.length === 0 && !shareCode(c.a, c.b)) {
 			// Both sides inserted at the same point without touching existing lines: keep both, and an
 			// import both added only once.
 			append(out, c.a);
